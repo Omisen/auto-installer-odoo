@@ -8,8 +8,8 @@
 # Variabili attese dall'ambiente (esportate da install.sh):
 #   ODOO_VERSION       — branch Git, es. "18.0"
 #   ODOO_USER          — utente di sistema, es. "odoo"
-#   ODOO_HOME          — home dell'utente, es. "/opt/odoo" #FIX to check and test /home/odoo
-#   ODOO_INSTALL_DIR   — cartella di destinazione, es. "/opt/odoo/odoo18" #FIX same thing
+#   ODOO_HOME          — home dell'utente, es. "/opt/odoo" 
+#   ODOO_INSTALL_DIR   — cartella di destinazione, es. "/opt/odoo/odoo18" 
 #   ODOO_REPO_DIR      — sottocartella del clone, es. "odoo"    (relativa a ODOO_INSTALL_DIR)
 #   ODOO_MODULES_DIR   — addons extra, es. "repos/modules"      (relativa a ODOO_INSTALL_DIR)
 #   ODOO_VENV_DIR      — virtualenv, es. "sandbox"              (relativa a ODOO_INSTALL_DIR)

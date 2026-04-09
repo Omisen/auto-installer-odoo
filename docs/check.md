@@ -1,13 +1,80 @@
-# Cosa fa ogni funzione
-- `check_root` — controlla `EUID -ne 0`, esce con suggerimento sudo se necessario.
-- `check_os` — legge `/etc/os-release`, esporta `OS_ID`, `OS_VERSION`, `OS_CODENAME` e delega la verifica di versione a due helper privati (`_check_ubuntu_version` / `_check_debian_version`). Soglie: Ubuntu ≥ 22.04, Debian ≥ 11.
-- `check_ports` — controlla la porta Odoo (`ODOO_PORT`) e, se `WITH_NGINX=true`, anche 80 e 443. Il rilevamento della porta usa `ss` → `netstat` → `lsof` come cascata di fallback.
-- `check_disk` — misura il filesystem di `ODOO_HOME` con `df -Pk`, confronta con `MIN_DISK_GB` (default 5 GB). La soglia è configurabile dal file `.env`.
-- `check_commands` — lista separata di comandi obbligatori (blocca) e opzionali (solo log informativo). `envsubst` è già incluso perché serve a `config.sh` per i template.
+# lib/checks.sh
+
+> Modulo di verifica dei prerequisiti. Viene eseguito come **primo blocco** in `main()` di `installer.sh`, prima di qualsiasi modifica al sistema. Se uno dei controlli fallisce, l'installer termina con un messaggio esplicativo.
+
+---
+
+## Funzioni pubbliche
+
+Queste sono le uniche funzioni chiamate direttamente da `installer.sh`:
+
+| Funzione | Descrizione |
+|----------|-------------|
+| `check_root` | Verifica che lo script giri come `root` (EUID = 0); esce con suggerimento `sudo` se necessario |
+| `check_os` | Verifica che il sistema operativo sia Ubuntu ≥ 22.04 o Debian ≥ 11 |
+| `check_ports` | Verifica che le porte necessarie siano libere (Odoo + Nginx se abilitato) |
+| `check_disk` | Verifica che ci sia almeno `MIN_DISK_GB` (default 5 GB) di spazio libero |
+| `check_commands` | Verifica la presenza dei comandi di sistema richiesti |
+
+---
+
+## Funzioni interne (private)
+
+Prefissate con `_`, non devono essere chiamate da `installer.sh`:
+
+| Funzione | Descrizione |
+|----------|-------------|
+| `_check_ubuntu_version` | Confronta la versione Ubuntu con la soglia minima (22.04) |
+| `_check_debian_version` | Confronta la versione Debian con la soglia minima (11) |
+
+---
+
+## Dettaglio funzioni
+
+### `check_os`
+
+Legge `/etc/os-release` ed esporta tre variabili globali:
+
+```bash
+OS_ID        # es. "ubuntu" o "debian"
+OS_VERSION   # es. "22.04" o "11"
+OS_CODENAME  # es. "jammy" o "bullseye"
+```
+
+Le variabili `OS_*` vengono esportate così che i moduli successivi (es. `system.sh`) possano usarle per scegliere il PPA o il pacchetto corretto senza rileggere il file.
+
+### `check_ports`
+
+Controlla `ODOO_PORT` e, se `WITH_NGINX=true`, anche le porte `80` e `443`.  
+Il rilevamento usa una cascata di fallback per massima compatibilità:
+
+```
+ss  →  netstat  →  lsof
+```
+
+### `check_disk`
+
+Misura il filesystem di `ODOO_HOME` con `df -Pk` e confronta con `MIN_DISK_GB`.  
+La soglia è sovrascrivibile dal file `.env`:
+
+```bash
+MIN_DISK_GB=10  # in configs/production.env
+```
+
+Se la directory non esiste ancora, viene creata temporaneamente per non rompere `df` — comportamento idempotente.
+
+### `check_commands`
+
+Mantiene due liste distinte:
+- **Obbligatori** — blocca l'installazione se mancano (es. `git`, `python3`, `psql`)
+- **Opzionali** — emette solo un log informativo (es. `node`, `npm`)
+
+`envsubst` è incluso tra gli obbligatori perché richiesto da `config.sh` per il rendering dei template.
+
+---
 
 ## Note di design
 
-- ### Tutte le funzioni private iniziano con _ — chiaro che non devono essere chiamate da `install.sh`.
-- ### Nessuna funzione sourca altri moduli, rispettando la convenzione del progetto.
-- ### Le variabili `OS_*` vengono esportate così tutti i moduli successivi le trovano disponibili (utile ad es. in `system.sh` per scegliere il PPA corretto).
-- ### `check_disk` crea la `target_dir` se non esiste — idempotente e non rompe `df`.
+- Tutte le funzioni private iniziano con `_` — chiaro segnale che non devono essere chiamate da `installer.sh`.
+- Nessuna funzione effettua `source` di altri moduli, rispettando la convenzione del progetto.
+- Il modulo non modifica nulla sul sistema — è puramente read-only.

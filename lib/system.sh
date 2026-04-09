@@ -4,8 +4,8 @@
 #
 # Variabili attese (esportate da install.sh):
 #   ODOO_USER   — nome utente di sistema per Odoo  (default: odoo)
-#   ODOO_HOME   — home directory dell'utente        (default: /opt/odoo) #FIX this shoud be /home/odoo 
-# ============================================================================= #BUG in checks.sh
+#   ODOO_HOME   — home directory dell'utente        (default: /opt/odoo) 
+# ============================================================================= 
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
@@ -78,12 +78,16 @@ _apt_progress_filter() {
 # create_odoo_user
 #   Crea l'utente di sistema dedicato a Odoo se non esiste già.
 #
-#   Scelte di sicurezza:
-#     -r  → account di sistema (UID < 1000, non compare nel login screen)
-#     -U  → crea un gruppo omonimo
-#     -s /bin/false → nessuna shell interattiva (non accedibile via su/ssh)
-#     -d ODOO_HOME  → home impostata ma non ancora creata (-M sarebbe no-home)
-#     -m  → crea la home directory se non esiste
+#   Scelte architetturali — principio del privilegio minimo:
+#     --system       → UID < 1000, account di sistema senza password
+#     --user-group   → gruppo dedicato, separato dai gruppi di sistema
+#     --shell /bin/false → NESSUNA shell interattiva (produzione):
+#                         • systemd esegue ExecStart via setuid() — non serve bash
+#                         • sudo -u odoo <cmd> funziona senza shell utente
+#                         • se l'account fosse compromesso, nessun terminale disponibile
+#     --home-dir /opt/odoo → standard FHS per software applicativo di terze parti;
+#                            separa il codice (/opt) dai dati di sistema (/var/lib/odoo)
+#     --create-home  → crea /opt/odoo con owner corretto al primo avvio
 # -----------------------------------------------------------------------------
 create_odoo_user() {
     local user="${ODOO_USER:?La variabile ODOO_USER non è impostata}"
