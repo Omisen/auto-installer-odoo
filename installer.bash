@@ -78,8 +78,16 @@ export_vars() {
   export TEMPLATES_DIR
 }
 
-
-
+# --- Sourcing moduli ----------------------------------------------------------
+load_modules() {
+  source "${LIB_DIR}/checks.sh"
+  source "${LIB_DIR}/system.sh"
+  source "${LIB_DIR}/postgres.sh"
+  source "${LIB_DIR}/odoo.sh"
+  source "${LIB_DIR}/config.sh"
+  source "${LIB_DIR}/systemd.sh"
+  [[ "$WITH_NGINX" == true ]] && source "${LIB_DIR}/nginx.sh"
+}
 
 # --- Riepilogo finale ---------------------------------------------------------
 print_summary() {
@@ -104,6 +112,14 @@ main() {
 
   log "Avvio installazione Odoo ${ODOO_VERSION}..."
 
+  check_root
+  check_os
+
+  install_dependencies
+  setup_postgres
+  install_odoo
+  generate_config
+  setup_systemd
   [[ "$WITH_NGINX" == true ]] && setup_nginx
 
   print_summary
