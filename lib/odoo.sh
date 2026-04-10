@@ -171,6 +171,7 @@ _install_python_requirements() {
     # nell'env isolato (/tmp/pip-build-env-*/), ignorando il Cython<3 del venv.
     local tmp_req
     tmp_req=$(mktemp /tmp/odoo-requirements-XXXXXX.txt)
+    chmod 644 "${tmp_req}"
     grep -iv '^gevent' "${requirements}" > "${tmp_req}"
 
     log "Installazione dipendenze Python da requirements.txt …"
