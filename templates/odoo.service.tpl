@@ -11,9 +11,12 @@ SyslogIdentifier=odoo{{ODOO_VERSION_SHORT}}
 # Security hardening
 User={{ODOO_USER}}
 Group={{ODOO_USER}}
+WorkingDirectory={{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}
 PermissionsStartOnly=true
 NoNewPrivileges=true
 PrivateTmp=true
+RuntimeDirectory=odoo
+RuntimeDirectoryMode=0750
 
 # Binary & config
 ExecStart={{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}/sandbox/bin/python3 \

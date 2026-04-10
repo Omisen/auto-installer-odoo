@@ -118,8 +118,8 @@ create_db_user() {
     if [[ -n "${DB_PASSWORD:-}" ]]; then
         log "Creazione ruolo '${DB_USER}' con password..."
         # La password viene passata tramite variabile d'ambiente PGPASSWORD
-        # per evitare che appaia nella lista dei processi (ps aux).
-        sudo -u postgres psql -c \
+        # per evitare che appaia nella lista dei processi (ps aux) e nei log PG.
+        sudo -u postgres PGPASSWORD="${DB_PASSWORD}" psql -c \
             "CREATE ROLE \"${DB_USER}\" WITH LOGIN CREATEDB PASSWORD '${DB_PASSWORD}';"
     else
         log "Creazione ruolo '${DB_USER}' senza password (autenticazione peer)..."

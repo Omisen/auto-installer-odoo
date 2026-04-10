@@ -24,8 +24,8 @@ _config_set_defaults() {
     : "${ODOO_PROXY_MODE:=False}"   # True se dietro nginx/apache
 
     # Paths
-    : "${ODOO_HOME:=/opt/odoo}" # FIX directory
-    : "${ODOO_VERSION:=18}" # UPDATE lets try to create this has a dinamic choise
+    : "${ODOO_HOME:=/opt/odoo}"
+    : "${ODOO_VERSION:=18}"
     : "${ODOO_INSTALL_DIR:=${ODOO_HOME}/odoo${ODOO_VERSION}}"
     : "${ODOO_ADDONS_PATH:=${ODOO_INSTALL_DIR}/odoo/odoo/addons,${ODOO_INSTALL_DIR}/odoo/addons,${ODOO_INSTALL_DIR}/repos/modules}" # [x] add of ${ODOO_INSTALL_DIR}/odoo/odoo/addons was missing
     : "${ODOO_DATA_DIR:=${ODOO_HOME}/.local/share/Odoo}"

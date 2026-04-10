@@ -155,3 +155,88 @@ setup_log_dir() {
     chmod 750 "${log_dir}"
     log "Directory log '${log_dir}' pronta (owner: ${user})."
 }
+
+# -----------------------------------------------------------------------------
+# install_wkhtmltopdf
+#   Scarica e installa wkhtmltopdf con patch Qt da GitHub releases.
+#
+#   Il pacchetto apt di Ubuntu (0.12.6 senza Qt patch) genera PDF difettosi
+#   con Odoo (header/footer mancanti, caratteri errati). La versione ufficiale
+#   di Odoo richiede la build "0.12.6.1-3" compilata con Qt patchato.
+#
+#   Mappa codename → pacchetto (GitHub releases wkhtmltopdf/packaging):
+#     noble  (24.04) → usa jammy (compatibile, nessun pacchetto native)
+#     jammy  (22.04) → jammy
+#     focal  (20.04) → focal
+#     bookworm (deb12) → bookworm
+#     bullseye (deb11) → bullseye
+#
+#   Idempotente: se già installata la versione corretta, esce senza fare nulla.
+# -----------------------------------------------------------------------------
+install_wkhtmltopdf() {
+    local wk_version="0.12.6.1-3"
+    local wk_base_url="https://github.com/wkhtmltopdf/packaging/releases/download/${wk_version}"
+
+    # ── Idempotenza ───────────────────────────────────────────────────────────
+    if command -v wkhtmltopdf &>/dev/null; then
+        local installed_ver
+        installed_ver=$(wkhtmltopdf --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+        if [[ "${installed_ver}" == "0.12.6.1" ]]; then
+            log "wkhtmltopdf ${installed_ver} (Qt patch) già presente — skip."
+            return 0
+        else
+            warn "wkhtmltopdf trovato ma versione '${installed_ver}' (attesa 0.12.6.1 con Qt patch)."
+            warn "Procedo con l'installazione della versione corretta."
+        fi
+    fi
+
+    # ── Determina il pacchetto in base al codename ───────────────────────────
+    local codename="${OS_CODENAME:-}"
+    if [[ -z "${codename}" ]]; then
+        codename=$(grep -E '^VERSION_CODENAME=' /etc/os-release | cut -d= -f2 | tr -d '"')
+    fi
+
+    local pkg_suffix
+    case "${codename}" in
+        noble|mantic|lunar)  pkg_suffix="jammy"    ;;   # nessun pacchetto native, jammy è compatibile
+        jammy)               pkg_suffix="jammy"    ;;
+        focal)               pkg_suffix="focal"    ;;
+        bookworm)            pkg_suffix="bookworm" ;;
+        bullseye)            pkg_suffix="bullseye" ;;
+        *)
+            warn "Codename '${codename}' non mappato — uso pacchetto jammy come fallback."
+            pkg_suffix="jammy"
+            ;;
+    esac
+
+    local pkg_name="wkhtmltox_${wk_version}.${pkg_suffix}_amd64.deb"
+    local pkg_url="${wk_base_url}/${pkg_name}"
+    local tmp_deb
+    tmp_deb="$(mktemp --suffix=.deb)"
+    # Rimuovi il file temporaneo all'uscita (successo o errore)
+    trap "rm -f '${tmp_deb}'" RETURN
+
+    log "Download wkhtmltopdf ${wk_version} (${pkg_suffix})…"
+    log "  URL: ${pkg_url}"
+
+    if ! wget -q --show-progress -O "${tmp_deb}" "${pkg_url}"; then
+        error "Download wkhtmltopdf fallito. Verifica la connessione o scarica manualmente da:"
+        error "  ${pkg_url}"
+        return 1
+    fi
+
+    log "Installazione wkhtmltopdf…"
+    # dpkg -i può fallire per dipendenze mancanti; apt-get -f install le risolve.
+    dpkg -i "${tmp_deb}" || true
+    DEBIAN_FRONTEND=noninteractive apt-get install -f -y --no-install-recommends
+
+    # ── Verifica post-installazione ───────────────────────────────────────────
+    if ! command -v wkhtmltopdf &>/dev/null; then
+        error "wkhtmltopdf non trovato dopo l'installazione."
+        return 1
+    fi
+
+    local final_ver
+    final_ver=$(wkhtmltopdf --version 2>&1 | grep -oE '[0-9]+\.[0-9]+\.[0-9]+(\.[0-9]+)?' | head -1)
+    log "✔ wkhtmltopdf ${final_ver} installato con successo."
+}

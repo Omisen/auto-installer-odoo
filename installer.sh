@@ -7,19 +7,26 @@
 set -euo pipefail
 
 # ---- Percorsi Base ------
-SCRIPT_DIR="$(cd"$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LIB_DIR="${SCRIPT_DIR}/lib"
 TEMPLATES_DIR="${SCRIPT_DIR}/templates"
 
 # ------ Valori di default------
 ODOO_VERSION="18.0"
 ODOO_USER="odoo"
-ODOO_HOME="/home/odoo"
+ODOO_HOME="/opt/odoo"
 ODOO_PORT="8069"
 DB_USER="odoo"
 DB_NAME="odoo"
 WITH_NGINX=false
 CONFIG_FILE=""
+
+# Percorsi derivati (calcolati dopo parse_args per rispettare overrides da .env)
+ODOO_VERSION_SHORT="${ODOO_VERSION%%.*}"
+ODOO_INSTALL_DIR="${ODOO_HOME}/odoo${ODOO_VERSION_SHORT}"
+ODOO_REPO_DIR="odoo"
+ODOO_MODULES_DIR="repos/modules"
+ODOO_VENV_DIR="sandbox"
 
 # --- Colori per output -------------------------------------------------------
 RED='\033[0;31m'
@@ -73,8 +80,13 @@ parse_args() {
 
 # --- Export variabili globali (visibili ai moduli) ----------------------------
 export_vars() {
-  export ODOO_VERSION ODOO_USER ODOO_HOME ODOO_PORT
-  export DB_USER DB_NAME
+  # Ricalcola i percorsi derivati dopo eventuali override da .env / parse_args
+  ODOO_VERSION_SHORT="${ODOO_VERSION%%.*}"
+  ODOO_INSTALL_DIR="${ODOO_HOME}/odoo${ODOO_VERSION_SHORT}"
+
+  export ODOO_VERSION ODOO_VERSION_SHORT ODOO_USER ODOO_HOME ODOO_PORT
+  export DB_USER DB_NAME WITH_NGINX
+  export ODOO_INSTALL_DIR ODOO_REPO_DIR ODOO_MODULES_DIR ODOO_VENV_DIR
   export TEMPLATES_DIR
 }
 
@@ -102,6 +114,7 @@ print_summary() {
   echo "  Database   : ${DB_NAME}"
   [[ "$WITH_NGINX" == true ]] && echo "  Nginx      : attivo come reverse proxy"
   echo ""
+  systemd_status 
 }
 
 # --- Main --------------------------------------------------------------------
@@ -114,9 +127,16 @@ main() {
 
   check_root
   check_os
+  check_ports
+  check_disk
+  check_commands
 
   install_dependencies
+  install_wkhtmltopdf
+  create_odoo_user
+  setup_log_dir
   setup_postgres
+  create_db_user
   install_odoo
   generate_config
   setup_systemd
