@@ -1,5 +1,7 @@
 # Odoo Auto Installer
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+
 Installer bash non interattivo per **Odoo 16 / 17 / 18** su Ubuntu ≥ 22.04 e Debian ≥ 11.  
 Gestisce dipendenze di sistema, PostgreSQL, virtualenv Python, servizio systemd e (opzionale) Nginx come reverse proxy.
 

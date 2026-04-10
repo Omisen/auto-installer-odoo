@@ -142,24 +142,16 @@ _install_python_requirements() {
     log "Aggiornamento pip/wheel nel virtualenv …"
     sudo -u "${ODOO_USER}" "${pip}" install --quiet --upgrade pip wheel
 
-    # Cython 3.x ha rimosso il tipo 'long' di Python 2; gevent (richiesto da
-    # Odoo 18) usa ancora quel codice Cython nei file .pyx.
-    # pip costruisce le wheel in un ambiente isolato (/tmp/pip-build-env-*/),
-    # ignorando il Cython del virtualenv. Soluzione:
-    #   1. Installare Cython<3 nel virtualenv
-    #   2. Installare gevent con --no-build-isolation, che usa il Cython locale
-    #   3. Installare il resto dei requirements normalmente (gevent già presente)
-    log "Installazione Cython compatibile (< 3.0) …"
-    sudo -u "${ODOO_USER}" "${pip}" install --quiet "Cython<3"
-
-    log "Pre-installazione gevent (build senza isolamento) …"
-    sudo -u "${ODOO_USER}" "${pip}" install --quiet --no-build-isolation gevent
-
+    # gevent (richiesto da Odoo 18) usa codice Cython incompatibile con
+    # Cython 3.x (rimosso il tipo 'long' di Python 2). Invece di compilare
+    # da sorgente, si scarica la wheel binaria pre-compilata da PyPI con
+    # --prefer-binary; questo bypassa completamente la compilazione Cython.
     log "Installazione dipendenze Python da requirements.txt …"
     log "  (Questo passaggio può richiedere qualche minuto)"
 
     sudo -u "${ODOO_USER}" "${pip}" install \
         --quiet \
+        --prefer-binary \
         --requirement "${requirements}"
 
     log "  ✔ Dipendenze Python installate."
