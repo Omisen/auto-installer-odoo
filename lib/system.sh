@@ -43,6 +43,8 @@ libwebp-dev
 libharfbuzz-dev
 libfribidi-dev
 libxcb1-dev
+libev-dev
+libc-ares-dev
 EOF
 }
 

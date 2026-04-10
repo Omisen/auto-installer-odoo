@@ -142,6 +142,12 @@ _install_python_requirements() {
     log "Aggiornamento pip/wheel nel virtualenv …"
     sudo -u "${ODOO_USER}" "${pip}" install --quiet --upgrade pip wheel
 
+    # Cython 3.x ha rimosso il supporto per il tipo 'long' di Python 2.
+    # gevent (richiesto da Odoo 18) usa ancora quel codice Cython — va
+    # installato Cython<3 prima dei requirements per evitare errori di build.
+    log "Installazione Cython compatibile (< 3.0) …"
+    sudo -u "${ODOO_USER}" "${pip}" install --quiet "Cython<3"
+
     log "Installazione dipendenze Python da requirements.txt …"
     log "  (Questo passaggio può richiedere qualche minuto)"
 
