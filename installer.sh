@@ -98,7 +98,9 @@ load_modules() {
   source "${LIB_DIR}/odoo.sh"
   source "${LIB_DIR}/config.sh"
   source "${LIB_DIR}/systemd.sh"
-  [[ "$WITH_NGINX" == true ]] && source "${LIB_DIR}/nginx.sh"
+  if [[ "$WITH_NGINX" == true ]]; then
+    source "${LIB_DIR}/nginx.sh"
+  fi
 }
 
 # --- Riepilogo finale ---------------------------------------------------------
@@ -112,7 +114,9 @@ print_summary() {
   echo "  Versione   : ${ODOO_VERSION}"
   echo "  Utente OS  : ${ODOO_USER}"
   echo "  Database   : ${DB_NAME}"
-  [[ "$WITH_NGINX" == true ]] && echo "  Nginx      : attivo come reverse proxy"
+  if [[ "$WITH_NGINX" == true ]]; then
+    echo "  Nginx      : attivo come reverse proxy"
+  fi
   echo ""
   systemd_status 
 }
@@ -141,7 +145,9 @@ main() {
   install_odoo
   generate_config
   setup_systemd
-  [[ "$WITH_NGINX" == true ]] && setup_nginx
+  if [[ "$WITH_NGINX" == true ]]; then
+    setup_nginx
+  fi
 
   print_summary
 }
