@@ -27,9 +27,9 @@ _config_set_defaults() {
     : "${ODOO_HOME:=/opt/odoo}"
     : "${ODOO_VERSION:=18}"
     : "${ODOO_INSTALL_DIR:=${ODOO_HOME}/odoo${ODOO_VERSION}}"
-    : "${ODOO_ADDONS_PATH:=${ODOO_INSTALL_DIR}/odoo/odoo/addons,${ODOO_INSTALL_DIR}/odoo/addons,${ODOO_INSTALL_DIR}/repos/modules}" # [x] add of ${ODOO_INSTALL_DIR}/odoo/odoo/addons was missing
+    : "${ODOO_ADDONS_PATH:=${ODOO_INSTALL_DIR}/odoo/odoo/addons,${ODOO_INSTALL_DIR}/odoo/addons,${ODOO_INSTALL_DIR}/repos/modules}"
     : "${ODOO_DATA_DIR:=${ODOO_HOME}/.local/share/Odoo}"
-    : "${ODOO_LOGFILE:=/var/log/odoo/odoo${ODOO_VERSION}.log}"
+    : "${ODOO_LOGFILE:=/var/log/odoo/odoo${ODOO_VERSION%%.*}.log}"
     : "${ODOO_CONF_DIR:=${ODOO_INSTALL_DIR}}"
 
     # Worker / performance
@@ -169,12 +169,16 @@ _config_render_template() {
 #     6. Mostra un riepilogo (no password in chiaro)
 # ──────────────────────────────────────────────────────────────────────────────
 generate_config() {
-    log "━━━ Generazione odoo${ODOO_VERSION}.conf ━━━"
+    # ODOO_VERSION_SHORT (es. "18") deve corrispondere al nome usato
+    # in odoo.service.tpl: -c {{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}/odoo{{ODOO_VERSION_SHORT}}.conf
+    local version_short="${ODOO_VERSION%%.*}"
+
+    log "━━━ Generazione odoo${version_short}.conf ━━━"
 
     _config_set_defaults
 
     local tpl="${TEMPLATES_DIR}/odoo.conf.tpl"
-    local conf="${ODOO_CONF_DIR}/odoo${ODOO_VERSION}.conf"
+    local conf="${ODOO_CONF_DIR}/odoo${version_short}.conf"
 
     _config_validate_template "$tpl"
 

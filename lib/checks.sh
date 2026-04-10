@@ -21,9 +21,7 @@ check_root() {
     log "Verifica privilegi root..."
 
     if [[ "${EUID}" -ne 0 ]]; then
-        error "Questo script deve essere eseguito come root."
-        error "Riprova con: sudo ${0}"
-        exit 1
+        error "Questo script deve essere eseguito come root. Riprova con: sudo ${0}"
     fi
 
     log "✔ Esecuzione come root confermata."

@@ -45,6 +45,7 @@ libfribidi-dev
 libxcb1-dev
 libev-dev
 libc-ares-dev
+lesscss
 EOF
 }
 

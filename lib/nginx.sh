@@ -34,7 +34,7 @@ set -euo pipefail
 # -----------------------------------------------------------------------------
 # Costanti interne
 # -----------------------------------------------------------------------------
-readonly _NGINX_SITE_NAME="odoo18"
+readonly _NGINX_SITE_NAME="odoo${ODOO_VERSION%%.*}"
 readonly _NGINX_SITES_AVAILABLE="/etc/nginx/sites-available"
 readonly _NGINX_SITES_ENABLED="/etc/nginx/sites-enabled"
 readonly _NGINX_DEFAULT_SITE="${_NGINX_SITES_ENABLED}/default"
