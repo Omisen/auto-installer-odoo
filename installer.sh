@@ -127,9 +127,10 @@ main() {
 
   check_root
   check_os
-  check_ports
   check_disk
   check_commands
+  bootstrap_prerequisites
+  check_ports
 
   install_dependencies
   install_wkhtmltopdf

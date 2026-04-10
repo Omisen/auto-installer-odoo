@@ -198,22 +198,66 @@ check_disk() {
 }
 
 # ---------------------------------------------------------------------------
+# bootstrap_prerequisites
+#   Installa i pacchetti minimi indispensabili prima di qualsiasi altro step.
+#   Questi tool non possono essere assunti presenti su una VM fresh e vengono
+#   richiesti da fasi successive (install_dependencies, config.sh, ecc.).
+#
+#   Pacchetti installati:
+#     git           — clone repo Odoo
+#     curl / wget   — download wkhtmltopdf e altri asset
+#     gettext-base  — fornisce envsubst, usato da config.sh per i template
+#
+#   NON include: python3, pip, psql — installati da install_dependencies
+#   e setup_postgres nelle fasi successive.
+# ---------------------------------------------------------------------------
+bootstrap_prerequisites() {
+    local bootstrap_pkgs=(
+        git
+        curl
+        wget
+        gettext-base
+    )
+
+    local to_install=()
+    for pkg in "${bootstrap_pkgs[@]}"; do
+        if ! command -v "${pkg}" &>/dev/null 2>&1; then
+            to_install+=("${pkg}")
+        fi
+    done
+
+    # gettext-base non espone un binario omonimo — controlla envsubst
+    if ! command -v envsubst &>/dev/null; then
+        # aggiungi solo se non già in lista
+        [[ " ${to_install[*]} " != *" gettext-base "* ]] && to_install+=(gettext-base)
+    fi
+
+    if [[ ${#to_install[@]} -eq 0 ]]; then
+        log "✔ Prerequisiti bootstrap già presenti."
+        return 0
+    fi
+
+    log "Installazione prerequisiti bootstrap: ${to_install[*]}"
+    apt-get update -qq
+    DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+        "${to_install[@]}"
+    log "✔ Prerequisiti bootstrap installati."
+}
+
+# ---------------------------------------------------------------------------
 # check_commands
-#   Verifica che i comandi di sistema fondamentali siano presenti.
-#   I comandi opzionali (es. nginx) vengono solo segnalati con warn().
+#   Verifica che i comandi di sistema fondamentali del SO siano presenti.
+#   Controlla SOLO ciò che apt-get non può installare autonomamente:
+#   systemctl (init system) e apt-get stesso.
+#   git/python3/pip3/psql/envsubst vengono installati nelle fasi successive.
 # ---------------------------------------------------------------------------
 check_commands() {
     log "Verifica comandi di sistema richiesti..."
 
+    # Solo prerequisiti del SO — non installabili dallo script stesso
     local required_cmds=(
-        git
-        python3
-        pip3
-        wget
-        curl
-        envsubst   # da gettext-base, per i template
-        systemctl
-        psql
+        apt-get    # gestore pacchetti — senza questo nulla funziona
+        systemctl  # init system — necessario per enable/start servizi
     )
 
     local optional_cmds=(
@@ -241,10 +285,10 @@ check_commands() {
     done
 
     if [[ "${missing}" -gt 0 ]]; then
-        error "${missing} comando/i obbligatorio/i non trovato/i."
-        error "Esegui prima: sudo apt update && sudo apt install -y git python3 python3-pip wget curl gettext-base postgresql-client"
+        error "${missing} prerequisito/i di sistema non trovato/i."
+        error "Questo script richiede un sistema Debian/Ubuntu con apt-get e systemd."
         exit 1
     fi
 
-    log "✔ Tutti i comandi obbligatori sono presenti."
+    log "✔ Prerequisiti di sistema verificati."
 }

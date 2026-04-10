@@ -16,13 +16,15 @@ set -euo pipefail
 _apt_packages_odoo() {
     cat <<'EOF'
 git
+curl
+wget
 python3-pip
 python3-dev
 python3-venv
 python3-wheel
 python3-setuptools
 build-essential
-wget
+gettext-base
 libfreetype6-dev
 libxml2-dev
 libzip-dev
