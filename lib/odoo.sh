@@ -206,8 +206,13 @@ _verify_installation() {
         return 1
     fi
 
-    # Prova ad importare odoo senza avviarlo davvero
-    if ! sudo -u "${ODOO_USER}" "${python}" -c "import odoo" &>/dev/null; then
+    # Prova ad importare odoo aggiungendo la directory del repo al PYTHONPATH.
+    # Odoo non è installato come package pip ma è un clone git: il modulo 'odoo'
+    # si trova in ODOO_INSTALL_DIR/ODOO_REPO_DIR/ e va reso visibile a Python.
+    local repo_dir="${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}"
+    if ! sudo -u "${ODOO_USER}" \
+            PYTHONPATH="${repo_dir}" \
+            "${python}" -c "import odoo" &>/dev/null; then
         error "Impossibile importare il modulo 'odoo'. Controllare l'installazione pip."
         return 1
     fi
