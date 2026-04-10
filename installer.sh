@@ -88,6 +88,11 @@ export_vars() {
   export DB_USER DB_NAME WITH_NGINX
   export ODOO_INSTALL_DIR ODOO_REPO_DIR ODOO_MODULES_DIR ODOO_VENV_DIR
   export TEMPLATES_DIR
+
+  # Disabilita needrestart (Ubuntu 22.04+) per evitare prompt interattivi
+  # durante apt-get install. 'a' = automatic restart senza chiedere.
+  export NEEDRESTART_MODE=a
+  export DEBIAN_FRONTEND=noninteractive
 }
 
 # --- Sourcing moduli ----------------------------------------------------------

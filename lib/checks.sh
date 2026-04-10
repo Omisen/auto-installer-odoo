@@ -212,6 +212,10 @@ check_disk() {
 #   e setup_postgres nelle fasi successive.
 # ---------------------------------------------------------------------------
 bootstrap_prerequisites() {
+    # Sopprime needrestart anche qui — bootstrap gira prima di export_vars
+    export NEEDRESTART_MODE=a
+    export DEBIAN_FRONTEND=noninteractive
+
     local bootstrap_pkgs=(
         git
         curl
