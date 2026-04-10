@@ -45,7 +45,6 @@ libfribidi-dev
 libxcb1-dev
 libev-dev
 libc-ares-dev
-lesscss
 EOF
 }
 
@@ -76,7 +75,7 @@ install_dependencies() {
 #   In questo modo il log rimane leggibile senza perdere errori reali.
 # -----------------------------------------------------------------------------
 _apt_progress_filter() {
-    grep -E '(^Get:|^Unpacking|^Setting up|^Processing|ERROR|warning)' || true
+    grep -E '(^Get:|^Unpacking|^Setting up|^Processing|^E:|ERROR|warning)' || true
 }
 
 # -----------------------------------------------------------------------------
