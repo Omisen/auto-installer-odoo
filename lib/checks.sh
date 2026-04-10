@@ -175,7 +175,7 @@ _port_in_use() {
 # ---------------------------------------------------------------------------
 check_disk() {
     local required_gb="${MIN_DISK_GB:-5}"
-    local target_dir="${ODOO_HOME:-/opt/odoo}"
+    local target_dir="${ODOO_HOME:-/opt/odoo}" # BUG check for this dir targhet
 
     log "Verifica spazio disco (minimo: ${required_gb} GB su ${target_dir})..."
 

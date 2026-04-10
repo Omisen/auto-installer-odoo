@@ -4,8 +4,8 @@
 #
 # Variabili attese (esportate da install.sh):
 #   ODOO_USER   — nome utente di sistema per Odoo  (default: odoo)
-#   ODOO_HOME   — home directory dell'utente        (default: /opt/odoo)
-# =============================================================================
+#   ODOO_HOME   — home directory dell'utente        (default: /opt/odoo) #FIX this shoud be /home/odoo 
+# ============================================================================= #BUG in checks.sh
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
