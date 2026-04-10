@@ -152,8 +152,21 @@ _install_python_requirements() {
     log "Installazione Cython compatibile (< 3.0) …"
     sudo -u "${ODOO_USER}" "${pip}" install --quiet "Cython<3"
 
+    # Estrae la specifica esatta di gevent dal requirements.txt (es. "gevent==21.12.0")
+    # così la versione pre-installata combacia con quella attesa da Odoo.
+    local gevent_req
+    gevent_req=$(grep -iE '^gevent([>=<!;[:space:]]|$)' "${requirements}" | head -1 | tr -d '[:space:]')
+    gevent_req="${gevent_req:-gevent}"
+
     log "Pre-installazione gevent (build senza isolamento) …"
-    sudo -u "${ODOO_USER}" "${pip}" install --quiet --no-build-isolation gevent
+    sudo -u "${ODOO_USER}" "${pip}" install --quiet --no-build-isolation "${gevent_req}"
+
+    # Genera un requirements temporaneo senza le righe gevent: il pacchetto è
+    # già installato e pip altrimenti lo rischerica e ricompila da sorgente
+    # nell'env isolato (/tmp/pip-build-env-*/), ignorando il Cython<3 del venv.
+    local tmp_req
+    tmp_req=$(mktemp /tmp/odoo-requirements-XXXXXX.txt)
+    grep -iv '^gevent' "${requirements}" > "${tmp_req}"
 
     log "Installazione dipendenze Python da requirements.txt …"
     log "  (Questo passaggio può richiedere qualche minuto)"
@@ -161,7 +174,9 @@ _install_python_requirements() {
     sudo -u "${ODOO_USER}" "${pip}" install \
         --quiet \
         --prefer-binary \
-        --requirement "${requirements}"
+        --requirement "${tmp_req}"
+
+    rm -f "${tmp_req}"
 
     log "  ✔ Dipendenze Python installate."
 }
