@@ -570,7 +570,8 @@ check_connectivity() {
   # Odoo risponde
   local http_code
   http_code=$(curl -s -o /dev/null -w '%{http_code}' \
-    --max-time 10 "${base_url}/web/database/selector" 2>/dev/null || echo "000")
+    --max-time 10 "${base_url}/web/database/selector" 2>/dev/null) || true
+  http_code="${http_code:-000}"
 
   if [[ "$http_code" == "200" || "$http_code" == "303" ]]; then
     pass "Odoo risponde su porta ${ODOO_PORT} (HTTP $http_code)"
@@ -587,7 +588,8 @@ check_connectivity() {
     --max-time 10 \
     -X POST "${base_url}/web/dataset/call_kw" \
     -H "Content-Type: application/json" \
-    -d '{"jsonrpc":"2.0","method":"call","id":1,"params":{}}' 2>/dev/null || echo "000")
+    -d '{"jsonrpc":"2.0","method":"call","id":1,"params":{}}' 2>/dev/null) || true
+  rpc_code="${rpc_code:-000}"
 
   if [[ "$rpc_code" =~ ^(200|400|404)$ ]]; then
     pass "Endpoint JSON-RPC raggiungibile (HTTP $rpc_code)"
@@ -746,6 +748,11 @@ main() {
   check_security
 
   print_summary
+
+  if [[ "$DRY_RUN" == "true" ]]; then
+    [[ $TESTS_FAILED -gt 0 ]] && log "Dry-run: ${TESTS_FAILED} check non soddisfatti (atteso su runner CI senza Odoo installato)"
+    exit 0
+  fi
 
   [[ $TESTS_FAILED -eq 0 ]]
 }
