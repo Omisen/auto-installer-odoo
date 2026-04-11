@@ -57,7 +57,7 @@ run() {
   if [[ "$DRY_RUN" == "true" ]]; then
     echo -e "${DIM}[DRY-RUN]${RESET} $*"
   else
-    eval "$@"
+    "$@"
   fi
 }
 
@@ -102,7 +102,7 @@ section() {
 # Esegue un test generico: check <nome> <comando>
 check() {
   local name="$1"; shift
-  if eval "$@" &>/dev/null; then
+  if "$@" &>/dev/null; then
     pass "$name"
     return 0
   else
@@ -149,7 +149,6 @@ check_system() {
   if [[ -f /etc/os-release ]]; then
     . /etc/os-release
     local os_id="${ID:-unknown}"
-    local os_version="${VERSION_ID:-unknown}"
     if [[ "$os_id" =~ ^(ubuntu|debian)$ ]]; then
       pass "OS supportato: $PRETTY_NAME"
     else
