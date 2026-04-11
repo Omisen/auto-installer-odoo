@@ -22,6 +22,7 @@ ODOO_PORT="${ODOO_PORT:-8069}"
 ODOO_CONF="${ODOO_CONF:-/opt/odoo/odoo18/odoo18.conf}"
 DB_USER="${DB_USER:-odoo}"
 VERBOSE="${VERBOSE:-false}"
+DRY_RUN="${DRY_RUN:-false}"
 
 # ---------------------------------------------------------------------------
 # Colori e formattazione
@@ -50,6 +51,15 @@ log()     { echo -e "${DIM}[INFO]${RESET}  $*"; }
 verbose() { [[ "$VERBOSE" == "true" ]] && echo -e "${DIM}        $*${RESET}" || true; }
 warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
+
+# Esegue un comando oppure lo stampa in dry-run
+run() {
+  if [[ "$DRY_RUN" == "true" ]]; then
+    echo -e "${DIM}[DRY-RUN]${RESET} $*"
+  else
+    eval "$@"
+  fi
+}
 
 # ---------------------------------------------------------------------------
 # Funzioni di test
@@ -86,7 +96,7 @@ skip() {
 section() {
   echo ""
   echo -e "${CYAN}${BOLD}▶ $*${RESET}"
-  echo -e "${DIM}$(printf '─%.0s' {1..60})${RESET}"
+  echo -e "${DIM}$(printf '─%.0s' $(seq 1 60))${RESET}"
 }
 
 # Esegue un test generico: check <nome> <comando>
@@ -112,6 +122,7 @@ parse_args() {
       --odoo-user)  ODOO_USER="$2";  shift 2 ;;
       --port)       ODOO_PORT="$2";  shift 2 ;;
       --verbose|-v) VERBOSE="true";  shift   ;;
+      --dry-run)    DRY_RUN="true";    shift   ;;
       --help|-h)
         echo "Uso: $0 [--config FILE] [--odoo-home DIR] [--odoo-user USER] [--port PORT] [--verbose]"
         exit 0
@@ -685,9 +696,9 @@ check_security() {
 # ---------------------------------------------------------------------------
 print_summary() {
   echo ""
-  echo -e "${BOLD}$(printf '═%.0s' {1..60})${RESET}"
+  echo -e "${BOLD}$(printf '═%.0s' $(seq 1 60))${RESET}"
   echo -e "${BOLD}  RIEPILOGO TEST — Odoo ${ODOO_VERSION} su $(hostname)${RESET}"
-  echo -e "${BOLD}$(printf '═%.0s' {1..60})${RESET}"
+  echo -e "${BOLD}$(printf '═%.0s' $(seq 1 60))${RESET}"
   echo ""
   echo -e "  Test eseguiti : ${BOLD}$TESTS_RUN${RESET}"
   echo -e "  ${GREEN}Superati       : $TESTS_PASSED${RESET}"

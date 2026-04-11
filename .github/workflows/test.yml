@@ -1,0 +1,93 @@
+# =============================================================================
+# .github/workflows/test.yml
+# Verifica la qualità degli script bash ad ogni push/PR.
+#
+# NON esegue l'installazione reale di Odoo (troppo lenta per CI).
+# Esegue invece:
+#   1. shellcheck    — analisi statica su tutti gli script
+#   2. bash -n       — syntax check
+#   3. check_install.sh --dry-run  — validazione logica senza effetti collaterali
+# =============================================================================
+
+name: Lint & Validate
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main, master]
+
+jobs:
+
+  # ---------------------------------------------------------------------------
+  # JOB 1 — ShellCheck: analisi statica
+  # Viene eseguito su tutti i file .sh del progetto.
+  # ---------------------------------------------------------------------------
+  shellcheck:
+    name: ShellCheck
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Installa ShellCheck
+        run: sudo apt-get install -y shellcheck
+
+      - name: Esegui ShellCheck su tutti gli script
+        run: |
+          find . -name "*.sh" -not -path "./.git/*" | sort | while read -r f; do
+            echo "→ $f"
+            shellcheck --severity=warning --shell=bash "$f"
+          done
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 — Syntax check: bash -n su ogni file
+  # Rapido, non richiede dipendenze esterne.
+  # ---------------------------------------------------------------------------
+  syntax:
+    name: Syntax check (bash -n)
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Verifica sintassi bash
+        run: |
+          errors=0
+          find . -name "*.sh" -not -path "./.git/*" | sort | while read -r f; do
+            if bash -n "$f" 2>&1; then
+              echo "  OK  $f"
+            else
+              echo "  FAIL $f"
+              errors=$((errors + 1))
+            fi
+          done
+          exit $errors
+
+  # ---------------------------------------------------------------------------
+  # JOB 3 — Dry-run di check_install.sh
+  # Esegue lo script in modalità --dry-run: stampa i comandi che verrebbero
+  # eseguiti senza toccare il sistema.
+  # ---------------------------------------------------------------------------
+  dry-run:
+    name: check_install.sh --dry-run
+    runs-on: ubuntu-22.04
+    needs: [shellcheck, syntax]   # solo se i job precedenti passano
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Rendi eseguibili gli script
+        run: chmod +x installer.sh tests/check_install.sh lib/*.sh
+
+      - name: Esegui check_install.sh in dry-run
+        run: sudo bash tests/check_install.sh --dry-run --verbose
+        env:
+          ODOO_VERSION: "18"
+          ODOO_USER: "odoo"
+          ODOO_HOME: "/opt/odoo"
+          ODOO_PORT: "8069"
+          DB_USER: "odoo"
