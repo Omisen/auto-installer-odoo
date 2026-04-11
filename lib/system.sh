@@ -222,6 +222,7 @@ install_wkhtmltopdf() {
     local tmp_deb
     tmp_deb="$(mktemp --suffix=.deb)"
     # Rimuovi il file temporaneo all'uscita (successo o errore)
+    # shellcheck disable=SC2064
     trap "rm -f '${tmp_deb}'" RETURN
 
     log "Download wkhtmltopdf ${wk_version} (${pkg_suffix})…"
