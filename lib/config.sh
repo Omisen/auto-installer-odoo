@@ -187,7 +187,8 @@ generate_config() {
 
     # Idempotenza: backup se esiste già
     if [[ -f "$conf" ]]; then
-        local backup="${conf}.bak.$(date +%Y%m%d%H%M%S)"
+        local backup
+        backup="${conf}.bak.$(date +%Y%m%d%H%M%S)"
         warn "File esistente trovato — backup in: ${backup}"
         sudo cp "$conf" "$backup"
     fi
