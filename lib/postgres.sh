@@ -40,7 +40,7 @@ _postgres_is_running() {
 # -----------------------------------------------------------------------------
 _postgres_role_exists() {
     local role="${1:?_postgres_role_exists richiede un nome ruolo}"
-    sudo -u postgres psql -tAc \
+    sudo -Hiu postgres -- psql -tAc \
         "SELECT 1 FROM pg_roles WHERE rolname = '${role}';" \
         2>/dev/null | grep -q 1
 }
@@ -51,7 +51,7 @@ _postgres_role_exists() {
 # -----------------------------------------------------------------------------
 _postgres_db_exists() {
     local db_name="${1:?_postgres_db_exists richiede un nome database}"
-    sudo -u postgres psql -tAc \
+    sudo -Hiu postgres -- psql -tAc \
         "SELECT 1 FROM pg_database WHERE datname = '${db_name}';" \
         2>/dev/null | grep -q 1
 }
@@ -129,13 +129,14 @@ create_db_user() {
     # ── Creazione ruolo ────────────────────────────────────────────────────
     if [[ -n "${DB_PASSWORD:-}" ]]; then
         log "Creazione ruolo '${DB_USER}' con password..."
-        # La password viene passata tramite variabile d'ambiente PGPASSWORD
-        # per evitare che appaia nella lista dei processi (ps aux) e nei log PG.
-        sudo -u postgres PGPASSWORD="${DB_PASSWORD}" psql -c \
-            "CREATE ROLE \"${DB_USER}\" WITH LOGIN CREATEDB PASSWORD '${DB_PASSWORD}';"
+        # Escape SQL minimo per password con apici singoli.
+        local sql_password
+        sql_password="${DB_PASSWORD//\'/\'\'}"
+        sudo -Hiu postgres -- psql -c \
+            "CREATE ROLE \"${DB_USER}\" WITH LOGIN CREATEDB PASSWORD '${sql_password}';"
     else
         log "Creazione ruolo '${DB_USER}' senza password (autenticazione peer)..."
-        sudo -u postgres psql -c \
+        sudo -Hiu postgres -- psql -c \
             "CREATE ROLE \"${DB_USER}\" WITH LOGIN CREATEDB;"
     fi
 
@@ -172,7 +173,7 @@ create_db_if_missing() {
     fi
 
     log "Creazione database '${DB_NAME}' con owner '${DB_USER}'..."
-    sudo -u postgres createdb --owner "${DB_USER}" "${DB_NAME}"
+    sudo -Hiu postgres -- createdb --owner "${DB_USER}" "${DB_NAME}"
 
     if _postgres_db_exists "${DB_NAME}"; then
         log "Database PostgreSQL '${DB_NAME}' creato con successo."

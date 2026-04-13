@@ -65,12 +65,53 @@ _create_directories() {
 }
 
 # ---------------------------------------------------------------------------
+# _fetch_odoo_tarball_fallback <target_dir>
+# Scarica il branch Odoo come tarball GitHub e lo estrae in target_dir.
+# Utile quando il clone git fallisce per errori TLS/RPC intermittenti.
+# ---------------------------------------------------------------------------
+_fetch_odoo_tarball_fallback() {
+    local target_dir="$1"
+    local tar_url="https://codeload.github.com/odoo/odoo/tar.gz/refs/heads/${ODOO_VERSION}"
+    local tmp_tar
+
+    tmp_tar="$(mktemp /tmp/odoo-src-XXXXXX.tar.gz)"
+
+    log "Tentativo fallback: download tarball Odoo ${ODOO_VERSION} …"
+    log "  URL: ${tar_url}"
+
+    if command -v curl &>/dev/null; then
+        curl --fail --location --silent --show-error "${tar_url}" -o "${tmp_tar}"
+    elif command -v wget &>/dev/null; then
+        wget -qO "${tmp_tar}" "${tar_url}"
+    else
+        rm -f "${tmp_tar}"
+        error "Né curl né wget disponibili: impossibile usare il fallback tarball."
+        return 1
+    fi
+
+    sudo mkdir -p "${target_dir}"
+    sudo tar -xzf "${tmp_tar}" -C "${target_dir}" --strip-components=1
+    sudo chown -R "${ODOO_USER}:${ODOO_USER}" "${target_dir}"
+    rm -f "${tmp_tar}"
+
+    if [[ -f "${target_dir}/odoo-bin" ]]; then
+        log "  ✔ Sorgenti Odoo installate via tarball fallback."
+        return 0
+    fi
+
+    error "Fallback tarball completato ma odoo-bin non trovato in ${target_dir}."
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # Clone del repository Odoo da GitHub
 # Idempotente: se la cartella esiste e ha già il branch corretto, salta.
 # ---------------------------------------------------------------------------
 _clone_odoo_repo() {
     local target_dir="${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}"
     local depth="${GIT_DEPTH:-5}"
+    local retries="${GIT_CLONE_RETRIES:-3}"
+    local attempt
 
     if [[ -d "${target_dir}/.git" ]]; then
         # Verifica che il branch corrisponda alla versione attesa
@@ -89,16 +130,50 @@ _clone_odoo_repo() {
         fi
     fi
 
+    # Supporta installazioni già popolate da tarball fallback (senza .git).
+    if [[ -d "${target_dir}" && ! -d "${target_dir}/.git" ]]; then
+        if [[ -f "${target_dir}/odoo-bin" ]]; then
+            warn "Sorgenti già presenti in ${target_dir} (senza metadata git), salto clone."
+            return 0
+        fi
+        warn "Directory ${target_dir} esistente ma non valida: la rigenero."
+        sudo rm -rf "${target_dir}"
+    fi
+
     log "Clone Odoo ${ODOO_VERSION} da GitHub (depth=${depth}) …"
     log "  Destinazione: ${target_dir}"
 
-    sudo -u "${ODOO_USER}" git clone \
-        https://github.com/odoo/odoo.git \
-        --branch "${ODOO_VERSION}" \
-        --depth  "${depth}" \
-        "${target_dir}"
+    for ((attempt=1; attempt<=retries; attempt++)); do
+        if sudo -u "${ODOO_USER}" git \
+            -c http.version=HTTP/1.1 \
+            -c core.compression=0 \
+            clone \
+            https://github.com/odoo/odoo.git \
+            --branch "${ODOO_VERSION}" \
+            --single-branch \
+            --no-tags \
+            --depth "${depth}" \
+            "${target_dir}"; then
+            log "  ✔ Clone completato."
+            return 0
+        fi
 
-    log "  ✔ Clone completato."
+        warn "Clone Odoo fallito (tentativo ${attempt}/${retries})."
+
+        # Pulizia di eventuali artefatti parziali prima del retry.
+        if [[ -e "${target_dir}" ]]; then
+            sudo rm -rf "${target_dir}"
+        fi
+
+        if [[ "${attempt}" -lt "${retries}" ]]; then
+            local backoff=$((attempt * 2))
+            warn "Nuovo tentativo tra ${backoff}s..."
+            sleep "${backoff}"
+        fi
+    done
+
+    warn "Clone Odoo fallito dopo ${retries} tentativi. Attivo fallback tarball..."
+    _fetch_odoo_tarball_fallback "${target_dir}"
 }
 
 # ---------------------------------------------------------------------------
