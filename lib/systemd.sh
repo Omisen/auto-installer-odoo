@@ -174,7 +174,7 @@ setup_systemd() {
 
     # ── 2. Render into a temp file ──────────────────────────────────────────
     local tmp_unit
-    tmp_unit="$(mktemp /tmp/odoo.service.XXXXXX)"
+    tmp_unit="$(mktemp /tmp/odoo.XXXXXX.service)"
     # shellcheck disable=SC2064
     trap "rm -f '${tmp_unit}'" RETURN
 

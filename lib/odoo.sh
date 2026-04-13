@@ -339,6 +339,62 @@ _verify_installation() {
     log "  ✔ Modulo odoo importabile."
 }
 
+# ---------------------------------------------------------------------------
+# Verifica se il database Odoo e' gia' inizializzato (tabella core presente).
+# ---------------------------------------------------------------------------
+_odoo_db_is_initialized() {
+    if [[ -z "${DB_NAME:-}" ]]; then
+        return 1
+    fi
+
+    sudo -Hiu postgres -- psql -d "${DB_NAME}" -tAc \
+        "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='ir_module_module';" \
+        2>/dev/null | grep -q 1
+}
+
+# ---------------------------------------------------------------------------
+# Inizializza il database Odoo se esiste ma non contiene ancora lo schema base.
+# Idempotente: se il DB e' gia' pronto, non esegue alcuna azione.
+# ---------------------------------------------------------------------------
+initialize_odoo_database() {
+    local version_short="${ODOO_VERSION%%.*}"
+    local conf_dir="${ODOO_CONF_DIR:-${ODOO_INSTALL_DIR}}"
+    local conf_file="${conf_dir}/odoo${version_short}.conf"
+    local python_bin="${ODOO_INSTALL_DIR}/${ODOO_VENV_DIR}/bin/python3"
+    local odoo_bin="${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}/odoo-bin"
+
+    if [[ -z "${DB_NAME:-}" ]]; then
+        error "DB_NAME non impostato: impossibile inizializzare il database Odoo."
+        return 1
+    fi
+
+    if [[ ! -f "${conf_file}" ]]; then
+        error "File config Odoo non trovato: ${conf_file}"
+        return 1
+    fi
+
+    if _odoo_db_is_initialized; then
+        log "Database '${DB_NAME}' gia' inizializzato — salto bootstrap Odoo."
+        return 0
+    fi
+
+    log "Database '${DB_NAME}' presente ma non inizializzato: avvio bootstrap base..."
+    sudo -u "${ODOO_USER}" \
+        "${python_bin}" "${odoo_bin}" \
+        -c "${conf_file}" \
+        -d "${DB_NAME}" \
+        -i base \
+        --without-demo=all \
+        --stop-after-init
+
+    if _odoo_db_is_initialized; then
+        log "  ✔ Database '${DB_NAME}' inizializzato con successo (modulo base)."
+    else
+        error "Inizializzazione database '${DB_NAME}' fallita: schema base non rilevato."
+        return 1
+    fi
+}
+
 # =============================================================================
 # FUNZIONE PUBBLICA
 # =============================================================================

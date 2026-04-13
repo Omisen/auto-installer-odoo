@@ -306,6 +306,7 @@ main() {
   create_db_if_missing
   install_odoo
   generate_config
+  initialize_odoo_database
   setup_systemd
   if [[ "$WITH_NGINX" == true ]]; then
     setup_nginx

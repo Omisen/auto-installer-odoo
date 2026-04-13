@@ -216,20 +216,20 @@ _config_render_template() {
     # Se ODOO_LOGFILE e' vuoto, disabilita esplicitamente la direttiva logfile
     # lasciando traccia nel file generato.
     if [[ -z "${ODOO_LOGFILE}" ]]; then
-        sed -i 's|^logfile[[:space:]]*=.*$|; logfile disabled: using stdout\/stderr|' "$tmp"
+        sed -i 's|^logfile[[:space:]]*=.*$|; logfile =|' "$tmp"
     fi
 
     # Odoo richiede un intero valido per db_port: se vuoto, meglio omettere la direttiva.
     if [[ -z "${DB_PORT:-}" ]]; then
-        sed -i 's|^db_port[[:space:]]*=.*$|; db_port not set: using default/socket|' "$tmp"
+        sed -i 's|^db_port[[:space:]]*=.*$|; db_port =|' "$tmp"
     fi
 
     if [[ -z "${DB_HOST:-}" ]]; then
-        sed -i 's|^db_host[[:space:]]*=.*$|; db_host not set: using local socket|' "$tmp"
+        sed -i 's|^db_host[[:space:]]*=.*$|; db_host =|' "$tmp"
     fi
 
     if [[ -z "${DB_PASSWORD:-}" ]]; then
-        sed -i 's|^db_password[[:space:]]*=.*$|; db_password not set: using peer/trust auth|' "$tmp"
+        sed -i 's|^db_password[[:space:]]*=.*$|; db_password =|' "$tmp"
     fi
 
     # Sposta il file nella destinazione con permessi corretti
