@@ -51,6 +51,9 @@ _render_template() {
         -e "s|{{ODOO_VERSION_SHORT}}|${version_short}|g" \
         -e "s|{{ODOO_USER}}|${ODOO_USER}|g" \
         -e "s|{{ODOO_HOME}}|${ODOO_HOME}|g" \
+        -e "s|{{ODOO_INSTALL_DIR}}|${ODOO_INSTALL_DIR}|g" \
+        -e "s|{{ODOO_REPO_DIR}}|${ODOO_REPO_DIR}|g" \
+        -e "s|{{ODOO_VENV_DIR}}|${ODOO_VENV_DIR}|g" \
         "${src}" > "${dst}"
 }
 

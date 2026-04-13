@@ -11,7 +11,7 @@ SyslogIdentifier=odoo{{ODOO_VERSION_SHORT}}
 # Security hardening
 User={{ODOO_USER}}
 Group={{ODOO_USER}}
-WorkingDirectory={{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}
+WorkingDirectory={{ODOO_INSTALL_DIR}}
 PermissionsStartOnly=true
 NoNewPrivileges=true
 PrivateTmp=true
@@ -19,9 +19,9 @@ RuntimeDirectory=odoo
 RuntimeDirectoryMode=0750
 
 # Binary & config
-ExecStart={{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}/sandbox/bin/python3 \
-    {{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}/odoo/odoo-bin \
-    -c {{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}/odoo{{ODOO_VERSION_SHORT}}.conf
+ExecStart={{ODOO_INSTALL_DIR}}/{{ODOO_VENV_DIR}}/bin/python3 \
+    {{ODOO_INSTALL_DIR}}/{{ODOO_REPO_DIR}}/odoo-bin \
+    -c {{ODOO_INSTALL_DIR}}/odoo{{ODOO_VERSION_SHORT}}.conf
 
 StandardOutput=journal+console
 StandardError=journal+console

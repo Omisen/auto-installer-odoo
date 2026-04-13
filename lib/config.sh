@@ -181,8 +181,8 @@ _config_render_template() {
 #     6. Mostra un riepilogo (no password in chiaro)
 # ──────────────────────────────────────────────────────────────────────────────
 generate_config() {
-    # ODOO_VERSION_SHORT (es. "18") deve corrispondere al nome usato
-    # in odoo.service.tpl: -c {{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}/odoo{{ODOO_VERSION_SHORT}}.conf
+    # ODOO_VERSION_SHORT (es. "18") viene usato nel nome del file
+    # odoo18.conf, referenziato poi dalla unit systemd.
     local version_short="${ODOO_VERSION%%.*}"
 
     log "━━━ Generazione odoo${version_short}.conf ━━━"

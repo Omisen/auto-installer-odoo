@@ -278,7 +278,7 @@ main() {
   echo ""
   sleep 1
   print_installation_configuration
-  sleep 3
+  sleep 2
   log "Avvio installazione Odoo ${ODOO_VERSION}..."
 
   check_root
