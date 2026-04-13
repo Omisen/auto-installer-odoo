@@ -1,0 +1,179 @@
+name: Debug Installer
+
+on:
+  workflow_dispatch:
+    inputs:
+      odoo_version:
+        description: Odoo version/branch to test
+        required: true
+        default: "17.0"
+      git_clone_retries:
+        description: Retries for git clone probe
+        required: true
+        default: "3"
+      git_depth:
+        description: Git clone depth
+        required: true
+        default: "5"
+      tarball_download_retries:
+        description: Retries for tarball download probe
+        required: true
+        default: "3"
+
+jobs:
+  debug:
+    name: Network + Source Debug
+    runs-on: ubuntu-22.04
+    timeout-minutes: 30
+
+    env:
+      ODOO_VERSION: ${{ inputs.odoo_version }}
+      GIT_CLONE_RETRIES: ${{ inputs.git_clone_retries }}
+      GIT_DEPTH: ${{ inputs.git_depth }}
+      TARBALL_DOWNLOAD_RETRIES: ${{ inputs.tarball_download_retries }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Prepare debug workspace
+        run: |
+          set -euo pipefail
+          mkdir -p .debug
+          echo "timestamp=$(date -u +%Y-%m-%dT%H:%M:%SZ)" | tee .debug/meta.txt
+          echo "runner=$(uname -a)" | tee -a .debug/meta.txt
+          echo "version=${ODOO_VERSION}" | tee -a .debug/meta.txt
+          echo "git_clone_retries=${GIT_CLONE_RETRIES}" | tee -a .debug/meta.txt
+          echo "git_depth=${GIT_DEPTH}" | tee -a .debug/meta.txt
+          echo "tarball_download_retries=${TARBALL_DOWNLOAD_RETRIES}" | tee -a .debug/meta.txt
+
+      - name: Bash syntax and shellcheck
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y shellcheck
+
+          {
+            echo "== bash -n =="
+            find . -name "*.sh" -not -path "./.git/*" | sort | while read -r f; do
+              echo "Checking ${f}"
+              bash -n "${f}"
+            done
+
+            echo "== shellcheck =="
+            find . -name "*.sh" -not -path "./.git/*" | sort | while read -r f; do
+              echo "Lint ${f}"
+              shellcheck --severity=warning --shell=bash "${f}"
+            done
+          } | tee .debug/lint.log
+
+      - name: Network diagnostics (github/codeload)
+        run: |
+          set -euo pipefail
+          {
+            echo "== DNS =="
+            getent hosts github.com
+            getent hosts codeload.github.com
+
+            echo "== HTTPS HEAD github =="
+            curl -I --connect-timeout 10 --max-time 30 https://github.com
+
+            echo "== HTTPS HEAD codeload =="
+            curl -I --connect-timeout 10 --max-time 30 https://codeload.github.com
+
+            echo "== TLS probe with git =="
+            git ls-remote https://github.com/odoo/odoo.git "${ODOO_VERSION}" | head -n 5
+          } | tee .debug/network.log
+
+      - name: Source acquisition probe (git then tarball fallback)
+        run: |
+          set -euo pipefail
+          workdir="$(mktemp -d /tmp/odoo-debug-XXXXXX)"
+          trap 'rm -rf "${workdir}"' EXIT
+
+          git_ok=0
+          tar_ok=0
+
+          {
+            echo "Workdir: ${workdir}"
+            echo "== Git clone probe =="
+            for ((attempt=1; attempt<=GIT_CLONE_RETRIES; attempt++)); do
+              rm -rf "${workdir}/odoo"
+              if git -c http.version=HTTP/1.1 -c core.compression=0 clone \
+                https://github.com/odoo/odoo.git \
+                --branch "${ODOO_VERSION}" \
+                --single-branch \
+                --no-tags \
+                --depth "${GIT_DEPTH}" \
+                "${workdir}/odoo"; then
+                git_ok=1
+                echo "Git clone OK at attempt ${attempt}"
+                break
+              fi
+              echo "Git clone failed at attempt ${attempt}/${GIT_CLONE_RETRIES}"
+              if [[ "${attempt}" -lt "${GIT_CLONE_RETRIES}" ]]; then
+                sleep "$((attempt * 2))"
+              fi
+            done
+
+            if [[ "${git_ok}" -eq 0 ]]; then
+              echo "== Tarball fallback probe =="
+              tar_url="https://codeload.github.com/odoo/odoo/tar.gz/refs/heads/${ODOO_VERSION}"
+              for ((attempt=1; attempt<=TARBALL_DOWNLOAD_RETRIES; attempt++)); do
+                rm -f "${workdir}/odoo.tar.gz"
+                rm -rf "${workdir}/odoo"
+
+                if curl --fail --location --silent --show-error "${tar_url}" -o "${workdir}/odoo.tar.gz"; then
+                  mkdir -p "${workdir}/odoo"
+                  tar -xzf "${workdir}/odoo.tar.gz" -C "${workdir}/odoo" --strip-components=1
+                  if [[ -f "${workdir}/odoo/odoo-bin" ]]; then
+                    tar_ok=1
+                    echo "Tarball fallback OK at attempt ${attempt}"
+                    break
+                  fi
+                fi
+
+                echo "Tarball fallback failed at attempt ${attempt}/${TARBALL_DOWNLOAD_RETRIES}"
+                if [[ "${attempt}" -lt "${TARBALL_DOWNLOAD_RETRIES}" ]]; then
+                  sleep "$((attempt * 2))"
+                fi
+              done
+            fi
+
+            echo "git_ok=${git_ok}"
+            echo "tar_ok=${tar_ok}"
+          } | tee .debug/source-probe.log
+
+          if [[ "${git_ok}" -eq 0 && "${tar_ok}" -eq 0 ]]; then
+            echo "Both git clone and tarball fallback probes failed" | tee -a .debug/source-probe.log
+            exit 1
+          fi
+
+      - name: Render and verify systemd unit
+        run: |
+          set -euo pipefail
+          unit_out=".debug/odoo-debug.service"
+          sed \
+            -e "s|{{ODOO_VERSION}}|${ODOO_VERSION}|g" \
+            -e "s|{{ODOO_VERSION_SHORT}}|${ODOO_VERSION%%.*}|g" \
+            -e "s|{{ODOO_USER}}|odoo|g" \
+            -e "s|{{ODOO_HOME}}|/opt/odoo|g" \
+            -e "s|{{ODOO_INSTALL_DIR}}|/opt/odoo/odoo${ODOO_VERSION%%.*}|g" \
+            -e "s|{{ODOO_REPO_DIR}}|odoo|g" \
+            -e "s|{{ODOO_VENV_DIR}}|sandbox|g" \
+            templates/odoo.service.tpl > "${unit_out}"
+
+          {
+            echo "== Rendered unit =="
+            cat "${unit_out}"
+            echo "== systemd-analyze verify =="
+            systemd-analyze verify "${unit_out}"
+          } | tee .debug/systemd-verify.log
+
+      - name: Upload debug artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-debug-${{ github.run_id }}
+          path: .debug/
+          if-no-files-found: warn
