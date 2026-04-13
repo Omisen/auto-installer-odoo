@@ -88,13 +88,11 @@ prompt_value_with_default() {
 
         if [[ -z "$input_value" ]]; then
             printf -v "$var_name" '%s' "$suggested_value"
-            log "${label}: nessun valore inserito, uso '${suggested_value}'."
             return 0
         fi
 
         if validated_value="$("$validator" "$input_value")"; then
             printf -v "$var_name" '%s' "$validated_value"
-            log "${label}: impostato '${validated_value}'."
             return 0
         fi
 
@@ -106,11 +104,9 @@ prompt_admin_password() {
     local suggested_value="$1"
     local input_value=""
     local prompt_hint="$DEFAULT_ODOO_ADMIN_PASSWD"
-    local keep_message="uso il default previsto"
 
     if [[ "$suggested_value" != "$DEFAULT_ODOO_ADMIN_PASSWD" ]]; then
         prompt_hint="valore configurato"
-        keep_message="mantengo il valore configurato"
     fi
 
     while true; do
@@ -119,12 +115,10 @@ prompt_admin_password() {
 
         if [[ -z "$input_value" ]]; then
             ODOO_ADMIN_PASSWD="$suggested_value"
-            log "Password admin Odoo: nessun valore inserito, ${keep_message}."
             return 0
         fi
 
         ODOO_ADMIN_PASSWD="$input_value"
-        log "Password admin Odoo personalizzata impostata."
         return 0
     done
 }
@@ -226,16 +220,19 @@ collect_inputs() {
 
 print_installation_configuration() {
     echo ""
-    log "Configurazione finale installazione:"
-    log "  Versione Odoo : ${ODOO_VERSION}"
-    log "  Utente Odoo   : ${ODOO_USER}"
-    log "  Database      : ${DB_NAME}"
-    log "  DB user       : ${DB_USER}"
-    log "  Porta HTTP    : ${ODOO_PORT}"
-    log "  Install dir   : ${ODOO_INSTALL_DIR}"
+    echo "================================================================"
+    status "Configurazione finale installazione:"
+    status "  Versione Odoo : ${ODOO_VERSION}"
+    status "  Utente Odoo   : ${ODOO_USER}"
+    status "  Database      : ${DB_NAME}"
+    status "  DB user       : ${DB_USER}"
+    status "  Porta HTTP    : ${ODOO_PORT}"
+    status "  Install dir   : ${ODOO_INSTALL_DIR}"
     if [[ "$ODOO_ADMIN_PASSWD" == "$DEFAULT_ODOO_ADMIN_PASSWD" ]]; then
         warn "  Admin passwd  : default '${DEFAULT_ODOO_ADMIN_PASSWD}'"
     else
-        log "  Admin passwd  : personalizzata"
+        status "  Admin passwd  : personalizzata"
     fi
+    echo "================================================================="
+    echo ""
 }

@@ -57,9 +57,11 @@ ODOO_VENV_DIR="sandbox"
 RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
 NC='\033[0m'
 
 log()    { echo -e "${GREEN}[INFO]${NC}  $*"; }
+status() { echo -e "${BLUE}[STATUS]${NC} $*"; }
 warn()   { echo -e "${YELLOW}[WARN]${NC}  $*"; }
 error()  { echo -e "${RED}[ERROR]${NC} $*" >&2; exit 1; }
 
@@ -271,8 +273,12 @@ main() {
   export_vars
   load_modules
 
+  echo ""
   print_start_banner
+  echo ""
+  sleep 3
   print_installation_configuration
+  sleep 3
   log "Avvio installazione Odoo ${ODOO_VERSION}..."
 
   check_root
