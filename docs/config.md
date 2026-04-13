@@ -35,6 +35,10 @@ Il template usa placeholder nella forma `${VAR}` compatibili con `envsubst`. Son
 | `limit_*` | Valori consigliati da Odoo upstream per produzione |
 | `log_level` | `info` di default; sovrascrivibile con `debug` in dev |
 
+Nota logging:
+Di default `ODOO_LOGFILE` è vuoto, quindi Odoo logga su stdout/stderr (visibile via `journalctl` nel servizio systemd).
+Se vuoi un file log su disco, imposta `ODOO_LOGFILE` nel tuo `.env`.
+
 ---
 
 ## Decisioni chiave

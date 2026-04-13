@@ -145,11 +145,18 @@ _verify_odoo_user_homedir() {
 
 # -----------------------------------------------------------------------------
 # setup_log_dir
-#   Crea /var/log/odoo con i permessi corretti per il logfile definito in
-#   odoo.conf (logfile = /var/log/odoo/odoo18.log).
+#   Crea la directory del logfile solo se ODOO_LOGFILE e' configurato.
+#   Con ODOO_LOGFILE vuoto, Odoo usa stdout/stderr (journalctl via systemd).
 # -----------------------------------------------------------------------------
 setup_log_dir() {
-    local log_dir="/var/log/odoo"
+    local logfile="${ODOO_LOGFILE:-}"
+    if [[ -z "${logfile}" ]]; then
+        log "ODOO_LOGFILE non impostato: skip creazione log dir (default: journal/stdout)."
+        return 0
+    fi
+
+    local log_dir
+    log_dir="$(dirname "${logfile}")"
     local user="${ODOO_USER:?La variabile ODOO_USER non è impostata}"
 
     if [[ -d "${log_dir}" ]]; then
@@ -161,7 +168,7 @@ setup_log_dir() {
 
     chown "${user}:${user}" "${log_dir}"
     chmod 750 "${log_dir}"
-    log "Directory log '${log_dir}' pronta (owner: ${user})."
+    log "Directory log '${log_dir}' pronta (owner: ${user}, logfile: ${logfile})."
 }
 
 # -----------------------------------------------------------------------------

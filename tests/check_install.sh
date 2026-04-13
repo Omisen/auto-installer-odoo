@@ -301,11 +301,11 @@ check_user_and_dirs() {
     fail "Proprietà directory" "atteso '$ODOO_USER', trovato '$owner'"
   fi
 
-  # Log directory
+  # Log directory (opzionale: dipende da ODOO_LOGFILE)
   if [[ -d /var/log/odoo ]]; then
-    pass "Log directory: /var/log/odoo"
+    pass "Log directory presente: /var/log/odoo"
   else
-    fail "Log directory" "/var/log/odoo non esiste"
+    skip "Log directory" "non presente (default logfile disabilitato: journal/stdout)"
   fi
 }
 
@@ -441,7 +441,6 @@ check_config() {
     "addons_path"
     "http_port"
     "admin_passwd"
-    "logfile"
   )
 
   for key in "${required_keys[@]}"; do
@@ -467,15 +466,19 @@ check_config() {
     fi
   done
 
-  # Log directory scrivibile
+  # Log directory scrivibile (solo se logfile e' configurato)
   local logfile_val
-  logfile_val=$(grep -E "^logfile\s*=" "$ODOO_CONF" | head -1 | cut -d= -f2- | sed 's/^ *//')
-  local logdir
-  logdir=$(dirname "$logfile_val")
-  if [[ -d "$logdir" && -w "$logdir" ]]; then
-    pass "Log directory scrivibile: $logdir"
+  logfile_val=$(grep -E "^logfile\s*=" "$ODOO_CONF" | head -1 | cut -d= -f2- | sed 's/^ *//' || true)
+  if [[ -n "${logfile_val}" ]]; then
+    local logdir
+    logdir=$(dirname "$logfile_val")
+    if [[ -d "$logdir" && -w "$logdir" ]]; then
+      pass "Log directory scrivibile: $logdir"
+    else
+      fail "Log directory scrivibile" "'$logdir' non esiste o non è scrivibile"
+    fi
   else
-    fail "Log directory scrivibile" "'$logdir' non esiste o non è scrivibile"
+    pass "logfile disabilitato nel conf (default: journal/stdout)"
   fi
 
   # Porta non privilegiata (> 1024) o con capabilities
@@ -680,15 +683,29 @@ check_security() {
     fi
   fi
 
-  # Log directory scrivibile solo da odoo
-  if [[ -d /var/log/odoo ]]; then
-    local log_owner
-    log_owner=$(stat -c '%U' /var/log/odoo)
-    if [[ "$log_owner" == "$ODOO_USER" ]]; then
-      pass "Log directory proprietà: $log_owner"
+  # Log directory scrivibile solo da odoo (solo se logfile configurato)
+  if [[ -f "$ODOO_CONF" ]] && grep -qE '^logfile\s*=' "$ODOO_CONF"; then
+    local logfile_val
+    logfile_val=$(grep -E '^logfile\s*=' "$ODOO_CONF" | head -1 | cut -d= -f2- | sed 's/^ *//' || true)
+    if [[ -n "${logfile_val}" ]]; then
+      local log_dir
+      log_dir=$(dirname "$logfile_val")
+      if [[ -d "$log_dir" ]]; then
+        local log_owner
+        log_owner=$(stat -c '%U' "$log_dir")
+        if [[ "$log_owner" == "$ODOO_USER" ]]; then
+          pass "Log directory proprietà: $log_owner"
+        else
+          fail "Log directory proprietà" "atteso '$ODOO_USER', trovato '$log_owner'"
+        fi
+      else
+        fail "Log directory proprietà" "directory '$log_dir' non trovata"
+      fi
     else
-      fail "Log directory proprietà" "atteso '$ODOO_USER', trovato '$log_owner'"
+      pass "logfile disabilitato nel conf (default: journal/stdout)"
     fi
+  else
+    pass "logfile disabilitato nel conf (default: journal/stdout)"
   fi
 }
 

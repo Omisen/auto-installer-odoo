@@ -1,6 +1,6 @@
 # lib/system.sh
 
-> Modulo responsabile della preparazione dell'ambiente di sistema: installa le dipendenze APT richieste da Odoo, crea l'utente di sistema dedicato, configura le directory di log e installa `wkhtmltopdf` nella versione corretta.
+> Modulo responsabile della preparazione dell'ambiente di sistema: installa le dipendenze APT richieste da Odoo, crea l'utente di sistema dedicato, configura (quando richiesto) la directory logfile e installa `wkhtmltopdf` nella versione corretta.
 
 ---
 
@@ -11,7 +11,7 @@
 | `install_dependencies` | Installa tutti i pacchetti APT richiesti da Odoo |
 | `install_wkhtmltopdf` | Installa `wkhtmltopdf 0.12.6.1` con Qt patch da GitHub releases |
 | `create_odoo_user` | Crea l'utente di sistema `odoo` (system user, no login shell) |
-| `setup_log_dir` | Crea e configura `/var/log/odoo` con owner e permessi corretti |
+| `setup_log_dir` | Crea e configura la directory del `logfile` solo se `ODOO_LOGFILE` è impostato |
 
 ---
 
@@ -47,7 +47,7 @@ Filtra l'output rumoroso di `apt`, lasciando passare solo le righe significative
 | `install_dependencies` | `apt-get install -y` è no-op se il pacchetto è già alla versione corretta |
 | `create_odoo_user` | Controlla `id "${user}"` → skip con `warn` se l'utente esiste già |
 | `_verify_odoo_user_homedir` | Controlla ownership e permessi, li corregge solo se necessario |
-| `setup_log_dir` | Emette `warn` + skip se la directory esiste, ricalibra solo owner/permessi |
+| `setup_log_dir` | Se `ODOO_LOGFILE` è vuoto fa skip; altrimenti crea/corregge solo la directory del logfile |
 | `install_wkhtmltopdf` | Controlla la versione installata → skip se già `0.12.6.1` con Qt patch |
 
 ---

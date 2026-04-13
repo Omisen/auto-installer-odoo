@@ -99,6 +99,9 @@ systemctl status odoo18
 # Controlla i log
 journalctl -u odoo18 -n 50 --no-pager
 
+# Nota: di default l'installer non forza un logfile su disco.
+# I log vanno su journal/stdout; per avere un file log imposta ODOO_LOGFILE nel tuo .env.
+
 # Esegui la suite di test non distruttivi
 sudo bash tests/check_install.sh
 ```

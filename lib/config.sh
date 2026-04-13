@@ -29,7 +29,8 @@ _config_set_defaults() {
     : "${ODOO_INSTALL_DIR:=${ODOO_HOME}/odoo${ODOO_VERSION}}"
     : "${ODOO_ADDONS_PATH:=${ODOO_INSTALL_DIR}/odoo/odoo/addons,${ODOO_INSTALL_DIR}/odoo/addons,${ODOO_INSTALL_DIR}/repos/modules}"
     : "${ODOO_DATA_DIR:=${ODOO_HOME}/.local/share/Odoo}"
-    : "${ODOO_LOGFILE:=/var/log/odoo/odoo${ODOO_VERSION%%.*}.log}"
+    # Vuoto di default: Odoo logga su stdout/stderr del processo/service.
+    : "${ODOO_LOGFILE:=}"
     : "${ODOO_CONF_DIR:=${ODOO_INSTALL_DIR}}"
 
     # Worker / performance
@@ -104,6 +105,11 @@ _config_validate_conf() {
 #   Crea la directory di log e ne assegna la proprietà all'utente Odoo.
 # ──────────────────────────────────────────────────────────────────────────────
 _config_prepare_log_dir() {
+    if [[ -z "${ODOO_LOGFILE}" ]]; then
+        log "ODOO_LOGFILE vuoto: salto preparazione directory log file."
+        return 0
+    fi
+
     local log_dir
     log_dir="$(dirname "${ODOO_LOGFILE}")"
 
@@ -150,6 +156,12 @@ _config_render_template() {
 
     # shellcheck disable=SC2016
     envsubst "$vars" < "$tpl" > "$tmp"
+
+    # Se ODOO_LOGFILE e' vuoto, disabilita esplicitamente la direttiva logfile
+    # lasciando traccia nel file generato.
+    if [[ -z "${ODOO_LOGFILE}" ]]; then
+        sed -i 's|^logfile[[:space:]]*=.*$|; logfile disabled: using stdout\/stderr|' "$tmp"
+    fi
 
     # Sposta il file nella destinazione con permessi corretti
     sudo mv "$tmp" "$dest"
@@ -206,7 +218,11 @@ generate_config() {
     log "  http_port   : ${ODOO_PORT}"
     log "  db_user     : ${DB_USER}"
     log "  db_name     : ${DB_NAME:-<scelto dalla UI>}"
-    log "  logfile     : ${ODOO_LOGFILE}"
+    if [[ -n "${ODOO_LOGFILE}" ]]; then
+        log "  logfile     : ${ODOO_LOGFILE}"
+    else
+        log "  logfile     : <disabled, stdout/stderr>"
+    fi
     log "  workers     : ${ODOO_WORKERS}"
     log "  log_level   : ${ODOO_LOG_LEVEL}"
 }

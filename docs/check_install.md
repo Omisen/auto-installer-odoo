@@ -37,14 +37,14 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 |--------|---------------|
 | 1 — Sistema | Utente root, OS Ubuntu/Debian, architettura, spazio disco (≥ 5 GB), RAM (≥ 1 GB) |
 | 2 — Dipendenze apt | Tutti i pacchetti richiesti da Odoo 18, Python ≥ 3.10, Node.js (opzionale), wkhtmltopdf |
-| 3 — Utente e directory | Utente `odoo` esiste, shell `/bin/false` (sicurezza), home, sottocartelle (`odoo/`, `repos/modules/`, `sandbox/`), proprietà, `/var/log/odoo` |
+| 3 — Utente e directory | Utente `odoo` esiste, shell `/bin/false` (sicurezza), home, sottocartelle (`odoo/`, `repos/modules/`, `sandbox/`), proprietà; check `/var/log/odoo` solo se presente |
 | 4 — PostgreSQL | Servizio attivo, versione ≥ 12, ruolo DB esistente, connessione locale come utente `odoo` |
 | 5 — Odoo | `odoo-bin` presente, branch `18.0`, virtualenv, Python nella sandbox, librerie chiave (`psycopg2`, `Pillow`, `lxml`, `werkzeug`, …) |
-| 6 — Config | Sezione `[options]` presente, chiavi obbligatorie, ogni path in `addons_path` esiste, log directory scrivibile, porta non privilegiata |
+| 6 — Config | Sezione `[options]` presente, chiavi obbligatorie, ogni path in `addons_path` esiste, check log directory solo se `logfile` è configurato, porta non privilegiata |
 | 7 — Systemd | File service presente, sezioni `[Unit]`/`[Service]`/`[Install]`, `User=odoo`, dipendenza `postgresql.service`, `is-enabled` e `is-active`, policy `Restart=` |
 | 8 — HTTP | Risposta su `/web/database/selector`, endpoint JSON-RPC |
 | 9 — Nginx (opzionale) | Saltato se Nginx non è installato; altrimenti: servizio attivo, `nginx -t`, `proxy_pass` verso la porta Odoo |
-| 10 — Sicurezza | No `sudo NOPASSWD` per `odoo`, `admin_passwd ≠ admin`, porta non esposta in UFW, permessi `640` su `odoo.conf`, proprietà `/var/log/odoo` |
+| 10 — Sicurezza | No `sudo NOPASSWD` per `odoo`, `admin_passwd ≠ admin`, porta non esposta in UFW, permessi `640` su `odoo.conf`, proprietà log dir solo se `logfile` è configurato |
 
 ---
 
@@ -61,4 +61,5 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 
 - I test del gruppo 9 (Nginx) vengono automaticamente saltati (`SKIP`) se Nginx non è installato — non producono `FAIL`.
 - I controlli HTTP del gruppo 8 richiedono che il servizio Odoo sia attivo; in caso contrario i test vengono marcati `SKIP` anziché `FAIL` per evitare falsi negativi durante manutenzioni.
+- Con il default attuale (`ODOO_LOGFILE` vuoto), i log sono su journal/stdout e i controlli su log directory vengono eseguiti solo se `logfile` è configurato nel conf.
 - La suite è idempotente e sicura: nessuna scrittura su disco, nessuna modifica a servizi o configurazioni.
