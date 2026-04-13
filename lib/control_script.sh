@@ -57,34 +57,33 @@ install_odoo_control_script() {
     echo "SERVICE_NAME=\"${service_name}\""
     echo "ODOO_OS_USER=\"${ODOO_USER}\""
     cat <<'EOF'
-
-
 usage() {
   echo "Usage: odoo {start|stop|restart|dev|status}"
 }
 
 case "${1:-}" in
   start)
-    sudo systemctl start odoo
+    sudo systemctl start "${SERVICE_NAME}"
     ;;
   stop)
-    sudo systemctl stop odoo
+    sudo systemctl stop "${SERVICE_NAME}"
     ;;
   restart)
-    sudo systemctl restart odoo
+    sudo systemctl restart "${SERVICE_NAME}"
     ;;
   dev)
     sudo systemctl stop "${SERVICE_NAME}"
     sudo su - "${ODOO_OS_USER}" -s /bin/bash
     ;;
   status)
-    sudo systemctl status odoo
+    sudo systemctl status "${SERVICE_NAME}"
     ;;
   *)
     usage
     ;;
 esac
 EOF
+  } > "${control_script}"
 
   chmod +x "${control_script}"
 
