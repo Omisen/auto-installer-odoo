@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Installer bash non interattivo per **Odoo 16 / 17 / 18** su Ubuntu ≥ 22.04 e Debian ≥ 11.  
+Installer bash con raccolta input guidata per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04 e Debian ≥ 11.  
 Gestisce dipendenze di sistema, PostgreSQL, virtualenv Python, servizio systemd e (opzionale) Nginx come reverse proxy.
 
 ---
@@ -32,7 +32,15 @@ chmod +x installer.sh
 sudo ./installer.sh
 ```
 
-L'installer usa i valori di default:
+L'installer raccoglie i parametri principali con questa priorita:
+
+1. argomento CLI
+2. input interattivo
+3. default finale
+
+Premendo Invio su un prompt viene confermato subito il valore suggerito, che viene anche segnalato esplicitamente nel log.
+
+I default iniziali sono:
 
 | Parametro | Default |
 |-----------|---------|
@@ -40,6 +48,9 @@ L'installer usa i valori di default:
 | Utente OS | `odoo` |
 | Porta HTTP | `8069` |
 | Database | `odoo` |
+| ODOO_HOME (fisso) | `/opt/odoo` |
+| Install dir | `/opt/odoo/odoo18` |
+| Admin password | `admin` |
 | Nginx | disabilitato |
 
 ---
@@ -51,8 +62,11 @@ sudo ./installer.sh [opzioni]
 
   --version VERSION     Versione Odoo (es. 17.0, 16.0)
   --odoo-user USER      Utente di sistema (default: odoo)
+  --db-user USER        Utente PostgreSQL (default: uguale a --odoo-user)
   --port PORT           Porta HTTP (default: 8069)
   --db-name NAME        Nome database (default: odoo)
+  --install-dir DIR     Directory installazione (solo sotto /opt/odoo, default: /opt/odoo/odoo<versione>)
+  --admin-passwd PASS   Password admin Odoo (default: admin)
   --with-nginx          Abilita Nginx come reverse proxy
   --config FILE         Carica variabili da file .env
   --help                Mostra l'aiuto
@@ -63,6 +77,9 @@ sudo ./installer.sh [opzioni]
 ```bash
 # Installazione con Nginx e versione 17
 sudo ./installer.sh --version 17.0 --with-nginx
+
+# Installazione completamente parametrizzata da CLI
+sudo ./installer.sh --version 19.0 --odoo-user odoo19 --db-name odoo19 --port 8079 --install-dir /opt/odoo/odoo19 --admin-passwd change-me
 
 # Installazione da file di configurazione production
 sudo ./installer.sh --config configs/production.env
@@ -117,6 +134,7 @@ AutoInstallerOdoo/
 │   ├── dev.env           # Configurazione sviluppo
 │   └── production.env    # Configurazione produzione
 ├── lib/
+│   ├── cli.sh            # Prompt, validazione e normalizzazione input CLI
 │   ├── checks.sh         # Controlli prerequisiti OS/porte/disco
 │   ├── system.sh         # Dipendenze di sistema e wkhtmltopdf
 │   ├── postgres.sh       # Setup PostgreSQL e utente DB

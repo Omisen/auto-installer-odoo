@@ -24,7 +24,6 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 | Opzione | Descrizione |
 |---------|-------------|
 | `--config FILE` | Percorso alternativo a `odoo.conf` |
-| `--odoo-home DIR` | Override di `ODOO_HOME` |
 | `--odoo-user USER` | Override di `ODOO_USER` |
 | `--port PORT` | Override di `ODOO_PORT` |
 | `--verbose` / `-v` | Mostra dettagli aggiuntivi per ogni test |
@@ -62,4 +61,5 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 - I test del gruppo 9 (Nginx) vengono automaticamente saltati (`SKIP`) se Nginx non è installato — non producono `FAIL`.
 - I controlli HTTP del gruppo 8 richiedono che il servizio Odoo sia attivo; in caso contrario i test vengono marcati `SKIP` anziché `FAIL` per evitare falsi negativi durante manutenzioni.
 - Con il default attuale (`ODOO_LOGFILE` vuoto), i log sono su journal/stdout e i controlli su log directory vengono eseguiti solo se `logfile` è configurato nel conf.
+- `ODOO_HOME` è fisso a `/opt/odoo` (allineato all'installer). Eventuali override legacy vengono ignorati.
 - La suite è idempotente e sicura: nessuna scrittura su disco, nessuna modifica a servizi o configurazioni.

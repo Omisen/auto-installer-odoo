@@ -15,9 +15,10 @@ set -euo pipefail
 # ---------------------------------------------------------------------------
 # Valori di default (override via argomenti o variabili d'ambiente)
 # ---------------------------------------------------------------------------
+CONST_ODOO_HOME="/opt/odoo"
 ODOO_VERSION="${ODOO_VERSION:-18}"
 ODOO_USER="${ODOO_USER:-odoo}"
-ODOO_HOME="${ODOO_HOME:-/opt/odoo}"
+ODOO_HOME="${CONST_ODOO_HOME}"
 ODOO_PORT="${ODOO_PORT:-8069}"
 ODOO_CONF="${ODOO_CONF:-/opt/odoo/odoo18/odoo18.conf}"
 DB_USER="${DB_USER:-odoo}"
@@ -115,21 +116,32 @@ check() {
 # Parsing argomenti
 # ---------------------------------------------------------------------------
 parse_args() {
+  local legacy_odoo_home=""
+
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --config)     ODOO_CONF="$2";  shift 2 ;;
-      --odoo-home)  ODOO_HOME="$2";  shift 2 ;;
+      --odoo-home)  legacy_odoo_home="$2";  shift 2 ;;
       --odoo-user)  ODOO_USER="$2";  shift 2 ;;
       --port)       ODOO_PORT="$2";  shift 2 ;;
       --verbose|-v) VERBOSE="true";  shift   ;;
       --dry-run)    DRY_RUN="true";    shift   ;;
       --help|-h)
-        echo "Uso: $0 [--config FILE] [--odoo-home DIR] [--odoo-user USER] [--port PORT] [--verbose]"
+        echo "Uso: $0 [--config FILE] [--odoo-user USER] [--port PORT] [--verbose]"
         exit 0
         ;;
       *) warn "Argomento sconosciuto: $1"; shift ;;
     esac
   done
+
+  if [[ -n "$legacy_odoo_home" ]]; then
+    warn "--odoo-home e' deprecato e ignorato: ODOO_HOME e' fisso a ${CONST_ODOO_HOME}."
+  fi
+
+  if [[ "${ODOO_HOME:-}" != "$CONST_ODOO_HOME" ]]; then
+    warn "ODOO_HOME e' fisso a ${CONST_ODOO_HOME}: ignoro valore '${ODOO_HOME:-<vuoto>}'."
+  fi
+  ODOO_HOME="$CONST_ODOO_HOME"
 }
 
 # ---------------------------------------------------------------------------
