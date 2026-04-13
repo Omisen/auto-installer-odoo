@@ -29,7 +29,7 @@ Il template usa placeholder nella forma `${VAR}` compatibili con `envsubst`. Son
 | Sezione | Note |
 |---------|------|
 | `admin_passwd` | Sovrascrivibile da `.env`; il default `admin` è accettabile solo in dev |
-| `db_*` | `False` come default = Odoo usa la UI per scegliere il database |
+| `db_*` | Se `DB_HOST`, `DB_PORT` o `DB_PASSWORD` sono vuoti, nel file generato la direttiva viene commentata (evita valori invalidi come `db_port = `) |
 | `http_interface` + `proxy_mode` | Pronti per Nginx reverse proxy (`proxy_mode = True`) |
 | `workers` / `max_cron_threads` | `0` = modalità thread (dev); da aumentare in produzione |
 | `limit_*` | Valori consigliati da Odoo upstream per produzione |
@@ -54,6 +54,8 @@ Se vuoi un file log su disco, imposta `ODOO_LOGFILE` nel tuo `.env`.
 ### Validazione post-rendering
 
 `_config_validate_conf()` cerca eventuali `${QUALCOSA}` rimasti nel file dopo il rendering — sintomo di una variabile non esportata. Fallisce in modo esplicito invece di lasciare un `.conf` silenziosamente incompleto.
+
+Inoltre, durante il rendering, quando `DB_PORT` è vuoto la riga `db_port` viene commentata automaticamente per evitare l'errore di startup Odoo `option db_port: invalid integer value: ''`.
 
 ### Idempotenza con backup automatico
 

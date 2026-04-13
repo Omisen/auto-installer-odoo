@@ -219,6 +219,19 @@ _config_render_template() {
         sed -i 's|^logfile[[:space:]]*=.*$|; logfile disabled: using stdout\/stderr|' "$tmp"
     fi
 
+    # Odoo richiede un intero valido per db_port: se vuoto, meglio omettere la direttiva.
+    if [[ -z "${DB_PORT:-}" ]]; then
+        sed -i 's|^db_port[[:space:]]*=.*$|; db_port not set: using default/socket|' "$tmp"
+    fi
+
+    if [[ -z "${DB_HOST:-}" ]]; then
+        sed -i 's|^db_host[[:space:]]*=.*$|; db_host not set: using local socket|' "$tmp"
+    fi
+
+    if [[ -z "${DB_PASSWORD:-}" ]]; then
+        sed -i 's|^db_password[[:space:]]*=.*$|; db_password not set: using peer/trust auth|' "$tmp"
+    fi
+
     # Sposta il file nella destinazione con permessi corretti
     sudo mv "$tmp" "$dest"
     sudo chown "${ODOO_USER}:${ODOO_USER}" "$dest"
