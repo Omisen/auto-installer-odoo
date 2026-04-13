@@ -25,6 +25,16 @@ install_odoo_control_script() {
   local bashrc_file
   local path_export='export PATH="$HOME/.local/bin:$PATH"'
 
+
+  local service_name
+  if declare -F _unit_name >/dev/null 2>&1; then
+    service_name="$(_unit_name)"
+  else
+    service_name="odoo${ODOO_VERSION_SHORT}"
+  fi
+
+
+
   target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
   if [[ -z "${target_home}" ]]; then
     error "Impossibile determinare la home per l'utente ${target_user}."
@@ -37,10 +47,17 @@ install_odoo_control_script() {
 
   mkdir -p "${scripts_dir}" "${local_bin_dir}"
 
-  cat <<'EOF' > "${control_script}"
-#!/usr/bin/env bash
 
-set -euo pipefail
+
+  {
+    echo '#!/usr/bin/env bash'
+    echo ''
+    echo 'set -euo pipefail'
+    echo ''
+    echo "SERVICE_NAME=\"${service_name}\""
+    echo "ODOO_OS_USER=\"${ODOO_USER}\""
+    cat <<'EOF'
+
 
 usage() {
   echo "Usage: odoo {start|stop|restart|dev|status}"
@@ -57,8 +74,8 @@ case "${1:-}" in
     sudo systemctl restart odoo
     ;;
   dev)
-    sudo systemctl stop odoo
-    sudo su - odoo -s /bin/bash
+    sudo systemctl stop "${SERVICE_NAME}"
+    sudo su - "${ODOO_OS_USER}" -s /bin/bash
     ;;
   status)
     sudo systemctl status odoo
