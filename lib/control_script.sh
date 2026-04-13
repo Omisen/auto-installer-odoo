@@ -103,11 +103,8 @@ EOF
     chown "${target_user}:${target_user}" "${scripts_dir}" "${local_bin_dir}"
   fi
 
-  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-  log "Control script installato: ${control_script}"
-  log "Per attivare il comando in questo terminale: source ~/.bashrc"
-  log "Se dopo il source 'odoo' non funziona, verifica che esistano:"
-  log "  - ${control_script}"
-  log "  - ${local_bin_dir}/odoo"
-  log "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+  # Esporta info per il riepilogo finale (print_summary in installer.sh).
+  export ODOO_CONTROL_TARGET_USER="${target_user}"
+  export ODOO_CONTROL_SCRIPT_PATH="${control_script}"
+  export ODOO_CONTROL_BIN_PATH="${local_bin_dir}/odoo"
 }

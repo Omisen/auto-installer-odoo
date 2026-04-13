@@ -127,6 +127,15 @@ print_summary() {
   echo "  Gestione servizio Odoo:"
   echo "  Usa il comando 'odoo' per controllare il service quando vuoi."
   echo "  Esempi: odoo status | odoo start | odoo stop | odoo restart | odoo dev"
+
+  if [[ -n "${ODOO_CONTROL_SCRIPT_PATH:-}" && -n "${ODOO_CONTROL_BIN_PATH:-}" ]]; then
+    echo ""
+    echo "  Attivazione comando locale (utente: ${ODOO_CONTROL_TARGET_USER:-n/a}):"
+    echo "  Control script : ${ODOO_CONTROL_SCRIPT_PATH}"
+    echo "  Symlink comando: ${ODOO_CONTROL_BIN_PATH}"
+    echo "  Esegui ora nel terminale aperto: source ~/.bashrc"
+    echo "  Se 'odoo' non funziona dopo source, verifica i due percorsi sopra."
+  fi
 }
 
 # --- Main --------------------------------------------------------------------
