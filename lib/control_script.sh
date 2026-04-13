@@ -12,24 +12,30 @@
 set -euo pipefail
 
 install_odoo_control_script() {
+  # Rigorous: installer must run via sudo, so SUDO_USER must be set.
+  if [[ -z "${SUDO_USER}" ]]; then
+    error "install_odoo_control_script: SUDO_USER not set. This script must be run via sudo."
+  fi
+
+  local target_user="${SUDO_USER}"
+  local target_home
   local control_script
   local scripts_dir
   local local_bin_dir
   local bashrc_file
   local path_export='export PATH="$HOME/.local/bin:$PATH"'
 
-  # L'installer gira come root: installiamo il comando in /usr/local/bin
-  # così è disponibile a tutti gli utenti senza toccare /root/.bashrc.
-  if [[ "${EUID}" -eq 0 ]]; then
-    control_script="/usr/local/bin/odoo"
-  else
-    scripts_dir="${HOME}/.scripts"
-    control_script="${scripts_dir}/odoo.sh"
-    local_bin_dir="${HOME}/.local/bin"
-    bashrc_file="${HOME}/.bashrc"
-
-    mkdir -p "${scripts_dir}"
+  target_home="$(getent passwd "${target_user}" | cut -d: -f6)"
+  if [[ -z "${target_home}" ]]; then
+    error "Impossibile determinare la home per l'utente ${target_user}."
   fi
+
+  scripts_dir="${target_home}/.scripts"
+  control_script="${scripts_dir}/odoo.sh"
+  local_bin_dir="${target_home}/.local/bin"
+  bashrc_file="${target_home}/.bashrc"
+
+  mkdir -p "${scripts_dir}" "${local_bin_dir}"
 
   cat <<'EOF' > "${control_script}"
 #!/usr/bin/env bash
@@ -65,15 +71,6 @@ EOF
 
   chmod +x "${control_script}"
 
-  if [[ "${EUID}" -eq 0 ]]; then
-    log "Control script Odoo installato in ${control_script}"
-    return 0
-  fi
-
-  if [[ ! -d "${local_bin_dir}" ]]; then
-    mkdir -p "${local_bin_dir}"
-  fi
-
   ln -sf "${control_script}" "${local_bin_dir}/odoo"
 
   if [[ ! -f "${bashrc_file}" ]]; then
@@ -84,4 +81,12 @@ EOF
     echo "${path_export}" >> "${bashrc_file}"
     log "TIP: Esecuzione di: source ~/.bashrc per applicazione modifiche"
   fi
+
+  if [[ "${EUID}" -eq 0 ]]; then
+    chown "${target_user}:${target_user}" "${control_script}" "${bashrc_file}"
+    chown -h "${target_user}:${target_user}" "${local_bin_dir}/odoo"
+    chown "${target_user}:${target_user}" "${scripts_dir}" "${local_bin_dir}"
+  fi
+
+  log "Control script Odoo installato per l'utente ${target_user} in ${control_script}"
 }

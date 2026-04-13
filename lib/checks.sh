@@ -28,6 +28,24 @@ check_root() {
 }
 
 # ---------------------------------------------------------------------------
+# check_sudo_user
+#   Verifica che lo script sia eseguito via sudo da un utente normale,
+#   non direttamente come root (es: sudo -i, su -).
+#   Esce con codice 1 se SUDO_USER non è valorizzato.
+# ---------------------------------------------------------------------------
+check_sudo_user() {
+    log "Verifica esecuzione via sudo da utente normale..."
+
+    if [[ -z "${SUDO_USER}" ]]; then
+        error "Questo script deve essere eseguito via sudo da un utente normale."
+        error "Usa: sudo $0 [opzioni]"
+        error "Non utilizzare: sudo -i, su -, o login diretto come root."
+    fi
+
+    log "✔ Esecuzione confermata con sudo (utente: ${SUDO_USER})."
+}
+
+# ---------------------------------------------------------------------------
 # check_os
 #   Verifica che il sistema operativo sia Ubuntu o Debian.
 #   Verifica la versione minima supportata:

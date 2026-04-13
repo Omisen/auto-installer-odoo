@@ -138,6 +138,7 @@ main() {
   log "Avvio installazione Odoo ${ODOO_VERSION}..."
 
   check_root
+  check_sudo_user
   check_os
   check_disk
   check_commands
