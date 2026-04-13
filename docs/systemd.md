@@ -37,7 +37,7 @@ Rispetto a un unit file base, sono stati aggiunti blocchi di hardening per la si
 | `NoNewPrivileges=true` | Impedisce a Odoo di acquisire privilegi extra via setuid/capabilities |
 | `PrivateTmp=true` | Isola `/tmp` del processo — utile se Odoo scrive file temporanei |
 | `LimitNOFILE` / `LimitNPROC` | Senza questi, su sistemi con molti worker Odoo esaurisce i file descriptor |
-| `StartLimitInterval` + `StartLimitBurst` | Evita restart loop infiniti in caso di errore strutturale all'avvio |
+| `StartLimitIntervalSec` + `StartLimitBurst` | Evita restart loop infiniti in caso di errore strutturale all'avvio |
 | `network-online.target` | Più conservativo di `network.target`: garantisce che le interfacce abbiano un IP prima che Odoo parta |
 | `WorkingDirectory` | Imposta la directory di lavoro del processo al path di installazione |
 | `RuntimeDirectory=odoo` | systemd crea `/var/run/odoo` ad ogni avvio con i permessi corretti, senza script esterni |
@@ -54,6 +54,7 @@ Rispetto a un unit file base, sono stati aggiunti blocchi di hardening per la si
 
 1. Cerca placeholder rimasti (`{{...}}`) prima che il file finisca in `/etc` — errore **bloccante**.
 2. Verifica l'esistenza del binario in `ExecStart` — solo un **warning**, perché `odoo.sh` potrebbe non aver ancora girato al momento del controllo.
+3. Esegue `systemd-analyze verify` (se disponibile) per intercettare errori sintattici/semantici dell'unit prima dell'installazione.
 
 ### `_start_service` con `sleep 3` + check `is-active`
 

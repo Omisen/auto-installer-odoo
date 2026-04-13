@@ -16,10 +16,12 @@
 
 | Funzione | Descrizione |
 |----------|-------------|
-| `_create_install_dirs` | Crea `ODOO_INSTALL_DIR`, `ODOO_MODULES_DIR` con owner `odoo` |
-| `_clone_odoo` | Clona il branch `ODOO_VERSION` da GitHub con `--depth` configurabile |
+| `_create_directories` | Crea `ODOO_INSTALL_DIR`, `ODOO_MODULES_DIR` con owner `odoo` |
+| `_clone_odoo_repo` | Clona il branch `ODOO_VERSION` da GitHub con retry e fallback |
+| `_fetch_odoo_tarball_fallback` | Scarica i sorgenti come tarball se il clone Git fallisce |
+| `_odoo_set_source_mode` | Traccia la provenienza dei sorgenti (`git`, `tarball`, ecc.) |
 | `_create_virtualenv` | Crea il virtualenv in `ODOO_VENV_DIR` se non esiste già |
-| `_install_python_deps` | Installa i requirements Odoo nel virtualenv via `pip` |
+| `_install_python_requirements` | Installa i requirements Odoo nel virtualenv via `pip` |
 | `_verify_installation` | Verifica l'installazione eseguendo `python3 -c "import odoo"` nel venv |
 
 ---
@@ -38,6 +40,9 @@ Il modulo richiede che `installer.sh` esporti le seguenti variabili prima del `s
 | `ODOO_MODULES_DIR` | `repos/modules` | Addons extra (relativa a `ODOO_INSTALL_DIR`) |
 | `ODOO_VENV_DIR` | `sandbox` | Virtualenv (relativo a `ODOO_INSTALL_DIR`) |
 | `GIT_DEPTH` | `5` | Profondità del clone (opzionale, default 5) |
+| `GIT_CLONE_RETRIES` | `3` | Numero tentativi clone Git prima del fallback |
+| `TARBALL_DOWNLOAD_RETRIES` | `3` | Numero tentativi download tarball fallback |
+| `ODOO_SOURCE_MODE` | `git` | Modalità sorgente usata (esposta nel riepilogo finale) |
 
 Se si usano nomi diversi nei file `.env`, è sufficiente allinearli in `export_vars()` dentro `installer.sh`.
 
@@ -48,6 +53,8 @@ Se si usano nomi diversi nei file `.env`, è sufficiente allinearli in `export_v
 ### Idempotenza in tre punti critici
 
 **Clone** — controlla se `.git` esiste e se il branch corrisponde a `ODOO_VERSION`. In caso di mismatch blocca invece di sovrascrivere silenziosamente (comportamento più sicuro).
+
+**Fallback rete** — se il clone fallisce per errori TLS/RPC intermittenti, il modulo scarica automaticamente il tarball GitHub del branch richiesto, mantenendo l'installazione operativa anche su reti instabili.
 
 **Virtualenv** — controlla se `bin/python3` è già eseguibile e salta la creazione se positivo.
 

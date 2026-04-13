@@ -2,7 +2,12 @@
 Description=Odoo {{ODOO_VERSION}} - ERP & CRM
 Documentation=https://www.odoo.com
 Requires=postgresql.service
+Wants=network-online.target
 After=network.target network-online.target postgresql.service
+
+# Restart burst protection (unit-level)
+StartLimitIntervalSec=60
+StartLimitBurst=3
 
 [Service]
 Type=simple
@@ -29,8 +34,6 @@ StandardError=journal+console
 # Restart policy
 Restart=on-failure
 RestartSec=5s
-StartLimitInterval=60s
-StartLimitBurst=3
 
 # Resource limits (tunable per environment)
 LimitNOFILE=65536

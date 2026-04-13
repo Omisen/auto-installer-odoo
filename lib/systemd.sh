@@ -81,6 +81,14 @@ _validate_template() {
         warn "Continuing — binary may be installed in a later step."
     fi
 
+    # Verifica sintattica systemd quando disponibile.
+    if command -v systemd-analyze &>/dev/null; then
+        if ! systemd-analyze verify "${unit_file}" >/dev/null 2>&1; then
+            warn "systemd-analyze verify ha segnalato problemi sulla unit renderizzata."
+            systemd-analyze verify "${unit_file}" || true
+        fi
+    fi
+
     return 0
 }
 
@@ -140,13 +148,13 @@ _start_service() {
     if systemctl is-active --quiet "${unit}"; then
         log "✅  Service '${unit}' started successfully."
     else
-        error "Service '${unit}' failed to start. Check logs with:"
-        error "  journalctl -u ${unit} -n 50 --no-pager"
+        warn "Service '${unit}' failed to start. Check logs with:"
+        warn "  journalctl -u ${unit} -n 50 --no-pager"
         warn "Stato corrente unit '${unit}':"
         sudo systemctl --no-pager --full status "${unit}" || true
         warn "Ultime 50 righe journal per '${unit}':"
         sudo journalctl -u "${unit}" -n 50 --no-pager || true
-        return 1
+        error "Avvio servizio '${unit}' fallito."
     fi
 }
 

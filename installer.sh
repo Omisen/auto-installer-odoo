@@ -244,6 +244,9 @@ print_summary() {
   echo "  Versione   : ${ODOO_VERSION}"
   echo "  Utente OS  : ${ODOO_USER}"
   echo "  Database   : ${DB_NAME}"
+  if [[ -n "${ODOO_SOURCE_MODE:-}" ]]; then
+    echo "  Sorgente   : ${ODOO_SOURCE_MODE}"
+  fi
   if [[ "$WITH_NGINX" == true ]]; then
     echo "  Nginx      : attivo come reverse proxy"
   fi

@@ -14,6 +14,7 @@
 #   ODOO_MODULES_DIR   — addons extra, es. "repos/modules"      (relativa a ODOO_INSTALL_DIR)
 #   ODOO_VENV_DIR      — virtualenv, es. "sandbox"              (relativa a ODOO_INSTALL_DIR)
 #   GIT_DEPTH          — profondità clone, default 5
+#   ODOO_SOURCE_MODE   — modalita' sorgenti: git | git-existing | tarball | tarball-existing
 # =============================================================================
 
 set -euo pipefail
@@ -41,6 +42,15 @@ _odoo_check_env() {
         error "odoo.sh — variabili mancanti: ${missing[*]}"
         return 1
     fi
+}
+
+# ---------------------------------------------------------------------------
+# _odoo_set_source_mode <mode>
+#   Traccia la provenienza dei sorgenti per debug/riepilogo finale.
+# ---------------------------------------------------------------------------
+_odoo_set_source_mode() {
+    ODOO_SOURCE_MODE="$1"
+    export ODOO_SOURCE_MODE
 }
 
 # ---------------------------------------------------------------------------
@@ -72,20 +82,48 @@ _create_directories() {
 _fetch_odoo_tarball_fallback() {
     local target_dir="$1"
     local tar_url="https://codeload.github.com/odoo/odoo/tar.gz/refs/heads/${ODOO_VERSION}"
+    local retries="${TARBALL_DOWNLOAD_RETRIES:-3}"
+    local attempt
     local tmp_tar
 
     tmp_tar="$(mktemp /tmp/odoo-src-XXXXXX.tar.gz)"
+    # shellcheck disable=SC2064
+    trap "rm -f '${tmp_tar}'" RETURN
 
     log "Tentativo fallback: download tarball Odoo ${ODOO_VERSION} …"
     log "  URL: ${tar_url}"
 
-    if command -v curl &>/dev/null; then
-        curl --fail --location --silent --show-error "${tar_url}" -o "${tmp_tar}"
-    elif command -v wget &>/dev/null; then
-        wget -qO "${tmp_tar}" "${tar_url}"
-    else
-        rm -f "${tmp_tar}"
+    if ! command -v tar &>/dev/null; then
+        error "Comando 'tar' non disponibile: impossibile usare il fallback tarball."
+        return 1
+    fi
+
+    if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
         error "Né curl né wget disponibili: impossibile usare il fallback tarball."
+        return 1
+    fi
+
+    for ((attempt=1; attempt<=retries; attempt++)); do
+        if command -v curl &>/dev/null; then
+            if curl --fail --location --silent --show-error "${tar_url}" -o "${tmp_tar}"; then
+                break
+            fi
+        else
+            if wget -qO "${tmp_tar}" "${tar_url}"; then
+                break
+            fi
+        fi
+
+        warn "Download tarball fallito (tentativo ${attempt}/${retries})."
+        if [[ "${attempt}" -lt "${retries}" ]]; then
+            local backoff=$((attempt * 2))
+            warn "Nuovo tentativo tarball tra ${backoff}s..."
+            sleep "${backoff}"
+        fi
+    done
+
+    if [[ ! -s "${tmp_tar}" ]]; then
+        error "Download tarball fallito dopo ${retries} tentativi."
         return 1
     fi
 
@@ -95,6 +133,7 @@ _fetch_odoo_tarball_fallback() {
     rm -f "${tmp_tar}"
 
     if [[ -f "${target_dir}/odoo-bin" ]]; then
+        _odoo_set_source_mode "tarball"
         log "  ✔ Sorgenti Odoo installate via tarball fallback."
         return 0
     fi
@@ -120,6 +159,7 @@ _clone_odoo_repo() {
                          rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
         if [[ "$current_branch" == "${ODOO_VERSION}" ]]; then
+            _odoo_set_source_mode "git-existing"
             warn "Repository già clonato su branch '${ODOO_VERSION}', salto il clone."
             return 0
         else
@@ -133,6 +173,7 @@ _clone_odoo_repo() {
     # Supporta installazioni già popolate da tarball fallback (senza .git).
     if [[ -d "${target_dir}" && ! -d "${target_dir}/.git" ]]; then
         if [[ -f "${target_dir}/odoo-bin" ]]; then
+            _odoo_set_source_mode "tarball-existing"
             warn "Sorgenti già presenti in ${target_dir} (senza metadata git), salto clone."
             return 0
         fi
@@ -154,6 +195,7 @@ _clone_odoo_repo() {
             --no-tags \
             --depth "${depth}" \
             "${target_dir}"; then
+            _odoo_set_source_mode "git"
             log "  ✔ Clone completato."
             return 0
         fi
@@ -313,7 +355,12 @@ install_odoo() {
     _install_python_requirements
     _verify_installation
 
+    if [[ -z "${ODOO_SOURCE_MODE:-}" ]]; then
+        _odoo_set_source_mode "unknown"
+    fi
+
     log "  ✅ Odoo ${ODOO_VERSION} installato con successo."
+    log "  sorgente → ${ODOO_SOURCE_MODE}"
     log ""
     log "  Struttura:"
     log "    repo    → ${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}"
