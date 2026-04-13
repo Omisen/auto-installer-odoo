@@ -103,6 +103,7 @@ load_modules() {
   source "${LIB_DIR}/odoo.sh"
   source "${LIB_DIR}/config.sh"
   source "${LIB_DIR}/systemd.sh"
+  source "${LIB_DIR}/control_script.sh"
   if [[ "$WITH_NGINX" == true ]]; then
     source "${LIB_DIR}/nginx.sh"
   fi
@@ -123,7 +124,9 @@ print_summary() {
     echo "  Nginx      : attivo come reverse proxy"
   fi
   echo ""
-  systemd_status 
+  echo "  Gestione servizio Odoo:"
+  echo "  Usa il comando 'odoo' per controllare il service quando vuoi."
+  echo "  Esempi: odoo status | odoo start | odoo stop | odoo restart | odoo dev"
 }
 
 # --- Main --------------------------------------------------------------------
@@ -153,6 +156,7 @@ main() {
   if [[ "$WITH_NGINX" == true ]]; then
     setup_nginx
   fi
+  install_odoo_control_script
 
   print_summary
 }
