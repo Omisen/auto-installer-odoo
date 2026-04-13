@@ -276,7 +276,7 @@ main() {
   echo ""
   print_start_banner
   echo ""
-  sleep 3
+  sleep 1
   print_installation_configuration
   sleep 3
   log "Avvio installazione Odoo ${ODOO_VERSION}..."

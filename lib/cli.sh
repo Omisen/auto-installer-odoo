@@ -12,11 +12,24 @@ set -euo pipefail
 
 SUPPORTED_ODOO_VERSIONS=("16.0" "17.0" "18.0" "19.0")
 
+build_default_install_subdir() {
+    local version="$1"
+
+    echo "odoo${version%%.*}"
+}
+
 build_default_install_dir() {
     local home="$1"
     local version="$2"
 
-    echo "${home}/odoo${version%%.*}"
+    echo "${home}/$(build_default_install_subdir "$version")"
+}
+
+build_install_dir_from_subdir() {
+    local home="$1"
+    local subdir="$2"
+
+    echo "${home}/${subdir}"
 }
 
 normalize_odoo_version() {
@@ -55,6 +68,32 @@ validate_absolute_path() {
 
     [[ "$value" == /* ]] || return 1
     echo "$value"
+}
+
+validate_install_subdir() {
+    local value="$1"
+    local segment=""
+
+    [[ -n "$value" ]] || return 1
+    [[ "$value" != /* ]] || return 1
+    [[ "$value" != */ ]] || return 1
+
+    IFS='/' read -r -a segments <<< "$value"
+    for segment in "${segments[@]}"; do
+        [[ -n "$segment" ]] || return 1
+        [[ "$segment" != "." && "$segment" != ".." ]] || return 1
+        [[ "$segment" =~ ^[A-Za-z0-9._-]+$ ]] || return 1
+    done
+
+    echo "$value"
+}
+
+extract_install_subdir() {
+    local value="$1"
+    local home="$2"
+
+    [[ "$value" == "$home/"* ]] || return 1
+    validate_install_subdir "${value#"${home}/"}"
 }
 
 validate_install_dir_scope() {
@@ -123,6 +162,28 @@ prompt_admin_password() {
     done
 }
 
+prompt_install_dir_subdir() {
+    local suggested_subdir="$1"
+    local input_value=""
+    local validated_subdir=""
+
+    while true; do
+        read -r -p "Cartella installazione Odoo (sotto ${ODOO_HOME}) [${suggested_subdir}]: " input_value
+
+        if [[ -z "$input_value" ]]; then
+            ODOO_INSTALL_DIR="$(build_install_dir_from_subdir "$ODOO_HOME" "$suggested_subdir")"
+            return 0
+        fi
+
+        if validated_subdir="$(validate_install_subdir "$input_value")"; then
+            ODOO_INSTALL_DIR="$(build_install_dir_from_subdir "$ODOO_HOME" "$validated_subdir")"
+            return 0
+        fi
+
+        warn "Valore non valido. Inserisci solo la cartella sotto ${ODOO_HOME}."
+    done
+}
+
 sync_install_paths() {
     local derived_install_dir
 
@@ -161,6 +222,7 @@ validate_selected_inputs() {
 collect_main_inputs() {
     local suggested_version="$ODOO_VERSION"
     local suggested_install_dir="${ODOO_INSTALL_DIR:-}"
+    local suggested_install_subdir=""
     local suggested_admin_password="$ODOO_ADMIN_PASSWD"
 
     if [[ "$CLI_ODOO_VERSION_SET" == true ]]; then
@@ -187,14 +249,18 @@ collect_main_inputs() {
         prompt_value_with_default ODOO_PORT "Porta Odoo" "$ODOO_PORT" validate_port_value
     fi
 
-    if [[ -z "$suggested_install_dir" ]]; then
-        suggested_install_dir="$(build_default_install_dir "$ODOO_HOME" "$ODOO_VERSION")"
+    if [[ -n "$suggested_install_dir" ]]; then
+        suggested_install_subdir="$(extract_install_subdir "$suggested_install_dir" "$ODOO_HOME" || true)"
+    fi
+
+    if [[ -z "$suggested_install_subdir" ]]; then
+        suggested_install_subdir="$(build_default_install_subdir "$ODOO_VERSION")"
     fi
 
     if [[ "$CLI_ODOO_INSTALL_DIR_SET" == true ]]; then
         log "Install dir da CLI: ${ODOO_INSTALL_DIR}"
     else
-        prompt_value_with_default ODOO_INSTALL_DIR "Install dir Odoo" "$suggested_install_dir" validate_absolute_path "(sotto ${ODOO_HOME})"
+        prompt_install_dir_subdir "$suggested_install_subdir"
     fi
 
     if [[ "$CLI_ODOO_ADMIN_PASSWD_SET" == true ]]; then
