@@ -17,7 +17,7 @@ _config_set_defaults() {
     : "${DB_HOST:=}"
     : "${DB_PORT:=}"
     : "${DB_PASSWORD:=}"
-    : "${DB_NAME:=}"                # vuoto = Odoo sceglie il db dalla UI
+    : "${DB_NAME:=odoo}"            # obbligatorio: database target sempre esplicito
 
     # HTTP
     : "${ODOO_HTTP_INTERFACE:=0.0.0.0}"
@@ -72,7 +72,7 @@ _config_set_defaults() {
 # ──────────────────────────────────────────────────────────────────────────────
 _config_normalize_db_values() {
     local var value
-    for var in DB_HOST DB_PORT DB_PASSWORD DB_NAME; do
+    for var in DB_HOST DB_PORT DB_PASSWORD; do
         value="${!var:-}"
         case "${value}" in
             False|false|None|none)
@@ -80,6 +80,17 @@ _config_normalize_db_values() {
                 ;;
         esac
     done
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _config_validate_required_db_name
+#   DB_NAME deve essere sempre valorizzato per evitare avvii non deterministici.
+# ──────────────────────────────────────────────────────────────────────────────
+_config_validate_required_db_name() {
+    if [[ -z "${DB_NAME:-}" ]]; then
+        error "DB_NAME è obbligatorio e non può essere vuoto."
+        return 1
+    fi
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -234,6 +245,7 @@ generate_config() {
 
     _config_set_defaults
     _config_normalize_db_values
+    _config_validate_required_db_name
 
     local tpl="${TEMPLATES_DIR}/odoo.conf.tpl"
     local conf="${ODOO_CONF_DIR}/odoo${version_short}.conf"
@@ -264,7 +276,7 @@ generate_config() {
     log "  addons_path : ${ODOO_ADDONS_PATH}"
     log "  http_port   : ${ODOO_PORT}"
     log "  db_user     : ${DB_USER}"
-    log "  db_name     : ${DB_NAME:-<scelto dalla UI>}"
+    log "  db_name     : ${DB_NAME}"
     if [[ -n "${ODOO_LOGFILE}" ]]; then
         log "  logfile     : ${ODOO_LOGFILE}"
     else

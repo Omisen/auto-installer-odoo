@@ -12,7 +12,7 @@ Gestisce dipendenze di sistema, PostgreSQL, virtualenv Python, servizio systemd 
 | Requisito | Dettaglio |
 |-----------|-----------|
 | OS | Ubuntu ≥ 22.04 **o** Debian ≥ 11 |
-| Utente | `root` o accesso `sudo` |
+| Utente | utente normale con accesso `sudo` (non login diretto come root) |
 | Disk | ≥ 5 GB liberi |
 | Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx |
 
@@ -28,7 +28,7 @@ cd auto-installer-odoo
 # 2. Rendi eseguibile lo script
 chmod +x installer.sh
 
-# 3. Avvia l'installazione (come root o con sudo)
+# 3. Avvia l'installazione (utente normale con sudo)
 sudo ./installer.sh
 ```
 
@@ -50,7 +50,6 @@ I default iniziali sono:
 | Database | `odoo` |
 | ODOO_HOME (fisso) | `/opt/odoo` |
 | Install dir | `/opt/odoo/odoo18` |
-| Admin password | `admin` |
 | Nginx | disabilitato |
 
 ---
@@ -105,6 +104,8 @@ WITH_NGINX=true
 
 Passa il file con `--config configs/production.env`.
 
+`DB_NAME` è obbligatorio: l'installer crea automaticamente il database PostgreSQL se non esiste già.
+
 ---
 
 ## Verifica post-installazione
@@ -157,7 +158,7 @@ AutoInstallerOdoo/
 
 | Modulo | Descrizione |
 |--------|-------------|
-| [checks.sh](./docs/check.md) | Controlli prerequisiti (root, OS, porte, disco) |
+| [checks.sh](./docs/check.md) | Controlli prerequisiti (sudo, OS, porte, disco) |
 | [system.sh](./docs/system.md) | Dipendenze APT e wkhtmltopdf |
 | [postgres.sh](./docs/postgres.md) | Setup PostgreSQL e utente DB |
 | [odoo.sh](./docs/odoo.md) | Installazione Odoo e virtualenv |

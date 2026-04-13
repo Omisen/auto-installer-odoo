@@ -5,6 +5,7 @@
 # Public functions:
 #   setup_postgres   — installa PostgreSQL se assente, abilita e avvia il servizio
 #   create_db_user   — crea il ruolo PostgreSQL per Odoo (idempotente)
+#   create_db_if_missing — crea il database applicativo se assente (idempotente)
 #
 # Variabili attese dall'ambiente (esportate da install.sh):
 #   DB_USER     — nome del ruolo PostgreSQL da creare (default: odoo)
@@ -41,6 +42,17 @@ _postgres_role_exists() {
     local role="${1:?_postgres_role_exists richiede un nome ruolo}"
     sudo -u postgres psql -tAc \
         "SELECT 1 FROM pg_roles WHERE rolname = '${role}';" \
+        2>/dev/null | grep -q 1
+}
+
+# -----------------------------------------------------------------------------
+# _postgres_db_exists(db_name)
+#   Ritorna 0 se il database $1 esiste già, 1 altrimenti.
+# -----------------------------------------------------------------------------
+_postgres_db_exists() {
+    local db_name="${1:?_postgres_db_exists richiede un nome database}"
+    sudo -u postgres psql -tAc \
+        "SELECT 1 FROM pg_database WHERE datname = '${db_name}';" \
         2>/dev/null | grep -q 1
 }
 
@@ -132,6 +144,40 @@ create_db_user() {
         log "Ruolo PostgreSQL '${DB_USER}' creato con successo."
     else
         error "Creazione del ruolo '${DB_USER}' fallita in modo inatteso."
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# create_db_if_missing()
+#   Crea il database applicativo ($DB_NAME) se non esiste.
+#   DB_NAME è obbligatorio: se vuota la funzione termina con errore.
+# -----------------------------------------------------------------------------
+create_db_if_missing() {
+    log "=== Creazione database PostgreSQL ==="
+
+    if [[ -z "${DB_NAME:-}" ]]; then
+        error "DB_NAME è obbligatorio e non può essere vuoto."
+        return 1
+    fi
+
+    if [[ -z "${DB_USER:-}" ]]; then
+        error "DB_USER non è impostata. Impossibile creare il database '${DB_NAME}'."
+        return 1
+    fi
+
+    if _postgres_db_exists "${DB_NAME}"; then
+        warn "Il database PostgreSQL '${DB_NAME}' esiste già — nessuna azione."
+        return 0
+    fi
+
+    log "Creazione database '${DB_NAME}' con owner '${DB_USER}'..."
+    sudo -u postgres createdb --owner "${DB_USER}" "${DB_NAME}"
+
+    if _postgres_db_exists "${DB_NAME}"; then
+        log "Database PostgreSQL '${DB_NAME}' creato con successo."
+    else
+        error "Creazione del database '${DB_NAME}' fallita in modo inatteso."
         return 1
     fi
 }

@@ -1,6 +1,6 @@
 # lib/postgres.sh
 
-> Modulo responsabile dell'installazione e configurazione di PostgreSQL e della creazione del ruolo database per Odoo. Viene eseguito prima dell'installazione di Odoo, garantendo che il database sia pronto all'uso.
+> Modulo responsabile dell'installazione e configurazione di PostgreSQL, della creazione del ruolo database per Odoo e del database applicativo (se richiesto). Viene eseguito prima dell'installazione di Odoo, garantendo che il database sia pronto all'uso.
 
 ---
 
@@ -10,6 +10,7 @@
 |----------|-------------|
 | `setup_postgres` | Installa PostgreSQL se non presente e si assicura che il servizio sia avviato |
 | `create_db_user` | Crea il ruolo PostgreSQL per Odoo (idempotente) |
+| `create_db_if_missing` | Crea `DB_NAME` se non esiste (idempotente); se `DB_NAME` è vuota non esegue azioni |
 
 ---
 
@@ -20,6 +21,7 @@
 | `_postgres_is_installed` | Verifica se il pacchetto PostgreSQL è già installato |
 | `_postgres_is_running` | Verifica se il servizio `postgresql` è attivo |
 | `_postgres_role_exists` | Controlla se il ruolo `DB_USER` esiste già in `pg_roles` |
+| `_postgres_db_exists` | Controlla se il database `DB_NAME` esiste già in `pg_database` |
 
 ---
 

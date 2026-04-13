@@ -142,6 +142,10 @@ _start_service() {
     else
         error "Service '${unit}' failed to start. Check logs with:"
         error "  journalctl -u ${unit} -n 50 --no-pager"
+        warn "Stato corrente unit '${unit}':"
+        sudo systemctl --no-pager --full status "${unit}" || true
+        warn "Ultime 50 righe journal per '${unit}':"
+        sudo journalctl -u "${unit}" -n 50 --no-pager || true
         return 1
     fi
 }

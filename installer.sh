@@ -300,6 +300,7 @@ main() {
   setup_log_dir
   setup_postgres
   create_db_user
+  create_db_if_missing
   install_odoo
   generate_config
   setup_systemd

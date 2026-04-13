@@ -10,7 +10,7 @@ Queste sono le uniche funzioni chiamate direttamente da `installer.sh`:
 
 | Funzione | Descrizione |
 |----------|-------------|
-| `check_root` | Verifica che lo script giri come `root` (EUID = 0); esce con suggerimento `sudo` se necessario |
+| `check_root` | Verifica che lo script giri con privilegi elevati (EUID = 0), normalmente tramite `sudo` |
 | `check_os` | Verifica che il sistema operativo sia Ubuntu ≥ 22.04 o Debian ≥ 11 |
 | `check_ports` | Verifica che le porte necessarie siano libere (Odoo + Nginx se abilitato) |
 | `check_disk` | Verifica che ci sia almeno `MIN_DISK_GB` (default 5 GB) di spazio libero |
