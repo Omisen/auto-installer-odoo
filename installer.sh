@@ -251,17 +251,22 @@ print_summary() {
 
   if [[ -n "${ODOO_CONTROL_SCRIPT_PATH:-}" && -n "${ODOO_CONTROL_BIN_PATH:-}" ]]; then
     echo ""
-    echo "==============================================================================="
-    echo "  Attivazione comando locale (utente: ${ODOO_CONTROL_TARGET_USER:-n/a}):"
-    echo "  Esegui ora nel terminale aperto: source ~/.bashrc"
-    echo "================================================================================"
-    echo "  Usa il comando 'odoo' per controllare il service quando vuoi."
-    echo "  Esempi: odoo status | odoo start | odoo stop | odoo restart | odoo dev"
-    echo "${YELLOW}__________________________________________________________________${NC}"
-    echo "${YELLOW}  Se 'odoo' non funziona dopo source, verifica i due percorsi:    ${NC}"
-    echo "  Control script : ${ODOO_CONTROL_SCRIPT_PATH}"
-    echo "  Symlink comando: ${ODOO_CONTROL_BIN_PATH}"
-    echo "${YELLOW}__________________________________________________________________${NC}"
+    echo -e "${BLUE}===============================================================================${NC}"
+    echo "  Comando locale 'odoo' (utente: ${ODOO_CONTROL_TARGET_USER:-n/a})"
+    echo -e "${BLUE}===============================================================================${NC}"
+    echo "  1) Ricarica il profilo shell nel terminale utente:"
+    echo "     source ~/.bashrc"
+    echo ""
+    echo "  2) Verifica che il comando sia disponibile:"
+    echo "     command -v odoo"
+    echo ""
+    echo "  3) Comandi utili:"
+    echo "     odoo status | odoo start | odoo stop | odoo restart | odoo dev"
+    echo ""
+    echo -e "${YELLOW}  Se il comando non viene trovato, controlla questi percorsi:${NC}"
+    echo "  Script controllo : ${ODOO_CONTROL_SCRIPT_PATH}"
+    echo "  Symlink comando  : ${ODOO_CONTROL_BIN_PATH}"
+    echo -e "${BLUE}===============================================================================${NC}"
   fi
 }
 
