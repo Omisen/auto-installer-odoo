@@ -71,7 +71,7 @@ sudo ./installer.sh [opzioni]
   --help                Mostra l'aiuto
 ```
 
-Se lasci `admin` come master password, l'installer chiede una conferma esplicita. Questa scelta resta consentita per demo o ambienti temporanei, ma la suite finale [docs/check_install.md](docs/check_install.md) la considera non release-ready.
+Se lasci `admin` come master password, l'installer chiede una conferma esplicita. Questa scelta resta consentita per demo o ambienti temporanei, ma la suite finale [docs/check_install](https://github.com/Omisen/auto-installer-odoo/wiki/8.-Check-Install-%7C-Suite-di-test-post%E2%80%90installazione) la considera non release-ready.
 
 ### Esempi
 
@@ -124,7 +124,7 @@ journalctl -u odoo18 -n 50 --no-pager
 # Nota: di default l'installer non forza un logfile su disco.
 # I log vanno su journal/stdout; per avere un file log imposta ODOO_LOGFILE nel tuo .env.
 
-# Esegui la suite di test non distruttivi
+# Esegui la suite di test non distruttivi in modalita' diagnostica automatica
 sudo bash tests/check_install.sh
 
 # Oppure valida una specifica installazione in modo esplicito
