@@ -124,6 +124,23 @@ journalctl -u odoo18 -n 50 --no-pager
 sudo bash tests/check_install.sh
 ```
 
+## Comando helper locale `odoo`
+
+Al termine dell'installazione, l'installer configura anche un comando helper locale `odoo` per `start`, `stop`, `restart`, `status` e `dev`.
+
+Per scelta progettuale, questo comando **non** viene installato globalmente in `/usr/local/bin` o in un path condiviso di sistema: viene reso disponibile solo all'utente che ha eseguito l'installazione via `sudo`.
+
+Questa limitazione e' intenzionale e serve a ridurre l'esposizione del comando su altri utenti del sistema o in contesti di automazione non previsti.
+
+Dopo l'installazione, l'utente installatore puo' renderlo disponibile nella shell corrente con:
+
+```bash
+source ~/.bashrc
+command -v odoo
+```
+
+Se vuoi usare il helper da un altro account, la procedura supportata resta l'uso diretto di `systemctl`.
+
 ---
 
 ## Struttura del progetto

@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-# tests/check_install.sh — Suite di verifica installazione Odoo 18
+# tests/check_install.sh — Suite di verifica installazione Odoo
 # =============================================================================
 # Uso:
-#   sudo bash tests/check_install.sh [--config /path/to/odoo18.conf] [--verbose]
+#   sudo bash tests/check_install.sh [--version 18.0] [--config /path/to/odoo18.conf] [--verbose]
 #
 # Exit codes:
 #   0  Tutti i test superati
@@ -16,12 +16,16 @@ set -euo pipefail
 # Valori di default (override via argomenti o variabili d'ambiente)
 # ---------------------------------------------------------------------------
 CONST_ODOO_HOME="/opt/odoo"
-ODOO_VERSION="${ODOO_VERSION:-18}"
+ODOO_VERSION="${ODOO_VERSION:-18.0}"
 ODOO_USER="${ODOO_USER:-odoo}"
 ODOO_HOME="${CONST_ODOO_HOME}"
 ODOO_PORT="${ODOO_PORT:-8069}"
-ODOO_CONF="${ODOO_CONF:-/opt/odoo/odoo18/odoo18.conf}"
+ODOO_CONF="${ODOO_CONF:-}"
 DB_USER="${DB_USER:-odoo}"
+ODOO_VERSION_SHORT=""
+ODOO_INSTALL_DIR=""
+ODOO_REPO_DIR="odoo"
+ODOO_VENV_DIR="sandbox"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
 
@@ -112,6 +116,31 @@ check() {
   fi
 }
 
+normalize_odoo_version() {
+  local value="$1"
+
+  case "$value" in
+    16|17|18|19)
+      echo "${value}.0"
+      ;;
+    16.0|17.0|18.0|19.0)
+      echo "$value"
+      ;;
+    *)
+      return 1
+      ;;
+  esac
+}
+
+sync_derived_paths() {
+  ODOO_VERSION_SHORT="${ODOO_VERSION%%.*}"
+  ODOO_INSTALL_DIR="${ODOO_HOME}/odoo${ODOO_VERSION_SHORT}"
+
+  if [[ -z "$ODOO_CONF" ]]; then
+    ODOO_CONF="${ODOO_INSTALL_DIR}/odoo${ODOO_VERSION_SHORT}.conf"
+  fi
+}
+
 # ---------------------------------------------------------------------------
 # Parsing argomenti
 # ---------------------------------------------------------------------------
@@ -120,6 +149,7 @@ parse_args() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
+      --version)    ODOO_VERSION="$2"; shift 2 ;;
       --config)     ODOO_CONF="$2";  shift 2 ;;
       --odoo-home)  legacy_odoo_home="$2";  shift 2 ;;
       --odoo-user)  ODOO_USER="$2";  shift 2 ;;
@@ -127,12 +157,17 @@ parse_args() {
       --verbose|-v) VERBOSE="true";  shift   ;;
       --dry-run)    DRY_RUN="true";    shift   ;;
       --help|-h)
-        echo "Uso: $0 [--config FILE] [--odoo-user USER] [--port PORT] [--verbose]"
+        echo "Uso: $0 [--version VERSION] [--config FILE] [--odoo-user USER] [--port PORT] [--verbose]"
         exit 0
         ;;
       *) warn "Argomento sconosciuto: $1"; shift ;;
     esac
   done
+
+  ODOO_VERSION="$(normalize_odoo_version "$ODOO_VERSION")" || {
+    error "Versione Odoo non valida: '${ODOO_VERSION}'. Valori ammessi: 16, 17, 18, 19, 16.0, 17.0, 18.0, 19.0"
+    return 1
+  }
 
   if [[ -n "$legacy_odoo_home" ]]; then
     warn "--odoo-home e' deprecato e ignorato: ODOO_HOME e' fisso a ${CONST_ODOO_HOME}."
@@ -142,6 +177,7 @@ parse_args() {
     warn "ODOO_HOME e' fisso a ${CONST_ODOO_HOME}: ignoro valore '${ODOO_HOME:-<vuoto>}'."
   fi
   ODOO_HOME="$CONST_ODOO_HOME"
+  sync_derived_paths
 }
 
 # ---------------------------------------------------------------------------
@@ -290,10 +326,10 @@ check_user_and_dirs() {
 
   # Directory principali
   local dirs=(
-    "${ODOO_HOME}/odoo${ODOO_VERSION}"
-    "${ODOO_HOME}/odoo${ODOO_VERSION}/odoo"
-    "${ODOO_HOME}/odoo${ODOO_VERSION}/repos/modules"
-    "${ODOO_HOME}/odoo${ODOO_VERSION}/sandbox"
+    "${ODOO_INSTALL_DIR}"
+    "${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}"
+    "${ODOO_INSTALL_DIR}/repos/modules"
+    "${ODOO_INSTALL_DIR}/${ODOO_VENV_DIR}"
   )
 
   for dir in "${dirs[@]}"; do
@@ -306,7 +342,7 @@ check_user_and_dirs() {
 
   # Proprietà directory
   local owner
-  owner=$(stat -c '%U' "${ODOO_HOME}/odoo${ODOO_VERSION}" 2>/dev/null || echo "unknown")
+  owner=$(stat -c '%U' "${ODOO_INSTALL_DIR}" 2>/dev/null || echo "unknown")
   if [[ "$owner" == "$ODOO_USER" ]]; then
     pass "Proprietà directory: $owner"
   else
@@ -319,6 +355,23 @@ check_user_and_dirs() {
   else
     skip "Log directory" "non presente (default logfile disabilitato: journal/stdout)"
   fi
+}
+
+check_python_import() {
+  local python_bin="$1"
+  local module_name="$2"
+  local package_name="$3"
+  local import_path="${4:-}"
+
+  if [[ -n "$import_path" ]]; then
+    if PYTHONPATH="$import_path" "$python_bin" -c "import ${module_name}" &>/dev/null; then
+      return 0
+    fi
+  elif "$python_bin" -c "import ${module_name}" &>/dev/null; then
+    return 0
+  fi
+
+  "$python_bin" -m pip show "$package_name" &>/dev/null
 }
 
 # ---------------------------------------------------------------------------
@@ -365,23 +418,30 @@ check_postgres() {
 check_odoo_install() {
   section "Installazione Odoo"
 
-  local odoo_dir="${ODOO_HOME}/odoo${ODOO_VERSION}/odoo"
-  local sandbox_dir="${ODOO_HOME}/odoo${ODOO_VERSION}/sandbox"
+  local odoo_dir="${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}"
+  local sandbox_dir="${ODOO_INSTALL_DIR}/${ODOO_VENV_DIR}"
 
   # Repo clonato
   if [[ -f "${odoo_dir}/odoo-bin" ]]; then
     pass "odoo-bin trovato: ${odoo_dir}/odoo-bin"
   else
     fail "odoo-bin trovato" "${odoo_dir}/odoo-bin non esiste"
+    return
   fi
 
-  # Branch corretto
-  if git -C "$odoo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null | grep -q "${ODOO_VERSION}.0"; then
+  # Provenienza sorgenti coerente: git branch o fallback tarball senza metadata git
+  if [[ -d "${odoo_dir}/.git" ]] && git -C "$odoo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null | grep -qx "${ODOO_VERSION}"; then
     local branch
     branch=$(git -C "$odoo_dir" rev-parse --abbrev-ref HEAD)
     pass "Branch git: $branch"
+  elif [[ -d "${odoo_dir}/.git" ]]; then
+    local branch
+    branch=$(git -C "$odoo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
+    fail "Branch git" "atteso '${ODOO_VERSION}', trovato '${branch}'"
+  elif [[ -f "${odoo_dir}/odoo-bin" ]]; then
+    pass "Sorgenti Odoo presenti senza metadata git (tarball/fallback)"
   else
-    fail "Branch git" "non è il branch ${ODOO_VERSION}.0"
+    fail "Sorgenti Odoo" "repository non verificabile e odoo-bin assente"
   fi
 
   # Virtualenv presente
@@ -404,24 +464,25 @@ check_odoo_install() {
   fi
 
   # Librerie chiave installate nella sandbox
-  local py_packages=(
-    "odoo"
-    "psycopg2"
-    "Pillow"
-    "lxml"
-    "werkzeug"
-    "requests"
-    "cryptography"
-    "PyYAML"
+  local py_checks=(
+    "odoo:odoo:${odoo_dir}"
+    "psycopg2:psycopg2:"
+    "PIL:Pillow:"
+    "lxml:lxml:"
+    "werkzeug:werkzeug:"
+    "requests:requests:"
+    "cryptography:cryptography:"
+    "yaml:PyYAML:"
   )
 
   local all_py_ok=true
-  for pkg in "${py_packages[@]}"; do
-    if "$sandbox_python" -c "import importlib; importlib.import_module('${pkg,,}')" &>/dev/null \
-       || "$sandbox_python" -m pip show "$pkg" &>/dev/null; then
-      verbose "Libreria Python: $pkg ✔"
+  local entry module_name package_name import_path
+  for entry in "${py_checks[@]}"; do
+    IFS=':' read -r module_name package_name import_path <<< "$entry"
+    if check_python_import "$sandbox_python" "$module_name" "$package_name" "$import_path"; then
+      verbose "Libreria Python: $package_name ✔"
     else
-      fail "Libreria Python: $pkg" "non trovata nella sandbox"
+      fail "Libreria Python: $package_name" "non trovata nella sandbox"
       all_py_ok=false
     fi
   done
@@ -510,7 +571,7 @@ check_config() {
 check_systemd() {
   section "Servizio systemd"
 
-  local service_name="odoo${ODOO_VERSION}"
+  local service_name="odoo${ODOO_VERSION_SHORT}"
   local service_file="/etc/systemd/system/${service_name}.service"
 
   # File service esiste

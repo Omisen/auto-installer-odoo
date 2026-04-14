@@ -64,6 +64,16 @@ Se si usano nomi diversi nei file `.env`, è sufficiente allinearli in `export_v
 
 Ogni operazione su filesystem e Git viene eseguita come utente `odoo`, mai come `root`. Questo garantisce che tutti i file abbiano la proprietà corretta fin dalla creazione.
 
+### Comando helper locale solo per l'utente installatore
+
+Il comando helper `odoo` configurato a fine installazione e' intenzionalmente limitato all'utente che ha lanciato l'installer tramite `sudo`.
+
+Non viene pubblicato in un path globale di sistema: il link viene predisposto nel profilo utente dell'account installatore, che deve ricaricare la propria shell per usarlo comodamente.
+
+La motivazione e' di sicurezza operativa: evitare di esporre un wrapper di controllo servizio a utenti diversi da chi ha effettuato il setup o a sessioni non interattive che non dovrebbero ereditarne il comportamento.
+
+Per tutti gli altri casi, l'interfaccia amministrativa supportata resta quella nativa di systemd (`systemctl start|stop|restart|status odoo<versione>`).
+
 ### Verifica post-installazione
 
 `_verify_installation()` esegue `python3 -c "import odoo"` dentro il virtualenv: è il modo più affidabile per confermare che `pip` abbia installato tutto correttamente senza dover avviare il server completo.
