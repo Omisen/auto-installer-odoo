@@ -126,7 +126,15 @@ journalctl -u odoo18 -n 50 --no-pager
 
 # Esegui la suite di test non distruttivi
 sudo bash tests/check_install.sh
+
+# Oppure valida una specifica installazione in modo esplicito
+sudo bash tests/check_install.sh --version 19.0 --config /opt/odoo/odoo19/odoo19.conf --verbose
 ```
+
+La suite usa due modalita' operative:
+
+- default: diagnostica reale dell'installazione trovata automaticamente sul sistema;
+- override espliciti: test mirato di una specifica istanza quando passi `--version`, `--config` o altri parametri.
 
 ## Comando helper locale `odoo`
 

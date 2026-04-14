@@ -3,7 +3,7 @@
 # tests/check_install.sh — Suite di verifica installazione Odoo
 # =============================================================================
 # Uso:
-#   sudo bash tests/check_install.sh [--version 18.0] [--config /path/to/odoo18.conf] [--verbose]
+#   sudo bash tests/check_install.sh [--version 18.0] [--config /path/to/odoo18.conf] [--db-user odoo] [--verbose]
 #
 # Exit codes:
 #   0  Tutti i test superati
@@ -11,6 +11,18 @@
 # =============================================================================
 
 set -euo pipefail
+
+ENV_ODOO_VERSION_SET=false
+ENV_ODOO_USER_SET=false
+ENV_ODOO_PORT_SET=false
+ENV_ODOO_CONF_SET=false
+ENV_DB_USER_SET=false
+
+[[ -n "${ODOO_VERSION+x}" ]] && ENV_ODOO_VERSION_SET=true
+[[ -n "${ODOO_USER+x}" ]] && ENV_ODOO_USER_SET=true
+[[ -n "${ODOO_PORT+x}" ]] && ENV_ODOO_PORT_SET=true
+[[ -n "${ODOO_CONF+x}" && -n "${ODOO_CONF:-}" ]] && ENV_ODOO_CONF_SET=true
+[[ -n "${DB_USER+x}" ]] && ENV_DB_USER_SET=true
 
 # ---------------------------------------------------------------------------
 # Valori di default (override via argomenti o variabili d'ambiente)
@@ -28,6 +40,12 @@ ODOO_REPO_DIR="odoo"
 ODOO_VENV_DIR="sandbox"
 VERBOSE="${VERBOSE:-false}"
 DRY_RUN="${DRY_RUN:-false}"
+CLI_ODOO_VERSION_SET=false
+CLI_ODOO_USER_SET=false
+CLI_ODOO_PORT_SET=false
+CLI_ODOO_CONF_SET=false
+CLI_DB_USER_SET=false
+AUTODETECTION_NOTES=()
 
 # ---------------------------------------------------------------------------
 # Colori e formattazione
@@ -132,6 +150,190 @@ normalize_odoo_version() {
   esac
 }
 
+extract_version_from_string() {
+  local value="$1"
+
+  if [[ "$value" =~ odoo(16|17|18|19) ]]; then
+    echo "${BASH_REMATCH[1]}.0"
+    return 0
+  fi
+
+  if [[ "$value" =~ /(16|17|18|19)\.0(/|$) ]]; then
+    echo "${BASH_REMATCH[1]}.0"
+    return 0
+  fi
+
+  return 1
+}
+
+config_value() {
+  local key="$1"
+  local conf="$2"
+  local line
+
+  [[ -f "$conf" ]] || return 1
+
+  line=$(grep -E "^[[:space:]]*${key}[[:space:]]*=" "$conf" | head -1 || true)
+  [[ -n "$line" ]] || return 1
+
+  echo "$line" | cut -d= -f2- | sed 's/^ *//' | sed 's/[[:space:]]*$//'
+}
+
+append_autodetection_note() {
+  AUTODETECTION_NOTES+=("$1")
+}
+
+find_config_candidates() {
+  find "$ODOO_HOME" -maxdepth 2 -type f -regextype posix-extended -regex '.*/odoo[0-9]+/odoo(16|17|18|19)\.conf' 2>/dev/null | sort
+}
+
+find_active_service_candidates() {
+  local unit unit_name
+
+  for unit in /etc/systemd/system/odoo*.service; do
+    [[ -e "$unit" ]] || continue
+    unit_name="$(basename "$unit" .service)"
+    if systemctl is-active --quiet "$unit_name" 2>/dev/null; then
+      printf '%s\n' "$unit"
+    fi
+  done | sort
+}
+
+find_install_dir_candidates() {
+  find "$ODOO_HOME" -maxdepth 2 -type f -path '*/odoo/odoo-bin' 2>/dev/null | sed 's#/odoo/odoo-bin$##' | sort
+}
+
+adopt_detected_version() {
+  local detected_version="$1"
+
+  ODOO_VERSION="$(normalize_odoo_version "$detected_version")" || return 1
+  sync_derived_paths
+}
+
+autodetect_from_config() {
+  local candidates=()
+  local detected_conf=""
+  local detected_version=""
+
+  mapfile -t candidates < <(find_config_candidates)
+  if [[ ${#candidates[@]} -ne 1 ]]; then
+    return 1
+  fi
+
+  detected_conf="${candidates[0]}"
+  detected_version="$(extract_version_from_string "$detected_conf")" || return 1
+  ODOO_CONF="$detected_conf"
+  adopt_detected_version "$detected_version"
+  append_autodetection_note "config rilevato automaticamente: ${ODOO_CONF}"
+  return 0
+}
+
+autodetect_from_service() {
+  local candidates=()
+  local detected_service=""
+  local detected_version=""
+
+  mapfile -t candidates < <(find_active_service_candidates)
+  if [[ ${#candidates[@]} -ne 1 ]]; then
+    return 1
+  fi
+
+  detected_service="${candidates[0]}"
+  detected_version="$(extract_version_from_string "$detected_service")" || return 1
+  adopt_detected_version "$detected_version"
+  append_autodetection_note "servizio attivo rilevato automaticamente: $(basename "$detected_service")"
+  return 0
+}
+
+autodetect_from_install_dir() {
+  local candidates=()
+  local detected_install_dir=""
+  local detected_version=""
+
+  mapfile -t candidates < <(find_install_dir_candidates)
+  if [[ ${#candidates[@]} -ne 1 ]]; then
+    return 1
+  fi
+
+  detected_install_dir="${candidates[0]}"
+  detected_version="$(extract_version_from_string "$detected_install_dir")" || return 1
+  adopt_detected_version "$detected_version"
+  append_autodetection_note "directory installazione rilevata automaticamente: ${ODOO_INSTALL_DIR}"
+  return 0
+}
+
+detect_installation_context() {
+  if [[ "$CLI_ODOO_CONF_SET" == true || "$ENV_ODOO_CONF_SET" == true ]]; then
+    if [[ "$CLI_ODOO_VERSION_SET" != true && "$ENV_ODOO_VERSION_SET" != true ]]; then
+      local detected_version
+      detected_version="$(extract_version_from_string "$ODOO_CONF")" || {
+        error "Impossibile derivare la versione da ODOO_CONF='${ODOO_CONF}'. Usa --version esplicitamente."
+        return 1
+      }
+      adopt_detected_version "$detected_version"
+      append_autodetection_note "versione derivata dal file config: ${ODOO_VERSION}"
+    else
+      sync_derived_paths
+    fi
+    return 0
+  fi
+
+  if [[ "$CLI_ODOO_VERSION_SET" == true || "$ENV_ODOO_VERSION_SET" == true ]]; then
+    ODOO_VERSION="$(normalize_odoo_version "$ODOO_VERSION")" || {
+      error "Versione Odoo non valida: '${ODOO_VERSION}'. Valori ammessi: 16, 17, 18, 19, 16.0, 17.0, 18.0, 19.0"
+      return 1
+    }
+    sync_derived_paths
+    return 0
+  fi
+
+  if autodetect_from_config; then
+    return 0
+  fi
+
+  if autodetect_from_service; then
+    return 0
+  fi
+
+  if autodetect_from_install_dir; then
+    return 0
+  fi
+
+  error "Impossibile autodeterminare l'installazione Odoo. Usa --version oppure --config per selezionare esplicitamente quale installazione verificare."
+}
+
+load_runtime_values_from_detected_files() {
+  local service_name="odoo${ODOO_VERSION_SHORT}"
+  local service_file="/etc/systemd/system/${service_name}.service"
+  local value=""
+
+  if [[ "$CLI_ODOO_USER_SET" != true && "$ENV_ODOO_USER_SET" != true && -f "$service_file" ]]; then
+    value=$(grep -E '^User=' "$service_file" | head -1 | cut -d= -f2- || true)
+    if [[ -n "$value" ]]; then
+      ODOO_USER="$value"
+      append_autodetection_note "utente Odoo derivato dalla unit systemd: ${ODOO_USER}"
+    fi
+  fi
+
+  if [[ -f "$ODOO_CONF" ]]; then
+    if [[ "$CLI_ODOO_PORT_SET" != true && "$ENV_ODOO_PORT_SET" != true ]]; then
+      value="$(config_value http_port "$ODOO_CONF" || true)"
+      if [[ -n "$value" ]]; then
+        ODOO_PORT="$value"
+        append_autodetection_note "porta HTTP derivata da odoo.conf: ${ODOO_PORT}"
+      fi
+    fi
+
+    if [[ "$CLI_DB_USER_SET" != true && "$ENV_DB_USER_SET" != true ]]; then
+      value="$(config_value db_user "$ODOO_CONF" || true)"
+      if [[ -n "$value" ]]; then
+        DB_USER="$value"
+        append_autodetection_note "utente DB derivato da odoo.conf: ${DB_USER}"
+      fi
+    fi
+  fi
+}
+
 sync_derived_paths() {
   ODOO_VERSION_SHORT="${ODOO_VERSION%%.*}"
   ODOO_INSTALL_DIR="${ODOO_HOME}/odoo${ODOO_VERSION_SHORT}"
@@ -149,25 +351,21 @@ parse_args() {
 
   while [[ $# -gt 0 ]]; do
     case "$1" in
-      --version)    ODOO_VERSION="$2"; shift 2 ;;
-      --config)     ODOO_CONF="$2";  shift 2 ;;
+      --version)    ODOO_VERSION="$2"; CLI_ODOO_VERSION_SET=true; shift 2 ;;
+      --config)     ODOO_CONF="$2"; CLI_ODOO_CONF_SET=true; shift 2 ;;
       --odoo-home)  legacy_odoo_home="$2";  shift 2 ;;
-      --odoo-user)  ODOO_USER="$2";  shift 2 ;;
-      --port)       ODOO_PORT="$2";  shift 2 ;;
+      --odoo-user)  ODOO_USER="$2"; CLI_ODOO_USER_SET=true; shift 2 ;;
+      --port)       ODOO_PORT="$2"; CLI_ODOO_PORT_SET=true; shift 2 ;;
+      --db-user)    DB_USER="$2"; CLI_DB_USER_SET=true; shift 2 ;;
       --verbose|-v) VERBOSE="true";  shift   ;;
       --dry-run)    DRY_RUN="true";    shift   ;;
       --help|-h)
-        echo "Uso: $0 [--version VERSION] [--config FILE] [--odoo-user USER] [--port PORT] [--verbose]"
+        echo "Uso: $0 [--version VERSION] [--config FILE] [--odoo-user USER] [--db-user USER] [--port PORT] [--verbose]"
         exit 0
         ;;
       *) warn "Argomento sconosciuto: $1"; shift ;;
     esac
   done
-
-  ODOO_VERSION="$(normalize_odoo_version "$ODOO_VERSION")" || {
-    error "Versione Odoo non valida: '${ODOO_VERSION}'. Valori ammessi: 16, 17, 18, 19, 16.0, 17.0, 18.0, 19.0"
-    return 1
-  }
 
   if [[ -n "$legacy_odoo_home" ]]; then
     warn "--odoo-home e' deprecato e ignorato: ODOO_HOME e' fisso a ${CONST_ODOO_HOME}."
@@ -177,7 +375,8 @@ parse_args() {
     warn "ODOO_HOME e' fisso a ${CONST_ODOO_HOME}: ignoro valore '${ODOO_HOME:-<vuoto>}'."
   fi
   ODOO_HOME="$CONST_ODOO_HOME"
-  sync_derived_paths
+  detect_installation_context
+  load_runtime_values_from_detected_files
 }
 
 # ---------------------------------------------------------------------------
@@ -636,10 +835,18 @@ check_connectivity() {
   section "Connettività HTTP"
 
   local base_url="http://localhost:${ODOO_PORT}"
+  local service_name="odoo${ODOO_VERSION_SHORT}"
 
   # curl disponibile
   if ! command -v curl &>/dev/null; then
     skip "Test connettività HTTP" "curl non disponibile"
+    return
+  fi
+
+  # Se il servizio non e' attivo, il problema e' gia' evidenziato dal check systemd.
+  if ! systemctl is-active --quiet "${service_name}" 2>/dev/null; then
+    skip "Test connettività HTTP" "servizio ${service_name} non attivo"
+    skip "Endpoint JSON-RPC" "servizio ${service_name} non attivo"
     return
   fi
 
@@ -819,6 +1026,13 @@ print_summary() {
 # ---------------------------------------------------------------------------
 main() {
   parse_args "$@"
+
+  if [[ ${#AUTODETECTION_NOTES[@]} -gt 0 ]]; then
+    echo ""
+    for note in "${AUTODETECTION_NOTES[@]}"; do
+      log "$note"
+    done
+  fi
 
   echo ""
   echo -e "${BOLD}${CYAN}╔══════════════════════════════════════════════════════════╗${RESET}"

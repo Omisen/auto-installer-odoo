@@ -20,6 +20,15 @@ sudo bash tests/check_install.sh --config /opt/odoo/odoo18/odoo18.conf --verbose
 sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 ```
 
+Se sul sistema e' presente una sola installazione Odoo compatibile, l'esecuzione base prova a rilevare automaticamente configurazione, versione, servizio, utente e porta HTTP reali. Se trova piu' installazioni, richiede invece `--version` oppure `--config` per evitare ambiguita'.
+
+In altre parole:
+
+- default = diagnostica reale dell'installazione trovata;
+- override espliciti = test mirato quando vuoi validare una specifica istanza.
+
+Quindi il comando base serve soprattutto come diagnostica post-installazione dell'ambiente realmente presente sulla macchina. Quando invece vuoi validare in modo intenzionale una specifica istanza Odoo, usa `--version`, `--config` e gli altri override disponibili.
+
 ---
 
 ## Opzioni disponibili
@@ -29,6 +38,7 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 | `--version VERSION` | Versione Odoo da verificare (`16`, `16.0`, `17`, `17.0`, `18`, `18.0`, `19`, `19.0`) |
 | `--config FILE` | Percorso alternativo a `odoo.conf` |
 | `--odoo-user USER` | Override di `ODOO_USER` |
+| `--db-user USER` | Override di `DB_USER` |
 | `--port PORT` | Override di `ODOO_PORT` |
 | `--verbose` / `-v` | Mostra dettagli aggiuntivi per ogni test |
 
@@ -63,8 +73,9 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 ## Note di design
 
 - I test del gruppo 9 (Nginx) vengono automaticamente saltati (`SKIP`) se Nginx non è installato — non producono `FAIL`.
-- I controlli HTTP del gruppo 8 richiedono che il servizio Odoo sia attivo; in caso contrario i test vengono marcati `SKIP` anziché `FAIL` per evitare falsi negativi durante manutenzioni.
+- I controlli HTTP del gruppo 8 richiedono che il servizio Odoo sia attivo; in caso contrario i test vengono marcati `SKIP` anziché `FAIL` per evitare doppioni poco utili quando il problema e' gia' emerso nel check systemd.
 - Con il default attuale (`ODOO_LOGFILE` vuoto), i log sono su journal/stdout e i controlli su log directory vengono eseguiti solo se `logfile` è configurato nel conf.
+- Se non riceve override espliciti, la suite prova a rilevare il contesto reale dell'installazione a partire da `odoo.conf`, service systemd attivo o directory installata; i default interni vengono usati solo come fallback tecnico, non come target preferito del test.
 - `--version` accetta sia formato breve (`18`) sia formato completo (`18.0`); internamente la suite normalizza sempre alla forma completa e deriva in automatico `ODOO_INSTALL_DIR`, nome service e path del file `odoo.conf`.
 - Il check del modulo Python `odoo` usa `PYTHONPATH` puntato ai sorgenti installati, coerentemente con il flusso reale dell'installer da checkout Git o tarball fallback.
 - Se `admin_passwd` resta impostata a `admin`, la suite produce `FAIL`: l'installazione puo' essere usata per demo locali solo se l'operatore lo ha confermato esplicitamente durante il setup, ma non e' considerata release-ready.
