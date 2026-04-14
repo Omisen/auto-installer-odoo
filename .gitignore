@@ -1,4 +1,4 @@
 # Environment / secrets
 configs/*.env
-temp/*
-docs/*
+temp/*.txt
+docs/*.md
