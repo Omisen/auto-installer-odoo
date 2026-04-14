@@ -539,9 +539,9 @@ check_user_and_dirs() {
 
   for dir in "${dirs[@]}"; do
     if [[ -d "$dir" ]]; then
-      pass "Directory esiste: $dir"
+      pass "Directory presente: $dir"
     else
-      fail "Directory esiste" "'$dir' non trovata"
+      fail "Directory presente: $dir" "non trovata"
     fi
   done
 
@@ -701,10 +701,10 @@ check_config() {
   section "File di configurazione"
 
   if [[ ! -f "$ODOO_CONF" ]]; then
-    fail "File conf esiste" "$ODOO_CONF non trovato"
+    fail "File conf presente: $ODOO_CONF" "non trovato"
     return
   fi
-  pass "File conf esiste: $ODOO_CONF"
+  pass "File conf presente: $ODOO_CONF"
 
   # Sezione [options]
   if grep -q '^\[options\]' "$ODOO_CONF"; then
@@ -738,9 +738,9 @@ check_config() {
   for adir in "${addons_dirs[@]}"; do
     adir="${adir// /}"
     if [[ -d "$adir" ]]; then
-      pass "addons_path dir esiste: $adir"
+      pass "addons_path presente: $adir"
     else
-      fail "addons_path dir esiste" "'$adir' non trovata"
+      fail "addons_path presente: $adir" "directory non trovata"
     fi
   done
 
@@ -781,9 +781,9 @@ check_systemd() {
 
   # File service esiste
   if [[ -f "$service_file" ]]; then
-    pass "File service esiste: $service_file"
+    pass "File service presente: $service_file"
   else
-    fail "File service esiste" "$service_file non trovato"
+    fail "File service presente: $service_file" "non trovato"
     return
   fi
 
@@ -1001,18 +1001,19 @@ check_security() {
 print_summary() {
   echo ""
   echo -e "${BOLD}$(printf '═%.0s' $(seq 1 60))${RESET}"
-  echo -e "${BOLD}  RIEPILOGO TEST — Odoo ${ODOO_VERSION} su $(hostname)${RESET}"
+  echo -e "${BOLD}  RIEPILOGO DIAGNOSTICA — Odoo ${ODOO_VERSION} su $(hostname)${RESET}"
   echo -e "${BOLD}$(printf '═%.0s' $(seq 1 60))${RESET}"
   echo ""
+  echo -e "${BOLD}  Sintesi:${RESET}"
   echo -e "  Test eseguiti : ${BOLD}$TESTS_RUN${RESET}"
-  echo -e "  ${GREEN}Superati       : $TESTS_PASSED${RESET}"
-  echo -e "  ${RED}Falliti        : $TESTS_FAILED${RESET}"
-  echo -e "  ${YELLOW}Saltati        : $TESTS_SKIPPED${RESET}"
-  echo -e "  ${YELLOW}Warning        : $WARNINGS_COUNT${RESET}"
+  echo -e "  ${GREEN}OK             : $TESTS_PASSED${RESET}"
+  echo -e "  ${RED}KO             : $TESTS_FAILED${RESET}"
+  echo -e "  ${YELLOW}SKIP           : $TESTS_SKIPPED${RESET}"
+  echo -e "  ${YELLOW}WARN           : $WARNINGS_COUNT${RESET}"
   echo ""
 
   if [[ ${#FAILED_TESTS[@]} -gt 0 ]]; then
-    echo -e "${RED}${BOLD}  Test falliti:${RESET}"
+    echo -e "${RED}${BOLD}  Problemi da correggere:${RESET}"
     for t in "${FAILED_TESTS[@]}"; do
       echo -e "  ${RED}•${RESET} $t"
     done
@@ -1020,7 +1021,7 @@ print_summary() {
   fi
 
   if [[ ${#WARNING_MESSAGES[@]} -gt 0 ]]; then
-    echo -e "${YELLOW}${BOLD}  Warning principali:${RESET}"
+    echo -e "${YELLOW}${BOLD}  Attenzioni diagnostiche:${RESET}"
     for warning in "${WARNING_MESSAGES[@]}"; do
       echo -e "  ${YELLOW}•${RESET} $warning"
     done
@@ -1029,13 +1030,13 @@ print_summary() {
 
   if [[ $TESTS_FAILED -eq 0 ]]; then
     if [[ $WARNINGS_COUNT -eq 0 ]]; then
-      echo -e "${GREEN}${BOLD}  ✔  Installazione verificata con successo.${RESET}"
+      echo -e "${GREEN}${BOLD}  Esito finale: installazione verificata con successo.${RESET}"
     else
-      echo -e "${YELLOW}${BOLD}  ✔  Installazione verificata con warning diagnostici da rivedere.${RESET}"
+      echo -e "${YELLOW}${BOLD}  Esito finale: installazione valida, con warning diagnostici da rivedere.${RESET}"
     fi
   else
-    echo -e "${RED}${BOLD}  ✘  Installazione incompleta — correggere i test falliti.${RESET}"
-    echo -e "${DIM}  Per dettagli: sudo bash $0 --verbose${RESET}"
+    echo -e "${RED}${BOLD}  Esito finale: installazione non valida, correggere prima i problemi in KO.${RESET}"
+    echo -e "${DIM}  Suggerimento: riesegui con --verbose per piu dettagli.${RESET}"
   fi
   echo ""
 }
@@ -1048,8 +1049,9 @@ main() {
 
   if [[ ${#AUTODETECTION_NOTES[@]} -gt 0 ]]; then
     echo ""
+    echo -e "${BOLD}Contesto rilevato:${RESET}"
     for note in "${AUTODETECTION_NOTES[@]}"; do
-      log "$note"
+      echo -e "  ${DIM}• $note${RESET}"
     done
   fi
 
