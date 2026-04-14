@@ -49,7 +49,7 @@ I default iniziali sono:
 | Porta HTTP | `8069` |
 | Database | `odoo` |
 | ODOO_HOME (fisso) | `/opt/odoo` |
-| Install dir | `/opt/odoo/odoo18` |
+| Install dir | `/opt/odoo/odoo{Versione Odoo scelta}` |
 | Nginx | disabilitato |
 
 ---
@@ -154,15 +154,4 @@ AutoInstallerOdoo/
 
 ---
 
-## Documentazione tecnica
-
-| Modulo | Descrizione |
-|--------|-------------|
-| [checks.sh](./docs/check.md) | Controlli prerequisiti (sudo, OS, porte, disco) |
-| [system.sh](./docs/system.md) | Dipendenze APT e wkhtmltopdf |
-| [postgres.sh](./docs/postgres.md) | Setup PostgreSQL e utente DB |
-| [odoo.sh](./docs/odoo.md) | Installazione Odoo e virtualenv |
-| [config.sh](./docs/config.md) | Generazione configurazione da template |
-| [systemd.sh](./docs/systemd.md) | Servizio systemd (unit, enable, start) |
-| [nginx.sh](./docs/nginx.md) | Reverse proxy Nginx |
-| [check_install.sh](./docs/check_install.md) | Suite di test post-installazione |
+> ## [Documentazione tecnica](https://github.com/Omisen/auto-installer-odoo.wiki.git)
