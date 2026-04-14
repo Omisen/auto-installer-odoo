@@ -5,6 +5,7 @@
 # Public functions:
 #   setup_postgres   — installa PostgreSQL se assente, abilita e avvia il servizio
 #   create_db_user   — crea il ruolo PostgreSQL per Odoo (idempotente)
+#   create_db_if_missing — crea il database applicativo se assente (idempotente)
 #
 # Variabili attese dall'ambiente (esportate da install.sh):
 #   DB_USER     — nome del ruolo PostgreSQL da creare (default: odoo)
@@ -39,8 +40,19 @@ _postgres_is_running() {
 # -----------------------------------------------------------------------------
 _postgres_role_exists() {
     local role="${1:?_postgres_role_exists richiede un nome ruolo}"
-    sudo -u postgres psql -tAc \
+    sudo -Hiu postgres -- psql -tAc \
         "SELECT 1 FROM pg_roles WHERE rolname = '${role}';" \
+        2>/dev/null | grep -q 1
+}
+
+# -----------------------------------------------------------------------------
+# _postgres_db_exists(db_name)
+#   Ritorna 0 se il database $1 esiste già, 1 altrimenti.
+# -----------------------------------------------------------------------------
+_postgres_db_exists() {
+    local db_name="${1:?_postgres_db_exists richiede un nome database}"
+    sudo -Hiu postgres -- psql -tAc \
+        "SELECT 1 FROM pg_database WHERE datname = '${db_name}';" \
         2>/dev/null | grep -q 1
 }
 
@@ -117,13 +129,14 @@ create_db_user() {
     # ── Creazione ruolo ────────────────────────────────────────────────────
     if [[ -n "${DB_PASSWORD:-}" ]]; then
         log "Creazione ruolo '${DB_USER}' con password..."
-        # La password viene passata tramite variabile d'ambiente PGPASSWORD
-        # per evitare che appaia nella lista dei processi (ps aux) e nei log PG.
-        sudo -u postgres PGPASSWORD="${DB_PASSWORD}" psql -c \
-            "CREATE ROLE \"${DB_USER}\" WITH LOGIN CREATEDB PASSWORD '${DB_PASSWORD}';"
+        # Escape SQL minimo per password con apici singoli.
+        local sql_password
+        sql_password="${DB_PASSWORD//\'/\'\'}"
+        sudo -Hiu postgres -- psql -c \
+            "CREATE ROLE \"${DB_USER}\" WITH LOGIN CREATEDB PASSWORD '${sql_password}';"
     else
         log "Creazione ruolo '${DB_USER}' senza password (autenticazione peer)..."
-        sudo -u postgres psql -c \
+        sudo -Hiu postgres -- psql -c \
             "CREATE ROLE \"${DB_USER}\" WITH LOGIN CREATEDB;"
     fi
 
@@ -132,6 +145,40 @@ create_db_user() {
         log "Ruolo PostgreSQL '${DB_USER}' creato con successo."
     else
         error "Creazione del ruolo '${DB_USER}' fallita in modo inatteso."
+        return 1
+    fi
+}
+
+# -----------------------------------------------------------------------------
+# create_db_if_missing()
+#   Crea il database applicativo ($DB_NAME) se non esiste.
+#   DB_NAME è obbligatorio: se vuota la funzione termina con errore.
+# -----------------------------------------------------------------------------
+create_db_if_missing() {
+    log "=== Creazione database PostgreSQL ==="
+
+    if [[ -z "${DB_NAME:-}" ]]; then
+        error "DB_NAME è obbligatorio e non può essere vuoto."
+        return 1
+    fi
+
+    if [[ -z "${DB_USER:-}" ]]; then
+        error "DB_USER non è impostata. Impossibile creare il database '${DB_NAME}'."
+        return 1
+    fi
+
+    if _postgres_db_exists "${DB_NAME}"; then
+        warn "Il database PostgreSQL '${DB_NAME}' esiste già — nessuna azione."
+        return 0
+    fi
+
+    log "Creazione database '${DB_NAME}' con owner '${DB_USER}'..."
+    sudo -Hiu postgres -- createdb --owner "${DB_USER}" "${DB_NAME}"
+
+    if _postgres_db_exists "${DB_NAME}"; then
+        log "Database PostgreSQL '${DB_NAME}' creato con successo."
+    else
+        error "Creazione del database '${DB_NAME}' fallita in modo inatteso."
         return 1
     fi
 }

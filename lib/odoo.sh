@@ -14,6 +14,7 @@
 #   ODOO_MODULES_DIR   — addons extra, es. "repos/modules"      (relativa a ODOO_INSTALL_DIR)
 #   ODOO_VENV_DIR      — virtualenv, es. "sandbox"              (relativa a ODOO_INSTALL_DIR)
 #   GIT_DEPTH          — profondità clone, default 5
+#   ODOO_SOURCE_MODE   — modalita' sorgenti: git | git-existing | tarball | tarball-existing
 # =============================================================================
 
 set -euo pipefail
@@ -44,6 +45,15 @@ _odoo_check_env() {
 }
 
 # ---------------------------------------------------------------------------
+# _odoo_set_source_mode <mode>
+#   Traccia la provenienza dei sorgenti per debug/riepilogo finale.
+# ---------------------------------------------------------------------------
+_odoo_set_source_mode() {
+    ODOO_SOURCE_MODE="$1"
+    export ODOO_SOURCE_MODE
+}
+
+# ---------------------------------------------------------------------------
 # Crea le directory di lavoro come utente odoo
 # ---------------------------------------------------------------------------
 _create_directories() {
@@ -65,12 +75,82 @@ _create_directories() {
 }
 
 # ---------------------------------------------------------------------------
+# _fetch_odoo_tarball_fallback <target_dir>
+# Scarica il branch Odoo come tarball GitHub e lo estrae in target_dir.
+# Utile quando il clone git fallisce per errori TLS/RPC intermittenti.
+# ---------------------------------------------------------------------------
+_fetch_odoo_tarball_fallback() {
+    local target_dir="$1"
+    local tar_url="https://codeload.github.com/odoo/odoo/tar.gz/refs/heads/${ODOO_VERSION}"
+    local retries="${TARBALL_DOWNLOAD_RETRIES:-3}"
+    local attempt
+    local tmp_tar
+
+    tmp_tar="$(mktemp /tmp/odoo-src-XXXXXX.tar.gz)"
+    # shellcheck disable=SC2064
+    trap "rm -f '${tmp_tar}'" RETURN
+
+    log "Tentativo fallback: download tarball Odoo ${ODOO_VERSION} …"
+    log "  URL: ${tar_url}"
+
+    if ! command -v tar &>/dev/null; then
+        error "Comando 'tar' non disponibile: impossibile usare il fallback tarball."
+        return 1
+    fi
+
+    if ! command -v curl &>/dev/null && ! command -v wget &>/dev/null; then
+        error "Né curl né wget disponibili: impossibile usare il fallback tarball."
+        return 1
+    fi
+
+    for ((attempt=1; attempt<=retries; attempt++)); do
+        if command -v curl &>/dev/null; then
+            if curl --fail --location --silent --show-error "${tar_url}" -o "${tmp_tar}"; then
+                break
+            fi
+        else
+            if wget -qO "${tmp_tar}" "${tar_url}"; then
+                break
+            fi
+        fi
+
+        warn "Download tarball fallito (tentativo ${attempt}/${retries})."
+        if [[ "${attempt}" -lt "${retries}" ]]; then
+            local backoff=$((attempt * 2))
+            warn "Nuovo tentativo tarball tra ${backoff}s..."
+            sleep "${backoff}"
+        fi
+    done
+
+    if [[ ! -s "${tmp_tar}" ]]; then
+        error "Download tarball fallito dopo ${retries} tentativi."
+        return 1
+    fi
+
+    sudo mkdir -p "${target_dir}"
+    sudo tar -xzf "${tmp_tar}" -C "${target_dir}" --strip-components=1
+    sudo chown -R "${ODOO_USER}:${ODOO_USER}" "${target_dir}"
+    rm -f "${tmp_tar}"
+
+    if [[ -f "${target_dir}/odoo-bin" ]]; then
+        _odoo_set_source_mode "tarball"
+        log "  ✔ Sorgenti Odoo installate via tarball fallback."
+        return 0
+    fi
+
+    error "Fallback tarball completato ma odoo-bin non trovato in ${target_dir}."
+    return 1
+}
+
+# ---------------------------------------------------------------------------
 # Clone del repository Odoo da GitHub
 # Idempotente: se la cartella esiste e ha già il branch corretto, salta.
 # ---------------------------------------------------------------------------
 _clone_odoo_repo() {
     local target_dir="${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}"
     local depth="${GIT_DEPTH:-5}"
+    local retries="${GIT_CLONE_RETRIES:-3}"
+    local attempt
 
     if [[ -d "${target_dir}/.git" ]]; then
         # Verifica che il branch corrisponda alla versione attesa
@@ -79,6 +159,7 @@ _clone_odoo_repo() {
                          rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
 
         if [[ "$current_branch" == "${ODOO_VERSION}" ]]; then
+            _odoo_set_source_mode "git-existing"
             warn "Repository già clonato su branch '${ODOO_VERSION}', salto il clone."
             return 0
         else
@@ -89,16 +170,52 @@ _clone_odoo_repo() {
         fi
     fi
 
+    # Supporta installazioni già popolate da tarball fallback (senza .git).
+    if [[ -d "${target_dir}" && ! -d "${target_dir}/.git" ]]; then
+        if [[ -f "${target_dir}/odoo-bin" ]]; then
+            _odoo_set_source_mode "tarball-existing"
+            warn "Sorgenti già presenti in ${target_dir} (senza metadata git), salto clone."
+            return 0
+        fi
+        warn "Directory ${target_dir} esistente ma non valida: la rigenero."
+        sudo rm -rf "${target_dir}"
+    fi
+
     log "Clone Odoo ${ODOO_VERSION} da GitHub (depth=${depth}) …"
     log "  Destinazione: ${target_dir}"
 
-    sudo -u "${ODOO_USER}" git clone \
-        https://github.com/odoo/odoo.git \
-        --branch "${ODOO_VERSION}" \
-        --depth  "${depth}" \
-        "${target_dir}"
+    for ((attempt=1; attempt<=retries; attempt++)); do
+        if sudo -u "${ODOO_USER}" git \
+            -c http.version=HTTP/1.1 \
+            -c core.compression=0 \
+            clone \
+            https://github.com/odoo/odoo.git \
+            --branch "${ODOO_VERSION}" \
+            --single-branch \
+            --no-tags \
+            --depth "${depth}" \
+            "${target_dir}"; then
+            _odoo_set_source_mode "git"
+            log "  ✔ Clone completato."
+            return 0
+        fi
 
-    log "  ✔ Clone completato."
+        warn "Clone Odoo fallito (tentativo ${attempt}/${retries})."
+
+        # Pulizia di eventuali artefatti parziali prima del retry.
+        if [[ -e "${target_dir}" ]]; then
+            sudo rm -rf "${target_dir}"
+        fi
+
+        if [[ "${attempt}" -lt "${retries}" ]]; then
+            local backoff=$((attempt * 2))
+            warn "Nuovo tentativo tra ${backoff}s..."
+            sleep "${backoff}"
+        fi
+    done
+
+    warn "Clone Odoo fallito dopo ${retries} tentativi. Attivo fallback tarball..."
+    _fetch_odoo_tarball_fallback "${target_dir}"
 }
 
 # ---------------------------------------------------------------------------
@@ -222,6 +339,62 @@ _verify_installation() {
     log "  ✔ Modulo odoo importabile."
 }
 
+# ---------------------------------------------------------------------------
+# Verifica se il database Odoo e' gia' inizializzato (tabella core presente).
+# ---------------------------------------------------------------------------
+_odoo_db_is_initialized() {
+    if [[ -z "${DB_NAME:-}" ]]; then
+        return 1
+    fi
+
+    sudo -Hiu postgres -- psql -d "${DB_NAME}" -tAc \
+        "SELECT 1 FROM information_schema.tables WHERE table_schema='public' AND table_name='ir_module_module';" \
+        2>/dev/null | grep -q 1
+}
+
+# ---------------------------------------------------------------------------
+# Inizializza il database Odoo se esiste ma non contiene ancora lo schema base.
+# Idempotente: se il DB e' gia' pronto, non esegue alcuna azione.
+# ---------------------------------------------------------------------------
+initialize_odoo_database() {
+    local version_short="${ODOO_VERSION%%.*}"
+    local conf_dir="${ODOO_CONF_DIR:-${ODOO_INSTALL_DIR}}"
+    local conf_file="${conf_dir}/odoo${version_short}.conf"
+    local python_bin="${ODOO_INSTALL_DIR}/${ODOO_VENV_DIR}/bin/python3"
+    local odoo_bin="${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}/odoo-bin"
+
+    if [[ -z "${DB_NAME:-}" ]]; then
+        error "DB_NAME non impostato: impossibile inizializzare il database Odoo."
+        return 1
+    fi
+
+    if [[ ! -f "${conf_file}" ]]; then
+        error "File config Odoo non trovato: ${conf_file}"
+        return 1
+    fi
+
+    if _odoo_db_is_initialized; then
+        log "Database '${DB_NAME}' gia' inizializzato — salto bootstrap Odoo."
+        return 0
+    fi
+
+    log "Database '${DB_NAME}' presente ma non inizializzato: avvio bootstrap base..."
+    sudo -u "${ODOO_USER}" \
+        "${python_bin}" "${odoo_bin}" \
+        -c "${conf_file}" \
+        -d "${DB_NAME}" \
+        -i base \
+        --without-demo=all \
+        --stop-after-init
+
+    if _odoo_db_is_initialized; then
+        log "  ✔ Database '${DB_NAME}' inizializzato con successo (modulo base)."
+    else
+        error "Inizializzazione database '${DB_NAME}' fallita: schema base non rilevato."
+        return 1
+    fi
+}
+
 # =============================================================================
 # FUNZIONE PUBBLICA
 # =============================================================================
@@ -238,7 +411,12 @@ install_odoo() {
     _install_python_requirements
     _verify_installation
 
+    if [[ -z "${ODOO_SOURCE_MODE:-}" ]]; then
+        _odoo_set_source_mode "unknown"
+    fi
+
     log "  ✅ Odoo ${ODOO_VERSION} installato con successo."
+    log "  sorgente → ${ODOO_SOURCE_MODE}"
     log ""
     log "  Struttura:"
     log "    repo    → ${ODOO_INSTALL_DIR}/${ODOO_REPO_DIR}"

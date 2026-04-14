@@ -1,3 +1,4 @@
 # Environment / secrets
 configs/*.env
 temp/*
+docs/*

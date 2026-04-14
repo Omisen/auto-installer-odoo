@@ -2,6 +2,8 @@
 
 > Suite di verifica post-installazione. Esegue controlli **non distruttivi** su un sistema già installato e riporta `PASS` / `FAIL` / `SKIP` per ogni test. Non modifica nulla — può essere rieseguita in qualsiasi momento in sicurezza.
 
+Il report finale riepiloga anche i `WARN`, utili per evidenziare condizioni non bloccanti ma comunque rilevanti in ottica diagnostica o release.
+
 ---
 
 ## Uso
@@ -10,6 +12,9 @@
 # Esecuzione base
 sudo bash tests/check_install.sh
 
+# Selezione esplicita versione (accetta 18 oppure 18.0)
+sudo bash tests/check_install.sh --version 18.0
+
 # Con config alternativa e output verboso
 sudo bash tests/check_install.sh --config /opt/odoo/odoo18/odoo18.conf --verbose
 
@@ -17,15 +22,25 @@ sudo bash tests/check_install.sh --config /opt/odoo/odoo18/odoo18.conf --verbose
 sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 ```
 
+Se sul sistema e' presente una sola installazione Odoo compatibile, l'esecuzione base prova a rilevare automaticamente configurazione, versione, servizio, utente e porta HTTP reali. Se trova piu' installazioni, richiede invece `--version` oppure `--config` per evitare ambiguita'.
+
+In altre parole:
+
+- default = diagnostica reale dell'installazione trovata;
+- override espliciti = test mirato quando vuoi validare una specifica istanza.
+
+Quindi il comando base serve soprattutto come diagnostica post-installazione dell'ambiente realmente presente sulla macchina. Quando invece vuoi validare in modo intenzionale una specifica istanza Odoo, usa `--version`, `--config` e gli altri override disponibili.
+
 ---
 
 ## Opzioni disponibili
 
 | Opzione | Descrizione |
 |---------|-------------|
+| `--version VERSION` | Versione Odoo da verificare (`16`, `16.0`, `17`, `17.0`, `18`, `18.0`, `19`, `19.0`) |
 | `--config FILE` | Percorso alternativo a `odoo.conf` |
-| `--odoo-home DIR` | Override di `ODOO_HOME` |
 | `--odoo-user USER` | Override di `ODOO_USER` |
+| `--db-user USER` | Override di `DB_USER` |
 | `--port PORT` | Override di `ODOO_PORT` |
 | `--verbose` / `-v` | Mostra dettagli aggiuntivi per ogni test |
 
@@ -36,15 +51,15 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 | Gruppo | Cosa verifica |
 |--------|---------------|
 | 1 — Sistema | Utente root, OS Ubuntu/Debian, architettura, spazio disco (≥ 5 GB), RAM (≥ 1 GB) |
-| 2 — Dipendenze apt | Tutti i pacchetti richiesti da Odoo 18, Python ≥ 3.10, Node.js (opzionale), wkhtmltopdf |
+| 2 — Dipendenze apt | Tutti i pacchetti richiesti dall'installer, Python ≥ 3.10, Node.js (opzionale), wkhtmltopdf |
 | 3 — Utente e directory | Utente `odoo` esiste, shell `/bin/false` (sicurezza), home, sottocartelle (`odoo/`, `repos/modules/`, `sandbox/`), proprietà; check `/var/log/odoo` solo se presente |
 | 4 — PostgreSQL | Servizio attivo, versione ≥ 12, ruolo DB esistente, connessione locale come utente `odoo` |
-| 5 — Odoo | `odoo-bin` presente, branch `18.0`, virtualenv, Python nella sandbox, librerie chiave (`psycopg2`, `Pillow`, `lxml`, `werkzeug`, …) |
+| 5 — Odoo | `odoo-bin` presente, branch coerente con la versione richiesta quando il clone Git e' disponibile, supporto anche a sorgenti da tarball fallback, virtualenv, Python nella sandbox, librerie chiave e check version-aware dei package opzionali in base al `requirements.txt` reale |
 | 6 — Config | Sezione `[options]` presente, chiavi obbligatorie, ogni path in `addons_path` esiste, check log directory solo se `logfile` è configurato, porta non privilegiata |
 | 7 — Systemd | File service presente, sezioni `[Unit]`/`[Service]`/`[Install]`, `User=odoo`, dipendenza `postgresql.service`, `is-enabled` e `is-active`, policy `Restart=` |
 | 8 — HTTP | Risposta su `/web/database/selector`, endpoint JSON-RPC |
 | 9 — Nginx (opzionale) | Saltato se Nginx non è installato; altrimenti: servizio attivo, `nginx -t`, `proxy_pass` verso la porta Odoo |
-| 10 — Sicurezza | No `sudo NOPASSWD` per `odoo`, `admin_passwd ≠ admin`, porta non esposta in UFW, permessi `640` su `odoo.conf`, proprietà log dir solo se `logfile` è configurato |
+| 10 — Sicurezza | No `sudo NOPASSWD` per `odoo`, `admin_passwd ≠ admin` come requisito di release, porta non esposta in UFW, permessi `640` su `odoo.conf`, proprietà log dir solo se `logfile` è configurato |
 
 ---
 
@@ -55,11 +70,19 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 | `0` | Tutti i test superati |
 | `1` | Uno o più test falliti |
 
+Nota: la presenza di warning non cambia l'exit code da sola, ma viene esplicitata nel riepilogo finale per facilitare la diagnosi.
+
 ---
 
 ## Note di design
 
 - I test del gruppo 9 (Nginx) vengono automaticamente saltati (`SKIP`) se Nginx non è installato — non producono `FAIL`.
-- I controlli HTTP del gruppo 8 richiedono che il servizio Odoo sia attivo; in caso contrario i test vengono marcati `SKIP` anziché `FAIL` per evitare falsi negativi durante manutenzioni.
+- I controlli HTTP del gruppo 8 richiedono che il servizio Odoo sia attivo; in caso contrario i test vengono marcati `SKIP` anziché `FAIL` per evitare doppioni poco utili quando il problema e' gia' emerso nel check systemd.
 - Con il default attuale (`ODOO_LOGFILE` vuoto), i log sono su journal/stdout e i controlli su log directory vengono eseguiti solo se `logfile` è configurato nel conf.
+- Se non riceve override espliciti, la suite prova a rilevare il contesto reale dell'installazione a partire da `odoo.conf`, service systemd attivo o directory installata; i default interni vengono usati solo come fallback tecnico, non come target preferito del test.
+- `--version` accetta sia formato breve (`18`) sia formato completo (`18.0`); internamente la suite normalizza sempre alla forma completa e deriva in automatico `ODOO_INSTALL_DIR`, nome service e path del file `odoo.conf`.
+- Il check del modulo Python `odoo` usa `PYTHONPATH` puntato ai sorgenti installati, coerentemente con il flusso reale dell'installer da checkout Git o tarball fallback.
+- I controlli sulle librerie Python non assumono che tutti i package siano identici tra versioni diverse: per dipendenze variabili la suite guarda prima il `requirements.txt` dell'istanza installata e poi decide se verificare o saltare quel package.
+- Se `admin_passwd` resta impostata a `admin`, la suite produce `FAIL`: l'installazione puo' essere usata per demo locali solo se l'operatore lo ha confermato esplicitamente durante il setup, ma non e' considerata release-ready.
+- `ODOO_HOME` è fisso a `/opt/odoo` (allineato all'installer). Eventuali override legacy vengono ignorati.
 - La suite è idempotente e sicura: nessuna scrittura su disco, nessuna modifica a servizi o configurazioni.

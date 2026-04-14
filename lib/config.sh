@@ -14,10 +14,10 @@ _config_set_defaults() {
     : "${ODOO_ADMIN_PASSWD:=admin}"
 
     # Database
-    : "${DB_HOST:=False}"
-    : "${DB_PORT:=False}"
-    : "${DB_PASSWORD:=False}"
-    : "${DB_NAME:=False}"           # False = Odoo sceglie il db dalla UI
+    : "${DB_HOST:=}"
+    : "${DB_PORT:=}"
+    : "${DB_PASSWORD:=}"
+    : "${DB_NAME:=odoo}"            # obbligatorio: database target sempre esplicito
 
     # HTTP
     : "${ODOO_HTTP_INTERFACE:=0.0.0.0}"
@@ -27,7 +27,16 @@ _config_set_defaults() {
     : "${ODOO_HOME:=/opt/odoo}"
     : "${ODOO_VERSION:=18}"
     : "${ODOO_INSTALL_DIR:=${ODOO_HOME}/odoo${ODOO_VERSION}}"
-    : "${ODOO_ADDONS_PATH:=${ODOO_INSTALL_DIR}/odoo/odoo/addons,${ODOO_INSTALL_DIR}/odoo/addons,${ODOO_INSTALL_DIR}/repos/modules}"
+    : "${ODOO_MODULES_DIR:=repos/modules}"
+    local modules_dir_abs
+    if [[ "${ODOO_MODULES_DIR}" = /* ]]; then
+        modules_dir_abs="${ODOO_MODULES_DIR}"
+    else
+        modules_dir_abs="${ODOO_INSTALL_DIR}/${ODOO_MODULES_DIR}"
+    fi
+    if [[ -z "${ODOO_ADDONS_PATH:-}" ]]; then
+        ODOO_ADDONS_PATH="${ODOO_INSTALL_DIR}/odoo/odoo/addons,${ODOO_INSTALL_DIR}/odoo/addons,${modules_dir_abs}"
+    fi
     : "${ODOO_DATA_DIR:=${ODOO_HOME}/.local/share/Odoo}"
     # Vuoto di default: Odoo logga su stdout/stderr del processo/service.
     : "${ODOO_LOGFILE:=}"
@@ -49,11 +58,39 @@ _config_set_defaults() {
 
     export ODOO_ADMIN_PASSWD DB_HOST DB_PORT DB_USER DB_PASSWORD DB_NAME
     export ODOO_HTTP_INTERFACE ODOO_PORT ODOO_PROXY_MODE
-    export ODOO_ADDONS_PATH ODOO_DATA_DIR ODOO_LOGFILE
+    export ODOO_MODULES_DIR ODOO_ADDONS_PATH ODOO_DATA_DIR ODOO_LOGFILE
     export ODOO_WORKERS ODOO_MAX_CRON_THREADS
     export ODOO_LIMIT_MEMORY_HARD ODOO_LIMIT_MEMORY_SOFT
     export ODOO_LIMIT_REQUEST ODOO_LIMIT_TIME_CPU ODOO_LIMIT_TIME_REAL
     export ODOO_LOG_LEVEL ODOO_VERSION
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _config_normalize_db_values
+#   Compatibilità con preset legacy che usano "False" come stringa per
+#   opzioni DB non booleane. Odoo emette warning su questi campi.
+# ──────────────────────────────────────────────────────────────────────────────
+_config_normalize_db_values() {
+    local var value
+    for var in DB_HOST DB_PORT DB_PASSWORD; do
+        value="${!var:-}"
+        case "${value}" in
+            False|false|None|none)
+                printf -v "$var" '%s' ""
+                ;;
+        esac
+    done
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
+# _config_validate_required_db_name
+#   DB_NAME deve essere sempre valorizzato per evitare avvii non deterministici.
+# ──────────────────────────────────────────────────────────────────────────────
+_config_validate_required_db_name() {
+    if [[ -z "${DB_NAME:-}" ]]; then
+        error "DB_NAME è obbligatorio e non può essere vuoto."
+        return 1
+    fi
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -134,6 +171,25 @@ _config_prepare_data_dir() {
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
+# _config_prepare_modules_dir
+#   Garantisce che la directory moduli custom usata in addons_path esista.
+# ──────────────────────────────────────────────────────────────────────────────
+_config_prepare_modules_dir() {
+    local modules_dir_abs
+
+    if [[ "${ODOO_MODULES_DIR}" = /* ]]; then
+        modules_dir_abs="${ODOO_MODULES_DIR}"
+    else
+        modules_dir_abs="${ODOO_INSTALL_DIR}/${ODOO_MODULES_DIR}"
+    fi
+
+    if [[ ! -d "${modules_dir_abs}" ]]; then
+        log "Creazione directory moduli custom: ${modules_dir_abs}"
+        sudo -u "${ODOO_USER}" mkdir -p "${modules_dir_abs}"
+    fi
+}
+
+# ──────────────────────────────────────────────────────────────────────────────
 # _config_render_template <tpl_path> <dest_path>
 #   Sostituisce i placeholder {{VAR}} (o ${VAR} con envsubst).
 #   Strategia:
@@ -160,7 +216,20 @@ _config_render_template() {
     # Se ODOO_LOGFILE e' vuoto, disabilita esplicitamente la direttiva logfile
     # lasciando traccia nel file generato.
     if [[ -z "${ODOO_LOGFILE}" ]]; then
-        sed -i 's|^logfile[[:space:]]*=.*$|; logfile disabled: using stdout\/stderr|' "$tmp"
+        sed -i 's|^logfile[[:space:]]*=.*$|; logfile =|' "$tmp"
+    fi
+
+    # Odoo richiede un intero valido per db_port: se vuoto, meglio omettere la direttiva.
+    if [[ -z "${DB_PORT:-}" ]]; then
+        sed -i 's|^db_port[[:space:]]*=.*$|; db_port =|' "$tmp"
+    fi
+
+    if [[ -z "${DB_HOST:-}" ]]; then
+        sed -i 's|^db_host[[:space:]]*=.*$|; db_host =|' "$tmp"
+    fi
+
+    if [[ -z "${DB_PASSWORD:-}" ]]; then
+        sed -i 's|^db_password[[:space:]]*=.*$|; db_password =|' "$tmp"
     fi
 
     # Sposta il file nella destinazione con permessi corretti
@@ -181,13 +250,15 @@ _config_render_template() {
 #     6. Mostra un riepilogo (no password in chiaro)
 # ──────────────────────────────────────────────────────────────────────────────
 generate_config() {
-    # ODOO_VERSION_SHORT (es. "18") deve corrispondere al nome usato
-    # in odoo.service.tpl: -c {{ODOO_HOME}}/odoo{{ODOO_VERSION_SHORT}}/odoo{{ODOO_VERSION_SHORT}}.conf
+    # ODOO_VERSION_SHORT (es. "18") viene usato nel nome del file
+    # odoo18.conf, referenziato poi dalla unit systemd.
     local version_short="${ODOO_VERSION%%.*}"
 
     log "━━━ Generazione odoo${version_short}.conf ━━━"
 
     _config_set_defaults
+    _config_normalize_db_values
+    _config_validate_required_db_name
 
     local tpl="${TEMPLATES_DIR}/odoo.conf.tpl"
     local conf="${ODOO_CONF_DIR}/odoo${version_short}.conf"
@@ -196,6 +267,7 @@ generate_config() {
 
     _config_prepare_log_dir
     _config_prepare_data_dir
+    _config_prepare_modules_dir
 
     # Idempotenza: backup se esiste già
     if [[ -f "$conf" ]]; then
@@ -217,7 +289,7 @@ generate_config() {
     log "  addons_path : ${ODOO_ADDONS_PATH}"
     log "  http_port   : ${ODOO_PORT}"
     log "  db_user     : ${DB_USER}"
-    log "  db_name     : ${DB_NAME:-<scelto dalla UI>}"
+    log "  db_name     : ${DB_NAME}"
     if [[ -n "${ODOO_LOGFILE}" ]]; then
         log "  logfile     : ${ODOO_LOGFILE}"
     else

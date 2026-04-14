@@ -51,6 +51,9 @@ _render_template() {
         -e "s|{{ODOO_VERSION_SHORT}}|${version_short}|g" \
         -e "s|{{ODOO_USER}}|${ODOO_USER}|g" \
         -e "s|{{ODOO_HOME}}|${ODOO_HOME}|g" \
+        -e "s|{{ODOO_INSTALL_DIR}}|${ODOO_INSTALL_DIR}|g" \
+        -e "s|{{ODOO_REPO_DIR}}|${ODOO_REPO_DIR}|g" \
+        -e "s|{{ODOO_VENV_DIR}}|${ODOO_VENV_DIR}|g" \
         "${src}" > "${dst}"
 }
 
@@ -76,6 +79,14 @@ _validate_template() {
     if [[ ! -x "${execstart_bin}" ]]; then
         warn "ExecStart binary not found or not executable: ${execstart_bin}"
         warn "Continuing — binary may be installed in a later step."
+    fi
+
+    # Verifica sintattica systemd quando disponibile.
+    if command -v systemd-analyze &>/dev/null; then
+        if ! systemd-analyze verify "${unit_file}" >/dev/null 2>&1; then
+            warn "systemd-analyze verify ha segnalato problemi sulla unit renderizzata."
+            systemd-analyze verify "${unit_file}" || true
+        fi
     fi
 
     return 0
@@ -137,9 +148,13 @@ _start_service() {
     if systemctl is-active --quiet "${unit}"; then
         log "✅  Service '${unit}' started successfully."
     else
-        error "Service '${unit}' failed to start. Check logs with:"
-        error "  journalctl -u ${unit} -n 50 --no-pager"
-        return 1
+        warn "Service '${unit}' failed to start. Check logs with:"
+        warn "  journalctl -u ${unit} -n 50 --no-pager"
+        warn "Stato corrente unit '${unit}':"
+        sudo systemctl --no-pager --full status "${unit}" || true
+        warn "Ultime 50 righe journal per '${unit}':"
+        sudo journalctl -u "${unit}" -n 50 --no-pager || true
+        error "Avvio servizio '${unit}' fallito."
     fi
 }
 
@@ -159,7 +174,7 @@ setup_systemd() {
 
     # ── 2. Render into a temp file ──────────────────────────────────────────
     local tmp_unit
-    tmp_unit="$(mktemp /tmp/odoo.service.XXXXXX)"
+    tmp_unit="$(mktemp /tmp/odoo.XXXXXX.service)"
     # shellcheck disable=SC2064
     trap "rm -f '${tmp_unit}'" RETURN
 
