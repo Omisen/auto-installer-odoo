@@ -162,6 +162,39 @@ prompt_admin_password() {
     done
 }
 
+confirm_insecure_admin_password() {
+    local answer=""
+
+    if [[ "$ODOO_ADMIN_PASSWD" != "$DEFAULT_ODOO_ADMIN_PASSWD" ]]; then
+        return 0
+    fi
+
+    warn "La password admin Odoo e' impostata al valore debole '${DEFAULT_ODOO_ADMIN_PASSWD}'."
+    warn "Usala solo per demo o ambienti temporanei: la suite finale la considerera' non release-ready."
+
+    if ! is_interactive_input_available; then
+        error "admin_passwd='${DEFAULT_ODOO_ADMIN_PASSWD}' richiede una conferma esplicita interattiva. Imposta una password diversa oppure riesegui l'installer in modalita' interattiva."
+    fi
+
+    while true; do
+        read -r -p "Confermi di voler continuare con admin_passwd='${DEFAULT_ODOO_ADMIN_PASSWD}'? [y/N]: " answer
+
+        case "$answer" in
+            y|Y|yes|YES)
+                warn "Conferma ricevuta: proseguo con admin_passwd='${DEFAULT_ODOO_ADMIN_PASSWD}'."
+                return 0
+                ;;
+            ""|n|N|no|NO)
+                error "Installazione interrotta. Imposta una password admin Odoo diversa da '${DEFAULT_ODOO_ADMIN_PASSWD}'."
+                return 1
+                ;;
+            *)
+                warn "Risposta non valida. Inserisci y oppure n."
+                ;;
+        esac
+    done
+}
+
 prompt_install_dir_subdir() {
     local suggested_subdir="$1"
     local input_value=""
@@ -217,6 +250,7 @@ validate_selected_inputs() {
         error "Install dir non valida: '${ODOO_INSTALL_DIR}'. Deve essere sotto '${ODOO_HOME}'."
 
     [[ -n "$ODOO_ADMIN_PASSWD" ]] || error "La password admin Odoo non puo' essere vuota."
+    confirm_insecure_admin_password
 }
 
 collect_main_inputs() {
@@ -295,7 +329,7 @@ print_installation_configuration() {
     status "  Porta HTTP    : ${ODOO_PORT}"
     status "  Install dir   : ${ODOO_INSTALL_DIR}"
     if [[ "$ODOO_ADMIN_PASSWD" == "$DEFAULT_ODOO_ADMIN_PASSWD" ]]; then
-        warn "  Admin passwd  : default '${DEFAULT_ODOO_ADMIN_PASSWD}'"
+        warn "  Admin passwd  : default '${DEFAULT_ODOO_ADMIN_PASSWD}' (consentito solo con conferma esplicita; check finale in FAIL)"
     else
         status "  Admin passwd  : personalizzata"
     fi

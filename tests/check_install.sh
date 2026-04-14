@@ -730,7 +730,7 @@ check_security() {
     if [[ "$admin_pass" != "admin" && -n "$admin_pass" ]]; then
       pass "admin_passwd non è il valore di default 'admin'"
     else
-      warn "admin_passwd è 'admin' — cambiare prima di andare in produzione"
+      fail "admin_passwd sicura" "trovato valore debole 'admin': installazione non release-ready"
     fi
   fi
 

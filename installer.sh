@@ -79,7 +79,7 @@ Opzioni:
   --port PORT           Porta HTTP di Odoo (default: 8069)
   --db-name NAME        Nome del database (default: odoo)
   --install-dir DIR     Directory installazione (deve stare sotto /opt/odoo, default: /opt/odoo/odoo<versione>)
-  --admin-passwd PASS   Password admin Odoo (default: admin)
+  --admin-passwd PASS   Password admin Odoo (se 'admin', richiede conferma esplicita e fallisce il check finale)
   --with-nginx          Configura Nginx come reverse proxy
   --config FILE         Carica variabili da file .env
   --help                Mostra questo messaggio
