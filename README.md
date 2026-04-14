@@ -154,4 +154,4 @@ AutoInstallerOdoo/
 
 ---
 
-> ## [click -> Documentazione tecnica](https://github.com/Omisen/auto-installer-odoo.wiki.git)
+> ## [click -> Documentazione tecnica](https://github.com/Omisen/auto-installer-odoo/wiki)
