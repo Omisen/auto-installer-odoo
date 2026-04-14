@@ -54,7 +54,7 @@ Quindi il comando base serve soprattutto come diagnostica post-installazione del
 | 2 — Dipendenze apt | Tutti i pacchetti richiesti dall'installer, Python ≥ 3.10, Node.js (opzionale), wkhtmltopdf |
 | 3 — Utente e directory | Utente `odoo` esiste, shell `/bin/false` (sicurezza), home, sottocartelle (`odoo/`, `repos/modules/`, `sandbox/`), proprietà; check `/var/log/odoo` solo se presente |
 | 4 — PostgreSQL | Servizio attivo, versione ≥ 12, ruolo DB esistente, connessione locale come utente `odoo` |
-| 5 — Odoo | `odoo-bin` presente, branch coerente con la versione richiesta quando il clone Git e' disponibile, supporto anche a sorgenti da tarball fallback, virtualenv, Python nella sandbox, librerie chiave (`psycopg2`, `Pillow`, `lxml`, `werkzeug`, …) |
+| 5 — Odoo | `odoo-bin` presente, branch coerente con la versione richiesta quando il clone Git e' disponibile, supporto anche a sorgenti da tarball fallback, virtualenv, Python nella sandbox, librerie chiave e check version-aware dei package opzionali in base al `requirements.txt` reale |
 | 6 — Config | Sezione `[options]` presente, chiavi obbligatorie, ogni path in `addons_path` esiste, check log directory solo se `logfile` è configurato, porta non privilegiata |
 | 7 — Systemd | File service presente, sezioni `[Unit]`/`[Service]`/`[Install]`, `User=odoo`, dipendenza `postgresql.service`, `is-enabled` e `is-active`, policy `Restart=` |
 | 8 — HTTP | Risposta su `/web/database/selector`, endpoint JSON-RPC |
@@ -82,6 +82,7 @@ Nota: la presenza di warning non cambia l'exit code da sola, ma viene esplicitat
 - Se non riceve override espliciti, la suite prova a rilevare il contesto reale dell'installazione a partire da `odoo.conf`, service systemd attivo o directory installata; i default interni vengono usati solo come fallback tecnico, non come target preferito del test.
 - `--version` accetta sia formato breve (`18`) sia formato completo (`18.0`); internamente la suite normalizza sempre alla forma completa e deriva in automatico `ODOO_INSTALL_DIR`, nome service e path del file `odoo.conf`.
 - Il check del modulo Python `odoo` usa `PYTHONPATH` puntato ai sorgenti installati, coerentemente con il flusso reale dell'installer da checkout Git o tarball fallback.
+- I controlli sulle librerie Python non assumono che tutti i package siano identici tra versioni diverse: per dipendenze variabili la suite guarda prima il `requirements.txt` dell'istanza installata e poi decide se verificare o saltare quel package.
 - Se `admin_passwd` resta impostata a `admin`, la suite produce `FAIL`: l'installazione puo' essere usata per demo locali solo se l'operatore lo ha confermato esplicitamente durante il setup, ma non e' considerata release-ready.
 - `ODOO_HOME` è fisso a `/opt/odoo` (allineato all'installer). Eventuali override legacy vengono ignorati.
 - La suite è idempotente e sicura: nessuna scrittura su disco, nessuna modifica a servizi o configurazioni.

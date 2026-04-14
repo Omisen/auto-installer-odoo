@@ -579,6 +579,22 @@ check_python_import() {
   "$python_bin" -m pip show "$package_name" &>/dev/null
 }
 
+repo_git_current_branch() {
+  local repo_dir="$1"
+
+  sudo -u "$ODOO_USER" git -C "$repo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null
+}
+
+requirements_include_package() {
+  local repo_dir="$1"
+  local package_name="$2"
+  local requirements_file="${repo_dir}/requirements.txt"
+
+  [[ -f "$requirements_file" ]] || return 1
+
+  grep -qiE "^[[:space:]]*${package_name}([><=!~;[:space:]]|$)" "$requirements_file"
+}
+
 # ---------------------------------------------------------------------------
 # GRUPPO 4 — PostgreSQL
 # ---------------------------------------------------------------------------
@@ -635,14 +651,18 @@ check_odoo_install() {
   fi
 
   # Provenienza sorgenti coerente: git branch o fallback tarball senza metadata git
-  if [[ -d "${odoo_dir}/.git" ]] && git -C "$odoo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null | grep -qx "${ODOO_VERSION}"; then
+  local repo_branch=""
+  if [[ -d "${odoo_dir}/.git" ]]; then
+    repo_branch="$(repo_git_current_branch "$odoo_dir" || true)"
+  fi
+
+  if [[ -d "${odoo_dir}/.git" ]] && [[ "$repo_branch" == "${ODOO_VERSION}" ]]; then
     local branch
-    branch=$(git -C "$odoo_dir" rev-parse --abbrev-ref HEAD)
+    branch="$repo_branch"
     pass "Branch git: $branch"
   elif [[ -d "${odoo_dir}/.git" ]]; then
-    local branch
-    branch=$(git -C "$odoo_dir" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "unknown")
-    fail "Branch git" "atteso '${ODOO_VERSION}', trovato '${branch}'"
+    local branch_display="${repo_branch:-unknown}"
+    fail "Branch git" "atteso '${ODOO_VERSION}', trovato '${branch_display}'"
   elif [[ -f "${odoo_dir}/odoo-bin" ]]; then
     pass "Sorgenti Odoo presenti senza metadata git (tarball/fallback)"
   else
@@ -670,20 +690,26 @@ check_odoo_install() {
 
   # Librerie chiave installate nella sandbox
   local py_checks=(
-    "odoo:odoo:${odoo_dir}"
-    "psycopg2:psycopg2:"
-    "PIL:Pillow:"
-    "lxml:lxml:"
-    "werkzeug:werkzeug:"
-    "requests:requests:"
-    "cryptography:cryptography:"
-    "yaml:PyYAML:"
+    "odoo:odoo:${odoo_dir}:always"
+    "psycopg2:psycopg2::always"
+    "PIL:Pillow::always"
+    "lxml:lxml::always"
+    "werkzeug:werkzeug::always"
+    "requests:requests::always"
+    "cryptography:cryptography::always"
+    "yaml:PyYAML::requirements"
   )
 
   local all_py_ok=true
-  local entry module_name package_name import_path
+  local entry module_name package_name import_path requirement_mode
   for entry in "${py_checks[@]}"; do
-    IFS=':' read -r module_name package_name import_path <<< "$entry"
+    IFS=':' read -r module_name package_name import_path requirement_mode <<< "$entry"
+
+    if [[ "$requirement_mode" == "requirements" ]] && ! requirements_include_package "$odoo_dir" "$package_name"; then
+      skip "Libreria Python: $package_name" "non richiesta dal requirements.txt della versione ${ODOO_VERSION}"
+      continue
+    fi
+
     if check_python_import "$sandbox_python" "$module_name" "$package_name" "$import_path"; then
       verbose "Libreria Python: $package_name ✔"
     else
