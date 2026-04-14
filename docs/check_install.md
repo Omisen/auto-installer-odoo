@@ -47,7 +47,7 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 | 7 — Systemd | File service presente, sezioni `[Unit]`/`[Service]`/`[Install]`, `User=odoo`, dipendenza `postgresql.service`, `is-enabled` e `is-active`, policy `Restart=` |
 | 8 — HTTP | Risposta su `/web/database/selector`, endpoint JSON-RPC |
 | 9 — Nginx (opzionale) | Saltato se Nginx non è installato; altrimenti: servizio attivo, `nginx -t`, `proxy_pass` verso la porta Odoo |
-| 10 — Sicurezza | No `sudo NOPASSWD` per `odoo`, `admin_passwd ≠ admin`, porta non esposta in UFW, permessi `640` su `odoo.conf`, proprietà log dir solo se `logfile` è configurato |
+| 10 — Sicurezza | No `sudo NOPASSWD` per `odoo`, `admin_passwd ≠ admin` come requisito di release, porta non esposta in UFW, permessi `640` su `odoo.conf`, proprietà log dir solo se `logfile` è configurato |
 
 ---
 
@@ -67,5 +67,6 @@ sudo ODOO_PORT=8070 DB_USER=odoo_prod bash tests/check_install.sh
 - Con il default attuale (`ODOO_LOGFILE` vuoto), i log sono su journal/stdout e i controlli su log directory vengono eseguiti solo se `logfile` è configurato nel conf.
 - `--version` accetta sia formato breve (`18`) sia formato completo (`18.0`); internamente la suite normalizza sempre alla forma completa e deriva in automatico `ODOO_INSTALL_DIR`, nome service e path del file `odoo.conf`.
 - Il check del modulo Python `odoo` usa `PYTHONPATH` puntato ai sorgenti installati, coerentemente con il flusso reale dell'installer da checkout Git o tarball fallback.
+- Se `admin_passwd` resta impostata a `admin`, la suite produce `FAIL`: l'installazione puo' essere usata per demo locali solo se l'operatore lo ha confermato esplicitamente durante il setup, ma non e' considerata release-ready.
 - `ODOO_HOME` è fisso a `/opt/odoo` (allineato all'installer). Eventuali override legacy vengono ignorati.
 - La suite è idempotente e sicura: nessuna scrittura su disco, nessuna modifica a servizi o configurazioni.

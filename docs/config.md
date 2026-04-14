@@ -28,7 +28,7 @@ Il template usa placeholder nella forma `${VAR}` compatibili con `envsubst`. Son
 
 | Sezione | Note |
 |---------|------|
-| `admin_passwd` | Sovrascrivibile da `.env`; il default `admin` è accettabile solo in dev |
+| `admin_passwd` | Sovrascrivibile da `.env`; il valore `admin` richiede conferma esplicita durante il setup ed e' accettabile solo per demo o ambienti temporanei |
 | `db_*` | Se `DB_HOST`, `DB_PORT` o `DB_PASSWORD` sono vuoti, nel file generato la direttiva viene commentata in forma standard (`; db_port =`) per evitare valori invalidi |
 | `http_interface` + `proxy_mode` | Pronti per Nginx reverse proxy (`proxy_mode = True`) |
 | `workers` / `max_cron_threads` | `0` = modalità thread (dev); da aumentare in produzione |
@@ -46,6 +46,8 @@ Se vuoi un file log su disco, imposta `ODOO_LOGFILE` nel tuo `.env`.
 ### Default con override da `.env`
 
 `_config_set_defaults()` usa la sintassi `: "${VAR:=default}"` — assegna il valore solo se la variabile non è già impostata. Questo permette ai file `configs/dev.env` e `configs/production.env` di fare override senza modificare il modulo.
+
+Nel caso di `ODOO_ADMIN_PASSWD`, il fallback resta disponibile per compatibilita' con demo rapide, ma il valore `admin` viene trattato come scelta esplicitamente confermata e non supera la verifica finale di release.
 
 ### Rendering selettivo con `envsubst`
 

@@ -65,11 +65,13 @@ sudo ./installer.sh [opzioni]
   --port PORT           Porta HTTP (default: 8069)
   --db-name NAME        Nome database (default: odoo)
   --install-dir DIR     Directory installazione (solo sotto /opt/odoo, default: /opt/odoo/odoo<versione>)
-  --admin-passwd PASS   Password admin Odoo (default: admin)
+  --admin-passwd PASS   Password admin Odoo (se `admin`, richiede conferma esplicita e il check finale fallisce)
   --with-nginx          Abilita Nginx come reverse proxy
   --config FILE         Carica variabili da file .env
   --help                Mostra l'aiuto
 ```
+
+Se lasci `admin` come master password, l'installer chiede una conferma esplicita. Questa scelta resta consentita per demo o ambienti temporanei, ma la suite finale [docs/check_install.md](docs/check_install.md) la considera non release-ready.
 
 ### Esempi
 
@@ -105,6 +107,8 @@ WITH_NGINX=true
 Passa il file con `--config configs/production.env`.
 
 `DB_NAME` è obbligatorio: l'installer crea automaticamente il database PostgreSQL se non esiste già.
+
+Per `ODOO_ADMIN_PASSWD`, il valore `admin` e' tollerato solo con conferma esplicita e va considerato adatto esclusivamente a demo o ambienti temporanei.
 
 ---
 
