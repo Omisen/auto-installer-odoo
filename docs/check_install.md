@@ -2,6 +2,8 @@
 
 > Suite di verifica post-installazione. Esegue controlli **non distruttivi** su un sistema già installato e riporta `PASS` / `FAIL` / `SKIP` per ogni test. Non modifica nulla — può essere rieseguita in qualsiasi momento in sicurezza.
 
+Il report finale riepiloga anche i `WARN`, utili per evidenziare condizioni non bloccanti ma comunque rilevanti in ottica diagnostica o release.
+
 ---
 
 ## Uso
@@ -67,6 +69,8 @@ Quindi il comando base serve soprattutto come diagnostica post-installazione del
 |--------|-------------|
 | `0` | Tutti i test superati |
 | `1` | Uno o più test falliti |
+
+Nota: la presenza di warning non cambia l'exit code da sola, ma viene esplicitata nel riepilogo finale per facilitare la diagnosi.
 
 ---
 

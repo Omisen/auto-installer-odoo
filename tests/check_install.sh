@@ -66,13 +66,19 @@ TESTS_PASSED=0
 TESTS_FAILED=0
 TESTS_SKIPPED=0
 FAILED_TESTS=()
+WARNINGS_COUNT=0
+WARNING_MESSAGES=()
 
 # ---------------------------------------------------------------------------
 # Funzioni di logging
 # ---------------------------------------------------------------------------
 log()     { echo -e "${DIM}[INFO]${RESET}  $*"; }
 verbose() { [[ "$VERBOSE" == "true" ]] && echo -e "${DIM}        $*${RESET}" || true; }
-warn()    { echo -e "${YELLOW}[WARN]${RESET}  $*"; }
+warn()    {
+  WARNINGS_COUNT=$(( WARNINGS_COUNT + 1 ))
+  WARNING_MESSAGES+=("$*")
+  echo -e "${YELLOW}[WARN]${RESET}  $*"
+}
 error()   { echo -e "${RED}[ERROR]${RESET} $*" >&2; }
 
 # Esegue un comando oppure lo stampa in dry-run
@@ -1002,6 +1008,7 @@ print_summary() {
   echo -e "  ${GREEN}Superati       : $TESTS_PASSED${RESET}"
   echo -e "  ${RED}Falliti        : $TESTS_FAILED${RESET}"
   echo -e "  ${YELLOW}Saltati        : $TESTS_SKIPPED${RESET}"
+  echo -e "  ${YELLOW}Warning        : $WARNINGS_COUNT${RESET}"
   echo ""
 
   if [[ ${#FAILED_TESTS[@]} -gt 0 ]]; then
@@ -1012,8 +1019,20 @@ print_summary() {
     echo ""
   fi
 
+  if [[ ${#WARNING_MESSAGES[@]} -gt 0 ]]; then
+    echo -e "${YELLOW}${BOLD}  Warning principali:${RESET}"
+    for warning in "${WARNING_MESSAGES[@]}"; do
+      echo -e "  ${YELLOW}•${RESET} $warning"
+    done
+    echo ""
+  fi
+
   if [[ $TESTS_FAILED -eq 0 ]]; then
-    echo -e "${GREEN}${BOLD}  ✔  Installazione verificata con successo.${RESET}"
+    if [[ $WARNINGS_COUNT -eq 0 ]]; then
+      echo -e "${GREEN}${BOLD}  ✔  Installazione verificata con successo.${RESET}"
+    else
+      echo -e "${YELLOW}${BOLD}  ✔  Installazione verificata con warning diagnostici da rivedere.${RESET}"
+    fi
   else
     echo -e "${RED}${BOLD}  ✘  Installazione incompleta — correggere i test falliti.${RESET}"
     echo -e "${DIM}  Per dettagli: sudo bash $0 --verbose${RESET}"
