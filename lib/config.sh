@@ -68,18 +68,26 @@ _config_set_defaults() {
 # ──────────────────────────────────────────────────────────────────────────────
 # _config_normalize_db_values
 #   Compatibilità con preset legacy che usano "False" o "None" come stringa.
-#   Per i campi DB non booleani li normalizza a stringa vuota.
+#   Mantiene il comportamento storico: per i campi opzionali assenti usa
+#   il letterale "False" nel file finale, evitando parse error su Odoo 19.
 # ──────────────────────────────────────────────────────────────────────────────
 _config_normalize_db_values() {
     local var value
     for var in DB_HOST DB_PORT DB_PASSWORD; do
         value="${!var:-}"
         case "${value}" in
-            False|false|None|none)
-                printf -v "$var" '%s' ""
+            "")
+                printf -v "$var" '%s' "False"
+                ;;
+            None|none|false)
+                printf -v "$var" '%s' "False"
                 ;;
         esac
     done
+
+    if [[ -z "${ODOO_LOGFILE:-}" || "${ODOO_LOGFILE}" =~ ^(None|none|false)$ ]]; then
+        ODOO_LOGFILE="False"
+    fi
 }
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -213,22 +221,22 @@ _config_render_template() {
     # shellcheck disable=SC2016
     envsubst "$vars" < "$tpl" > "$tmp"
 
-    # Se alcune variabili opzionali non booleane sono vuote, lascia la
-    # direttiva presente ma senza valore assegnato, senza commentarla.
-    if [[ -z "${ODOO_LOGFILE}" ]]; then
-        sed -i 's|^logfile[[:space:]]*=.*$|logfile = |' "$tmp"
+    # Mantiene il comportamento storico: per alcuni campi opzionali vuoti
+    # scrive esplicitamente "False" invece di lasciarli vuoti.
+    if [[ -z "${ODOO_LOGFILE:-}" || "${ODOO_LOGFILE}" =~ ^(None|none|false)$ ]]; then
+        sed -i 's|^logfile[[:space:]]*=.*$|logfile = False|' "$tmp"
     fi
 
-    if [[ -z "${DB_PORT:-}" ]]; then
-        sed -i 's|^db_port[[:space:]]*=.*$|db_port = |' "$tmp"
+    if [[ -z "${DB_PORT:-}" || "${DB_PORT}" =~ ^(None|none|false)$ ]]; then
+        sed -i 's|^db_port[[:space:]]*=.*$|db_port = False|' "$tmp"
     fi
 
-    if [[ -z "${DB_HOST:-}" ]]; then
-        sed -i 's|^db_host[[:space:]]*=.*$|db_host = |' "$tmp"
+    if [[ -z "${DB_HOST:-}" || "${DB_HOST}" =~ ^(None|none|false)$ ]]; then
+        sed -i 's|^db_host[[:space:]]*=.*$|db_host = False|' "$tmp"
     fi
 
-    if [[ -z "${DB_PASSWORD:-}" ]]; then
-        sed -i 's|^db_password[[:space:]]*=.*$|db_password = |' "$tmp"
+    if [[ -z "${DB_PASSWORD:-}" || "${DB_PASSWORD}" =~ ^(None|none|false)$ ]]; then
+        sed -i 's|^db_password[[:space:]]*=.*$|db_password = False|' "$tmp"
     fi
 
     # Sposta il file nella destinazione con permessi corretti
