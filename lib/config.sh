@@ -68,7 +68,7 @@ _config_set_defaults() {
 # ──────────────────────────────────────────────────────────────────────────────
 # _config_normalize_db_values
 #   Compatibilità con preset legacy che usano "False" o "None" come stringa.
-#   Normalizza tutto al valore canonico "False" nel file finale.
+#   Per i campi DB non booleani li normalizza a stringa vuota.
 # ──────────────────────────────────────────────────────────────────────────────
 _config_normalize_db_values() {
     local var value
@@ -213,22 +213,22 @@ _config_render_template() {
     # shellcheck disable=SC2016
     envsubst "$vars" < "$tpl" > "$tmp"
 
-    # Se alcune variabili opzionali sono vuote, renderizza esplicitamente
-    # "False" invece di commentare la direttiva.
+    # Se alcune variabili opzionali non booleane sono vuote, lascia la
+    # direttiva presente ma senza valore assegnato, senza commentarla.
     if [[ -z "${ODOO_LOGFILE}" ]]; then
-        sed -i 's|^logfile[[:space:]]*=.*$|logfile = False|' "$tmp"
+        sed -i 's|^logfile[[:space:]]*=.*$|logfile = |' "$tmp"
     fi
 
     if [[ -z "${DB_PORT:-}" ]]; then
-        sed -i 's|^db_port[[:space:]]*=.*$|db_port = False|' "$tmp"
+        sed -i 's|^db_port[[:space:]]*=.*$|db_port = |' "$tmp"
     fi
 
     if [[ -z "${DB_HOST:-}" ]]; then
-        sed -i 's|^db_host[[:space:]]*=.*$|db_host = False|' "$tmp"
+        sed -i 's|^db_host[[:space:]]*=.*$|db_host = |' "$tmp"
     fi
 
     if [[ -z "${DB_PASSWORD:-}" ]]; then
-        sed -i 's|^db_password[[:space:]]*=.*$|db_password = False|' "$tmp"
+        sed -i 's|^db_password[[:space:]]*=.*$|db_password = |' "$tmp"
     fi
 
     # Sposta il file nella destinazione con permessi corretti
