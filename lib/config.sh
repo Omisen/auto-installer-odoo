@@ -221,8 +221,11 @@ _config_render_template() {
     # shellcheck disable=SC2016
     envsubst "$vars" < "$tpl" > "$tmp"
 
-    # Mantiene il comportamento storico: per alcuni campi opzionali vuoti
-    # scrive esplicitamente "False" invece di lasciarli vuoti.
+    # Mantiene il comportamento storico richiesto dal progetto:
+    # ogni direttiva rimasta senza valore viene resa esplicitamente "False"
+    # invece di restare vuota nel file finale.
+    sed -i -E 's|^([[:space:]]*[A-Za-z0-9_]+[[:space:]]*=)[[:space:]]*$|\1 False|' "$tmp"
+
     if [[ -z "${ODOO_LOGFILE:-}" || "${ODOO_LOGFILE}" =~ ^(None|none|false)$ ]]; then
         sed -i 's|^logfile[[:space:]]*=.*$|logfile = False|' "$tmp"
     fi
