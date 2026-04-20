@@ -67,8 +67,8 @@ _config_set_defaults() {
 
 # ──────────────────────────────────────────────────────────────────────────────
 # _config_normalize_db_values
-#   Compatibilità con preset legacy che usano "False" come stringa per
-#   opzioni DB non booleane. Odoo emette warning su questi campi.
+#   Compatibilità con preset legacy che usano "False" o "None" come stringa.
+#   Normalizza tutto al valore canonico "False" nel file finale.
 # ──────────────────────────────────────────────────────────────────────────────
 _config_normalize_db_values() {
     local var value
@@ -213,23 +213,22 @@ _config_render_template() {
     # shellcheck disable=SC2016
     envsubst "$vars" < "$tpl" > "$tmp"
 
-    # Se ODOO_LOGFILE e' vuoto, disabilita esplicitamente la direttiva logfile
-    # lasciando traccia nel file generato.
+    # Se alcune variabili opzionali sono vuote, renderizza esplicitamente
+    # "False" invece di commentare la direttiva.
     if [[ -z "${ODOO_LOGFILE}" ]]; then
-        sed -i 's|^logfile[[:space:]]*=.*$|; logfile =|' "$tmp"
+        sed -i 's|^logfile[[:space:]]*=.*$|logfile = False|' "$tmp"
     fi
 
-    # Odoo richiede un intero valido per db_port: se vuoto, meglio omettere la direttiva.
     if [[ -z "${DB_PORT:-}" ]]; then
-        sed -i 's|^db_port[[:space:]]*=.*$|; db_port =|' "$tmp"
+        sed -i 's|^db_port[[:space:]]*=.*$|db_port = False|' "$tmp"
     fi
 
     if [[ -z "${DB_HOST:-}" ]]; then
-        sed -i 's|^db_host[[:space:]]*=.*$|; db_host =|' "$tmp"
+        sed -i 's|^db_host[[:space:]]*=.*$|db_host = False|' "$tmp"
     fi
 
     if [[ -z "${DB_PASSWORD:-}" ]]; then
-        sed -i 's|^db_password[[:space:]]*=.*$|; db_password =|' "$tmp"
+        sed -i 's|^db_password[[:space:]]*=.*$|db_password = False|' "$tmp"
     fi
 
     # Sposta il file nella destinazione con permessi corretti
