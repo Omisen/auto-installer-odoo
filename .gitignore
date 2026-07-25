@@ -2,3 +2,6 @@
 configs/*.env
 temp/*.txt
 docs/*.md
+
+# Rust build artifacts
+/target
