@@ -18,7 +18,9 @@ use odoo_installer::engine::Installer;
 use odoo_installer::prompt;
 use odoo_installer::state::DEFAULT_STATE_PATH;
 use odoo_installer::step::Step;
+use odoo_installer::steps::apt_packages::AptPackagesStep;
 use odoo_installer::steps::create_odoo_user::CreateOdooUser;
+use odoo_installer::steps::install_wkhtmltopdf::InstallWkhtmltopdf;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
 use odoo_installer::steps::setup_log_dir::SetupLogDir;
 
@@ -66,6 +68,7 @@ fn main() -> Result<()> {
 
     let state_path = PathBuf::from(DEFAULT_STATE_PATH);
     let mut ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
+    ctx.aggressive_rollback = cli.aggressive_rollback;
 
     print_configuration(&ctx);
 
@@ -80,6 +83,9 @@ fn main() -> Result<()> {
         Box::new(PrepareOptRoot::new()),
         Box::new(CreateOdooUser::new()),
         Box::new(SetupLogDir::new()),
+        Box::new(AptPackagesStep::bootstrap()),
+        Box::new(AptPackagesStep::odoo_dependencies()),
+        Box::new(InstallWkhtmltopdf::new()),
     ];
     let mut installer = Installer::new();
     installer.execute(&mut steps, &ctx).map_err(|e| {

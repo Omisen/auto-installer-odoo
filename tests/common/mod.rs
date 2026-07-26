@@ -7,11 +7,12 @@
 
 #![allow(dead_code)] // non tutti i test usano tutte le utility
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use odoo_installer::error::StepError;
-use odoo_installer::system_ops::{OwnerId, SystemOps, UserSpec};
+use odoo_installer::system_ops::{Downloader, OwnerId, SystemOps, UserSpec};
 
 /// Operazione mutante registrata dal mock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -34,6 +35,15 @@ pub enum Op {
     },
     Mkdir(PathBuf),
     Rmdir(PathBuf),
+    AptInstall(Vec<String>),
+    AptPurge(Vec<String>),
+    AptAutoremove,
+    AptFixBroken,
+    DpkgInstallFile(PathBuf),
+    Download {
+        url: String,
+        dest: PathBuf,
+    },
 }
 
 /// Risposte statiche del mock alle query di stato.
@@ -43,6 +53,10 @@ pub struct MockConfig {
     pub path_exists: bool,
     pub owner: OwnerId,
     pub dir_empty: bool,
+    /// Pacchetti che `dpkg_is_installed` considera già installati.
+    pub installed_packages: HashSet<String>,
+    /// Versione riportata da `wkhtmltopdf_version` (None = non installato).
+    pub wk_version: Option<String>,
 }
 
 impl Default for MockConfig {
@@ -52,6 +66,8 @@ impl Default for MockConfig {
             path_exists: false,
             owner: OwnerId { uid: 0, gid: 0 },
             dir_empty: true,
+            installed_packages: HashSet::new(),
+            wk_version: None,
         }
     }
 }
@@ -138,6 +154,59 @@ impl SystemOps for MockSystemOps {
     }
     fn rmdir(&self, path: &Path) -> Result<(), StepError> {
         self.record(Op::Rmdir(path.to_path_buf()));
+        Ok(())
+    }
+
+    fn dpkg_is_installed(&self, pkg: &str) -> bool {
+        self.cfg.installed_packages.contains(pkg)
+    }
+    fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        self.record(Op::AptInstall(pkgs.iter().map(|s| s.to_string()).collect()));
+        Ok(())
+    }
+    fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        self.record(Op::AptPurge(pkgs.iter().map(|s| s.to_string()).collect()));
+        Ok(())
+    }
+    fn apt_autoremove(&self) -> Result<(), StepError> {
+        self.record(Op::AptAutoremove);
+        Ok(())
+    }
+    fn apt_fix_broken(&self) -> Result<(), StepError> {
+        self.record(Op::AptFixBroken);
+        Ok(())
+    }
+    fn dpkg_install_file(&self, path: &Path) -> Result<(), StepError> {
+        self.record(Op::DpkgInstallFile(path.to_path_buf()));
+        Ok(())
+    }
+    fn wkhtmltopdf_version(&self) -> Option<String> {
+        self.cfg.wk_version.clone()
+    }
+}
+
+/// Downloader mock: scrive `bytes` in `dest` (per far calcolare uno SHA-256
+/// reale nei test) e registra il download nel log condiviso.
+pub struct MockDownloader {
+    bytes: Vec<u8>,
+    log: OpLog,
+}
+
+impl MockDownloader {
+    pub fn new(bytes: Vec<u8>, log: OpLog) -> Self {
+        MockDownloader { bytes, log }
+    }
+}
+
+impl Downloader for MockDownloader {
+    fn download(&self, url: &str, dest: &Path) -> Result<(), StepError> {
+        std::fs::write(dest, &self.bytes).map_err(|e| StepError::io(dest, e))?;
+        if let Ok(mut entries) = self.log.lock() {
+            entries.push(Op::Download {
+                url: url.to_string(),
+                dest: dest.to_path_buf(),
+            });
+        }
         Ok(())
     }
 }

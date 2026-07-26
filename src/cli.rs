@@ -63,4 +63,9 @@ pub struct Cli {
     /// Non muta il sistema: risolve la config e simula, senza effetti reali.
     #[arg(long)]
     pub dry_run: bool,
+
+    /// Rollback aggressivo: purga anche le utility comuni (git/curl/wget/…) e i
+    /// pacchetti pesanti. Di default il rollback le lascia installate.
+    #[arg(long)]
+    pub aggressive_rollback: bool,
 }

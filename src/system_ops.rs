@@ -56,6 +56,22 @@ pub trait SystemOps {
     fn chmod(&self, path: &Path, mode: u32) -> Result<(), StepError>;
     fn mkdir(&self, path: &Path) -> Result<(), StepError>;
     fn rmdir(&self, path: &Path) -> Result<(), StepError>;
+
+    // --- apt / dpkg (Fase 4) -------------------------------------------------
+    /// `true` se il pacchetto risulta `install ok installed` a `dpkg-query`.
+    fn dpkg_is_installed(&self, pkg: &str) -> bool;
+    /// `apt-get install -y --no-install-recommends <pkgs>` (idempotente).
+    fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError>;
+    /// `apt-get purge -y <pkgs>`.
+    fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError>;
+    /// `apt-get autoremove -y`.
+    fn apt_autoremove(&self) -> Result<(), StepError>;
+    /// `apt-get install -f -y` (risolve dipendenze rotte dopo `dpkg -i`).
+    fn apt_fix_broken(&self) -> Result<(), StepError>;
+    /// `dpkg -i <path>`.
+    fn dpkg_install_file(&self, path: &Path) -> Result<(), StepError>;
+    /// Versione di `wkhtmltopdf` installata (es. `"0.12.6.1"`), o `None`.
+    fn wkhtmltopdf_version(&self) -> Option<String>;
 }
 
 /// Implementazione reale: esegue i comandi di sistema.
@@ -68,15 +84,23 @@ impl RealSystemOps {
     }
 }
 
-/// Esegue un comando esterno mappando l'esito su [`StepError::CommandFailed`].
-fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
+/// Esegue un comando esterno (con eventuali env) mappando l'esito su
+/// [`StepError::CommandFailed`].
+fn run_command_with_env(
+    program: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(), StepError> {
     let rendered = format!("{program} {}", args.join(" "));
-    let output = Command::new(program).args(args).output().map_err(|e| {
-        StepError::CommandFailed {
-            command: rendered.clone(),
-            status: "spawn-failed".to_string(),
-            stderr: e.to_string(),
-        }
+    let mut command = Command::new(program);
+    command.args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().map_err(|e| StepError::CommandFailed {
+        command: rendered.clone(),
+        status: "spawn-failed".to_string(),
+        stderr: e.to_string(),
     })?;
     if output.status.success() {
         Ok(())
@@ -91,6 +115,24 @@ fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
             stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         })
     }
+}
+
+/// Esegue un comando esterno senza env aggiuntivi.
+fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
+    run_command_with_env(program, args, &[])
+}
+
+/// Esegue `apt-get` con l'ambiente non-interattivo (niente prompt tzdata /
+/// needrestart), come il Bash originale.
+fn run_apt(args: &[&str]) -> Result<(), StepError> {
+    run_command_with_env(
+        "apt-get",
+        args,
+        &[
+            ("DEBIAN_FRONTEND", "noninteractive"),
+            ("NEEDRESTART_MODE", "a"),
+        ],
+    )
 }
 
 /// Converte un `Errno` di nix in `io::Error` per allegarlo a `StepError::Io`.
@@ -192,4 +234,95 @@ impl SystemOps for RealSystemOps {
     fn rmdir(&self, path: &Path) -> Result<(), StepError> {
         std::fs::remove_dir(path).map_err(|e| StepError::io(path, e))
     }
+
+    fn dpkg_is_installed(&self, pkg: &str) -> bool {
+        match Command::new("dpkg-query")
+            .args(["-W", "-f=${Status}", pkg])
+            .output()
+        {
+            Ok(out) if out.status.success() => {
+                String::from_utf8_lossy(&out.stdout).contains("install ok installed")
+            }
+            _ => false,
+        }
+    }
+
+    fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        let mut args = vec!["install", "-y", "--no-install-recommends"];
+        args.extend_from_slice(pkgs);
+        run_apt(&args)
+    }
+
+    fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        let mut args = vec!["purge", "-y"];
+        args.extend_from_slice(pkgs);
+        run_apt(&args)
+    }
+
+    fn apt_autoremove(&self) -> Result<(), StepError> {
+        run_apt(&["autoremove", "-y"])
+    }
+
+    fn apt_fix_broken(&self) -> Result<(), StepError> {
+        run_apt(&["install", "-f", "-y"])
+    }
+
+    fn dpkg_install_file(&self, path: &Path) -> Result<(), StepError> {
+        let rendered = path.to_string_lossy();
+        run_command("dpkg", &["-i", &rendered])
+    }
+
+    fn wkhtmltopdf_version(&self) -> Option<String> {
+        let out = Command::new("wkhtmltopdf").arg("--version").output().ok()?;
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Primo token che sembra una versione (inizia con cifra, ≥ 2 punti).
+        text.split_whitespace()
+            .find(|tok| {
+                tok.chars().next().is_some_and(|c| c.is_ascii_digit())
+                    && tok.matches('.').count() >= 2
+            })
+            .map(|s| s.to_string())
+    }
+}
+
+/// Confine per i download di rete, separato da [`SystemOps`] così è mockabile
+/// nei test senza toccare la rete.
+pub trait Downloader {
+    /// Scarica `url` in `dest`. La verifica di integrità (checksum) è a carico
+    /// del chiamante (vedi [`sha256_hex`]): il download NON è fidato di per sé.
+    fn download(&self, url: &str, dest: &Path) -> Result<(), StepError>;
+}
+
+/// Downloader reale via `wget` (già presente tra i prerequisiti bootstrap).
+#[derive(Debug, Default)]
+pub struct RealDownloader;
+
+impl RealDownloader {
+    pub fn new() -> Self {
+        Self
+    }
+}
+
+impl Downloader for RealDownloader {
+    fn download(&self, url: &str, dest: &Path) -> Result<(), StepError> {
+        let rendered = dest.to_string_lossy();
+        run_command("wget", &["-q", "-O", &rendered, url])
+    }
+}
+
+/// Calcola lo SHA-256 di un file come stringa esadecimale minuscola.
+pub fn sha256_hex(path: &Path) -> Result<String, StepError> {
+    use sha2::{Digest, Sha256};
+    let mut file = std::fs::File::open(path).map_err(|e| StepError::io(path, e))?;
+    let mut hasher = Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| StepError::io(path, e))?;
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect())
 }

@@ -42,6 +42,9 @@ pub struct Context {
     pub with_nginx: bool,
     /// Se `true`, `run`/`undo` non devono mutare il sistema né persistere stato.
     pub dry_run: bool,
+    /// Se `true`, il rollback purga anche pacchetti che di norma lascerebbe
+    /// (utility bootstrap comuni, PostgreSQL). Default `false`.
+    pub aggressive_rollback: bool,
     /// Percorso del file di stato persistito. Configurabile per i test.
     pub state_path: PathBuf,
     /// Info OS rilevate dai preflight checks; popolate in `main` dopo `check_os`
@@ -66,6 +69,7 @@ impl Context {
             odoo_logfile: config.odoo_logfile,
             with_nginx: config.with_nginx,
             dry_run,
+            aggressive_rollback: false,
             state_path,
             os_info: None,
         }
