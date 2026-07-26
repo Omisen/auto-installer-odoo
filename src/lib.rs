@@ -9,6 +9,7 @@
 //! Le regole invarianti sono descritte in `CLAUDE.md` e nei doc-comment di
 //! [`step::Step`] ed [`engine::Installer`].
 
+pub mod checks;
 pub mod cli;
 pub mod config;
 pub mod context;

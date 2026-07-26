@@ -5,3 +5,6 @@ docs/*.md
 
 # Rust build artifacts
 /target
+
+# Clone locale della GitHub wiki (repo git separato: *.wiki.git)
+/wiki

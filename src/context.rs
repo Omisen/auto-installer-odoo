@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 
+use crate::checks::OsInfo;
 use crate::config::ResolvedConfig;
 use crate::secret::Secret;
 
@@ -40,6 +41,9 @@ pub struct Context {
     pub dry_run: bool,
     /// Percorso del file di stato persistito. Configurabile per i test.
     pub state_path: PathBuf,
+    /// Info OS rilevate dai preflight checks; popolate in `main` dopo `check_os`
+    /// e usate dalle fasi successive (es. wkhtmltopdf). `None` finché non note.
+    pub os_info: Option<OsInfo>,
 }
 
 impl Context {
@@ -59,6 +63,7 @@ impl Context {
             with_nginx: config.with_nginx,
             dry_run,
             state_path,
+            os_info: None,
         }
     }
 

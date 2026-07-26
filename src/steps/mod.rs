@@ -5,3 +5,4 @@
 //! [`noop::NoopStep`], usato per testare il motore end-to-end.
 
 pub mod noop;
+pub mod prepare_opt_root;

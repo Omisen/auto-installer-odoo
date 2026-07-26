@@ -10,11 +10,15 @@ use std::path::PathBuf;
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 
+use odoo_installer::checks::{self, OsInfo};
 use odoo_installer::cli::Cli;
 use odoo_installer::config::{self, AdminConfirm, RawConfig, ResolvedConfig};
 use odoo_installer::context::Context;
+use odoo_installer::engine::Installer;
 use odoo_installer::prompt;
 use odoo_installer::state::DEFAULT_STATE_PATH;
+use odoo_installer::step::Step;
+use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
 
 fn main() -> Result<()> {
     init_tracing();
@@ -59,10 +63,43 @@ fn main() -> Result<()> {
     }
 
     let state_path = PathBuf::from(DEFAULT_STATE_PATH);
-    let ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
+    let mut ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
 
     print_configuration(&ctx);
+
+    // 1) Preflight checks NON mutanti: falliscono prima di ogni mutazione.
+    let os_info = run_preflight_checks(&ctx)?;
+    ctx.os_info = Some(os_info);
+
+    // 2) Step reversibili. Per ora l'unico step reale è PrepareOptRoot.
+    let mut steps: Vec<Box<dyn Step>> = vec![Box::new(PrepareOptRoot::new())];
+    let mut installer = Installer::new();
+    installer.execute(&mut steps, &ctx).map_err(|e| {
+        // Il rollback è già stato eseguito dentro `execute`.
+        anyhow!(e)
+    })?;
+
+    tracing::info!("preparazione completata");
     Ok(())
+}
+
+/// Esegue i preflight checks non mutanti nell'ordine del Bash. Ritorna le info
+/// OS da propagare nel [`Context`]. Un fallimento ferma tutto prima di qualsiasi
+/// mutazione.
+fn run_preflight_checks(ctx: &Context) -> Result<OsInfo> {
+    checks::check_root().map_err(|e| anyhow!(e))?;
+    checks::check_sudo_user().map_err(|e| anyhow!(e))?;
+    let os_info = checks::check_os().map_err(|e| anyhow!(e))?;
+
+    let required_gb = std::env::var("MIN_DISK_GB")
+        .ok()
+        .and_then(|s| s.parse::<u64>().ok())
+        .unwrap_or(checks::DEFAULT_MIN_DISK_GB);
+    checks::check_disk(&ctx.odoo_home, required_gb).map_err(|e| anyhow!(e))?;
+
+    checks::check_ports(ctx.port, ctx.with_nginx).map_err(|e| anyhow!(e))?;
+    checks::check_commands().map_err(|e| anyhow!(e))?;
+    Ok(os_info)
 }
 
 /// Stampa il riepilogo della configurazione finale (replica di
