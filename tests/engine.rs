@@ -13,9 +13,13 @@ use odoo_installer::step::Step;
 use odoo_installer::steps::noop::{NoopStep, UndoLog};
 
 /// Context non-dry con file di stato in una tempdir (niente root, niente `/opt`).
+/// Il motore usa solo `dry_run` e `state_path`; il resto è irrilevante qui.
 fn ctx_with_state(dir: &tempfile::TempDir) -> Context {
-    Context::new("18.0", "odoo", "/opt/odoo", "odoo", /* dry_run */ false)
-        .with_state_path(dir.path().join(".installer-state.json"))
+    Context {
+        dry_run: false,
+        ..Default::default()
+    }
+    .with_state_path(dir.path().join(".installer-state.json"))
 }
 
 /// Invariante 2: il rollback esegue gli `undo` dall'ultimo completato al primo.

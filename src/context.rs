@@ -1,28 +1,41 @@
 //! Il [`Context`]: configurazione risolta passata a ogni step.
 //!
-//! Gli step leggono **solo** da qui: non sanno se i valori vengano da prompt
-//! interattivi (`inquire`, Fase 11), da un file `.env` o da flag CLI (Fase 1).
-//! Questo disaccoppiamento è ciò che permette allo stesso installer di girare
-//! interattivo o non-interattivo con un unico flusso.
+//! Gli step leggono **solo** da qui: non sanno se i valori vengano da flag CLI,
+//! da un file `.env` o da prompt interattivi (la risoluzione avviene in
+//! [`crate::config`]). Questo disaccoppiamento è ciò che permette allo stesso
+//! installer di girare interattivo o non-interattivo con un unico flusso.
 
 use std::path::PathBuf;
 
-/// Configurazione risolta dell'installazione.
+use crate::config::ResolvedConfig;
+use crate::secret::Secret;
+
+/// Configurazione risolta dell'installazione + stato runtime del motore.
 ///
-/// In Fase 0 i campi sono un set minimo di placeholder costruito a mano; il
-/// parsing `.env`/CLI arriva in Fase 1. Il campo [`Context::state_path`] rende
-/// configurabile la posizione del file di stato, così i test non toccano
-/// `/opt/odoo` né richiedono root.
-#[derive(Debug, Clone)]
+/// La `admin_passwd` è un [`Secret`]: il suo `Debug` è redatto, quindi un
+/// eventuale log di `Context` non espone la password.
+#[derive(Debug, Clone, Default)]
 pub struct Context {
-    /// Versione di Odoo da installare (es. `"18.0"`).
+    /// Versione Odoo completa (es. `"18.0"`).
     pub odoo_version: String,
+    /// Versione Odoo short (es. `"18"`), per nomi di file/unit.
+    pub odoo_version_short: String,
     /// Utente di sistema che possiederà l'installazione.
     pub odoo_user: String,
-    /// Home dell'installazione (tipicamente `/opt/odoo`).
+    /// Utente PostgreSQL.
+    pub db_user: String,
+    /// Home dell'installazione: costante `/opt/odoo`.
     pub odoo_home: PathBuf,
+    /// Porta HTTP di Odoo.
+    pub port: u16,
     /// Nome del database Odoo.
     pub db_name: String,
+    /// Directory di installazione (sotto `odoo_home`).
+    pub install_dir: PathBuf,
+    /// Password admin Odoo (redatta nei log).
+    pub admin_passwd: Secret,
+    /// Se configurare Nginx come reverse proxy.
+    pub with_nginx: bool,
     /// Se `true`, `run`/`undo` non devono mutare il sistema né persistere stato.
     pub dry_run: bool,
     /// Percorso del file di stato persistito. Configurabile per i test.
@@ -30,22 +43,22 @@ pub struct Context {
 }
 
 impl Context {
-    /// Costruisce un `Context` usando il path di stato di default
-    /// ([`crate::state::DEFAULT_STATE_PATH`]).
-    pub fn new(
-        odoo_version: impl Into<String>,
-        odoo_user: impl Into<String>,
-        odoo_home: impl Into<PathBuf>,
-        db_name: impl Into<String>,
-        dry_run: bool,
-    ) -> Self {
+    /// Costruisce il `Context` a partire dalla config risolta, aggiungendo lo
+    /// stato runtime del motore (`dry_run`, `state_path`).
+    pub fn from_resolved(config: ResolvedConfig, dry_run: bool, state_path: PathBuf) -> Self {
         Context {
-            odoo_version: odoo_version.into(),
-            odoo_user: odoo_user.into(),
-            odoo_home: odoo_home.into(),
-            db_name: db_name.into(),
+            odoo_version: config.version,
+            odoo_version_short: config.version_short,
+            odoo_user: config.odoo_user,
+            db_user: config.db_user,
+            odoo_home: config.odoo_home,
+            port: config.port,
+            db_name: config.db_name,
+            install_dir: config.install_dir,
+            admin_passwd: config.admin_passwd,
+            with_nginx: config.with_nginx,
             dry_run,
-            state_path: PathBuf::from(crate::state::DEFAULT_STATE_PATH),
+            state_path,
         }
     }
 
