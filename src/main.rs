@@ -24,6 +24,8 @@ use odoo_installer::steps::create_database::CreateDatabase;
 use odoo_installer::steps::create_db_role::CreateDbRole;
 use odoo_installer::steps::create_odoo_user::CreateOdooUser;
 use odoo_installer::steps::create_virtualenv::CreateVirtualenv;
+use odoo_installer::steps::generate_config::GenerateConfig;
+use odoo_installer::steps::initialize_odoo_database::InitializeOdooDatabase;
 use odoo_installer::steps::install_python_requirements::InstallPythonRequirements;
 use odoo_installer::steps::install_wkhtmltopdf::InstallWkhtmltopdf;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
@@ -102,6 +104,10 @@ fn main() -> Result<()> {
         Box::new(CloneOdooRepo::new()),
         Box::new(CreateVirtualenv::new()),
         Box::new(InstallPythonRequirements::new()),
+        // Config + init schema. L'undo di init è no-op: la pulizia dello schema
+        // è coperta dal dropdb di CreateDatabase (più a valle nella catena inversa).
+        Box::new(GenerateConfig::new()),
+        Box::new(InitializeOdooDatabase::new()),
     ];
     let mut installer = Installer::new();
     installer.execute(&mut steps, &ctx).map_err(|e| {

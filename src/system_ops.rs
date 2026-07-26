@@ -140,6 +140,29 @@ pub trait SystemOps {
     fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError>;
     /// Legge un file di testo (es. requirements.txt).
     fn read_to_string(&self, path: &Path) -> Result<String, StepError>;
+
+    // --- config + init DB (Fase 7) -------------------------------------------
+    /// Scrive `content` in un file **privato** (mode `0600`, owned root): la
+    /// master password non è mai leggibile da altri utenti in nessun istante.
+    fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError>;
+    /// Sposta `src` su `dst` (rename, con fallback copy+remove cross-device).
+    fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError>;
+    /// Copia `src` in `dst` (per il backup).
+    fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), StepError>;
+    /// Rimuove un file. Idempotente (`rm -f`): assente → no-op.
+    fn remove_file(&self, path: &Path) -> Result<(), StepError>;
+    /// `true` se il DB ha già lo schema Odoo (tabella `ir_module_module`).
+    fn pg_db_initialized(&self, db: &str) -> Result<bool, StepError>;
+    /// `sudo -u <user> -- <python> <odoo_bin> -c <conf> -d <db> -i base
+    /// --without-demo=all --stop-after-init`.
+    fn odoo_init_base(
+        &self,
+        user: &str,
+        python: &Path,
+        odoo_bin: &Path,
+        conf: &Path,
+        db: &str,
+    ) -> Result<(), StepError>;
 }
 
 /// Implementazione reale: esegue i comandi di sistema.
@@ -653,6 +676,77 @@ impl SystemOps for RealSystemOps {
 
     fn read_to_string(&self, path: &Path) -> Result<String, StepError> {
         std::fs::read_to_string(path).map_err(|e| StepError::io(path, e))
+    }
+
+    fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(path)
+            .map_err(|e| StepError::io(path, e))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| StepError::io(path, e))
+    }
+
+    fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError> {
+        if std::fs::rename(src, dst).is_ok() {
+            return Ok(());
+        }
+        // Fallback cross-device: copia poi rimuove la sorgente.
+        std::fs::copy(src, dst).map_err(|e| StepError::io(dst, e))?;
+        std::fs::remove_file(src).map_err(|e| StepError::io(src, e))?;
+        Ok(())
+    }
+
+    fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), StepError> {
+        std::fs::copy(src, dst).map_err(|e| StepError::io(dst, e))?;
+        Ok(())
+    }
+
+    fn remove_file(&self, path: &Path) -> Result<(), StepError> {
+        match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(StepError::io(path, e)),
+        }
+    }
+
+    fn pg_db_initialized(&self, db: &str) -> Result<bool, StepError> {
+        let sql = "SELECT 1 FROM information_schema.tables \
+                   WHERE table_schema='public' AND table_name='ir_module_module';";
+        let out = capture_command(
+            "sudo",
+            &["-Hiu", "postgres", "--", "psql", "-d", db, "-tAc", sql],
+        )?;
+        Ok(!out.trim().is_empty())
+    }
+
+    fn odoo_init_base(
+        &self,
+        user: &str,
+        python: &Path,
+        odoo_bin: &Path,
+        conf: &Path,
+        db: &str,
+    ) -> Result<(), StepError> {
+        let python = python.to_string_lossy();
+        let odoo_bin = odoo_bin.to_string_lossy();
+        let conf = conf.to_string_lossy();
+        run_command(
+            "sudo",
+            &[
+                "-u", user, "--", &python, &odoo_bin,
+                "-c", &conf,
+                "-d", db,
+                "-i", "base",
+                "--without-demo=all",
+                "--stop-after-init",
+            ],
+        )
     }
 }
 

@@ -10,6 +10,8 @@ pub mod create_database;
 pub mod create_db_role;
 pub mod create_odoo_user;
 pub mod create_virtualenv;
+pub mod generate_config;
+pub mod initialize_odoo_database;
 pub mod install_python_requirements;
 pub mod install_wkhtmltopdf;
 pub mod noop;

@@ -81,6 +81,20 @@ pub enum Op {
         target: PathBuf,
     },
     CreateVenv(PathBuf),
+    WritePrivateFile(PathBuf),
+    MoveFile {
+        src: PathBuf,
+        dst: PathBuf,
+    },
+    CopyFile {
+        src: PathBuf,
+        dst: PathBuf,
+    },
+    RemoveFile(PathBuf),
+    OdooInitBase {
+        conf: PathBuf,
+        db: String,
+    },
 }
 
 /// Risposte statiche del mock alle query di stato.
@@ -112,6 +126,11 @@ pub struct MockConfig {
     pub venv_available: bool,
     /// Contenuto di requirements.txt (None → read_to_string fallisce).
     pub requirements_content: Option<String>,
+    /// Schema Odoo già presente nel DB?
+    pub db_initialized: bool,
+    /// Se `true`, le operazioni su file (write/move/copy/remove) toccano il
+    /// filesystem reale (usare solo con path in una tempdir). chown resta finto.
+    pub real_fs: bool,
 }
 
 impl Default for MockConfig {
@@ -133,6 +152,8 @@ impl Default for MockConfig {
             venv_exists: false,
             venv_available: true,
             requirements_content: None,
+            db_initialized: false,
+            real_fs: false,
         }
     }
 }
@@ -150,6 +171,8 @@ pub struct MockSystemOps {
     enabled: Cell<bool>,
     // Conteggio chiamate a git_clone (per simulare i fallimenti iniziali).
     git_clone_calls: Cell<u32>,
+    // Schema DB: flippa a true dopo odoo_init_base.
+    db_initialized: Cell<bool>,
 }
 
 impl MockSystemOps {
@@ -163,12 +186,14 @@ impl MockSystemOps {
     pub fn with_log(cfg: MockConfig, log: OpLog) -> Self {
         let active = Cell::new(cfg.service_active);
         let enabled = Cell::new(cfg.service_enabled);
+        let db_initialized = Cell::new(cfg.db_initialized);
         MockSystemOps {
             log,
             cfg,
             active,
             enabled,
             git_clone_calls: Cell::new(0),
+            db_initialized,
         }
     }
 
@@ -183,8 +208,12 @@ impl SystemOps for MockSystemOps {
     fn user_exists(&self, _user: &str) -> bool {
         self.cfg.user_exists
     }
-    fn path_exists(&self, _path: &Path) -> bool {
-        self.cfg.path_exists
+    fn path_exists(&self, path: &Path) -> bool {
+        if self.cfg.real_fs {
+            path.exists()
+        } else {
+            self.cfg.path_exists
+        }
     }
     fn owner_of(&self, _path: &Path) -> Result<OwnerId, StepError> {
         Ok(self.cfg.owner)
@@ -224,6 +253,11 @@ impl SystemOps for MockSystemOps {
             path: path.to_path_buf(),
             mode,
         });
+        if self.cfg.real_fs {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
+                .map_err(|e| StepError::io(path, e))?;
+        }
         Ok(())
     }
     fn mkdir(&self, path: &Path) -> Result<(), StepError> {
@@ -391,9 +425,79 @@ impl SystemOps for MockSystemOps {
         Ok(())
     }
     fn read_to_string(&self, path: &Path) -> Result<String, StepError> {
+        if self.cfg.real_fs {
+            return std::fs::read_to_string(path).map_err(|e| StepError::io(path, e));
+        }
         self.cfg.requirements_content.clone().ok_or_else(|| {
             StepError::io(path, std::io::Error::from(std::io::ErrorKind::NotFound))
         })
+    }
+
+    fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
+        self.record(Op::WritePrivateFile(path.to_path_buf()));
+        if self.cfg.real_fs {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create(true)
+                .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .map_err(|e| StepError::io(path, e))?;
+            f.write_all(content.as_bytes())
+                .map_err(|e| StepError::io(path, e))?;
+        }
+        Ok(())
+    }
+    fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError> {
+        self.record(Op::MoveFile {
+            src: src.to_path_buf(),
+            dst: dst.to_path_buf(),
+        });
+        if self.cfg.real_fs {
+            std::fs::rename(src, dst).map_err(|e| StepError::io(dst, e))?;
+        }
+        Ok(())
+    }
+    fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), StepError> {
+        self.record(Op::CopyFile {
+            src: src.to_path_buf(),
+            dst: dst.to_path_buf(),
+        });
+        if self.cfg.real_fs {
+            std::fs::copy(src, dst).map_err(|e| StepError::io(dst, e))?;
+        }
+        Ok(())
+    }
+    fn remove_file(&self, path: &Path) -> Result<(), StepError> {
+        self.record(Op::RemoveFile(path.to_path_buf()));
+        if self.cfg.real_fs {
+            match std::fs::remove_file(path) {
+                Ok(()) => {}
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                Err(e) => return Err(StepError::io(path, e)),
+            }
+        }
+        Ok(())
+    }
+    fn pg_db_initialized(&self, _db: &str) -> Result<bool, StepError> {
+        Ok(self.db_initialized.get())
+    }
+    fn odoo_init_base(
+        &self,
+        _user: &str,
+        _python: &Path,
+        _odoo_bin: &Path,
+        conf: &Path,
+        db: &str,
+    ) -> Result<(), StepError> {
+        self.record(Op::OdooInitBase {
+            conf: conf.to_path_buf(),
+            db: db.to_string(),
+        });
+        self.db_initialized.set(true);
+        Ok(())
     }
 }
 

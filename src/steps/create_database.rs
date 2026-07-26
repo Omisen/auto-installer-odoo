@@ -57,6 +57,14 @@ impl Step for CreateDatabase {
         } else {
             PreState::Untracked
         };
+
+        // Pubblica il risultato per InitializeOdooDatabase (Fase 7): l'init è
+        // lecito SOLO se il DB non è preesistente. Preexisting → false = rifiuta.
+        ctx.db_created_by_us.store(
+            self.prestate != PreState::Preexisting,
+            std::sync::atomic::Ordering::SeqCst,
+        );
+
         info!(db = %ctx.db_name, prestate = ?self.prestate, "snapshot create-database");
         Ok(())
     }

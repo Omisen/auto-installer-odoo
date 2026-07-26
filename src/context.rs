@@ -6,6 +6,8 @@
 //! installer di girare interattivo o non-interattivo con un unico flusso.
 
 use std::path::PathBuf;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 use crate::checks::OsInfo;
 use crate::config::ResolvedConfig;
@@ -52,6 +54,12 @@ pub struct Context {
     /// Info OS rilevate dai preflight checks; popolate in `main` dopo `check_os`
     /// e usate dalle fasi successive (es. wkhtmltopdf). `None` finché non note.
     pub os_info: Option<OsInfo>,
+    /// Risultato condiviso pubblicato da `CreateDatabase` e letto da
+    /// `InitializeOdooDatabase`: `true` = il DB è nostro (non preesistente),
+    /// quindi è lecito inizializzarne lo schema. **Default `false`** = rifiuta
+    /// (safe: senza propagazione, l'init è vietato). Interior mutability così
+    /// può essere impostato da uno step che riceve `&Context`.
+    pub db_created_by_us: Arc<AtomicBool>,
 }
 
 impl Context {
@@ -75,6 +83,7 @@ impl Context {
             aggressive_rollback: false,
             state_path,
             os_info: None,
+            db_created_by_us: Arc::new(AtomicBool::new(false)),
         }
     }
 
