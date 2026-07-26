@@ -111,12 +111,23 @@ fn full_chain_failure_returns_to_virgin_state() {
 
     let ctx = ctx(dir.path().join("state.json"), /* aggressive */ true);
     let mut installer = Installer::new();
-    assert!(installer.execute(&mut steps, &ctx).is_err(), "il fallimento innesca il rollback");
+    assert!(
+        installer.execute(&mut steps, &ctx).is_err(),
+        "il fallimento innesca il rollback"
+    );
 
-    assert_eq!(model.snapshot(), initial, "dopo il rollback il sistema è tornato al vergine");
+    assert_eq!(
+        model.snapshot(),
+        initial,
+        "dopo il rollback il sistema è tornato al vergine"
+    );
     // Il .bashrc dell'utente è byte-per-byte come prima.
     assert_eq!(
-        model.snapshot().file_contents.get(&PathBuf::from(BASHRC)).map(String::as_str),
+        model
+            .snapshot()
+            .file_contents
+            .get(&PathBuf::from(BASHRC))
+            .map(String::as_str),
         Some(BASHRC_ORIG)
     );
 }
@@ -136,7 +147,11 @@ fn mid_chain_failure_returns_to_virgin_state() {
     let mut installer = Installer::new();
     assert!(installer.execute(&mut steps, &ctx).is_err());
 
-    assert_eq!(model.snapshot(), initial, "utente/deps/postgres/ruolo/DB creati devono sparire");
+    assert_eq!(
+        model.snapshot(),
+        initial,
+        "utente/deps/postgres/ruolo/DB creati devono sparire"
+    );
 }
 
 #[test]
@@ -159,14 +174,32 @@ fn preexisting_resources_survive_rollback() {
     let ctx = ctx(dir.path().join("state.json"), false);
     let mut installer = Installer::new();
     let result = installer.execute(&mut steps, &ctx);
-    assert!(result.is_err(), "l'hard-stop init deve fermare la catena su DB preesistente");
+    assert!(
+        result.is_err(),
+        "l'hard-stop init deve fermare la catena su DB preesistente"
+    );
 
     let final_state = model.snapshot();
     // Tutto tornato com'era.
-    assert_eq!(final_state, initial, "le risorse preesistenti restano, le nostre spariscono");
+    assert_eq!(
+        final_state, initial,
+        "le risorse preesistenti restano, le nostre spariscono"
+    );
     // Verifiche esplicite delle protezioni critiche a livello di catena:
-    assert!(final_state.pg_dbs.contains("odoo"), "il DB del cliente NON deve essere droppato");
-    assert!(final_state.packages.contains("postgresql"), "PostgreSQL preinstallato resta");
-    assert!(final_state.svc_active.contains("postgresql"), "il servizio già attivo resta attivo (D4)");
-    assert!(final_state.paths.contains(&PathBuf::from(HOME)), "/opt/odoo preesistente resta");
+    assert!(
+        final_state.pg_dbs.contains("odoo"),
+        "il DB del cliente NON deve essere droppato"
+    );
+    assert!(
+        final_state.packages.contains("postgresql"),
+        "PostgreSQL preinstallato resta"
+    );
+    assert!(
+        final_state.svc_active.contains("postgresql"),
+        "il servizio già attivo resta attivo (D4)"
+    );
+    assert!(
+        final_state.paths.contains(&PathBuf::from(HOME)),
+        "/opt/odoo preesistente resta"
+    );
 }

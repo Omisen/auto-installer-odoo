@@ -16,9 +16,7 @@ use std::sync::{Arc, Mutex};
 
 use odoo_installer::error::StepError;
 use odoo_installer::progress::ProgressReporter;
-use odoo_installer::system_ops::{
-    Downloader, OdooSourceState, OwnerId, SystemOps, UserSpec,
-};
+use odoo_installer::system_ops::{Downloader, OdooSourceState, OwnerId, SystemOps, UserSpec};
 
 /// Operazione mutante registrata dal mock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -507,7 +505,9 @@ impl SystemOps for MockSystemOps {
             target: target.to_path_buf(),
         });
         if self.cfg.tarball_fails {
-            Err(StepError::Precondition("tarball fallito (simulato)".to_string()))
+            Err(StepError::Precondition(
+                "tarball fallito (simulato)".to_string(),
+            ))
         } else {
             Ok(())
         }
@@ -526,9 +526,10 @@ impl SystemOps for MockSystemOps {
         if self.cfg.real_fs {
             return std::fs::read_to_string(path).map_err(|e| StepError::io(path, e));
         }
-        self.cfg.requirements_content.clone().ok_or_else(|| {
-            StepError::io(path, std::io::Error::from(std::io::ErrorKind::NotFound))
-        })
+        self.cfg
+            .requirements_content
+            .clone()
+            .ok_or_else(|| StepError::io(path, std::io::Error::from(std::io::ErrorKind::NotFound)))
     }
 
     fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {

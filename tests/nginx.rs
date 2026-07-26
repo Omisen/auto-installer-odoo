@@ -79,10 +79,13 @@ fn default_site_removed_then_restored() {
 
     let ops = ops_of(&log);
     // run rimuove il default site.
-    assert!(ops.iter().any(|o| matches!(o, Op::RemoveSymlink(p) if *p == default_site())));
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::RemoveSymlink(p) if *p == default_site())));
     // undo lo RIPRISTINA (ricrea il symlink default).
     assert!(
-        ops.iter().any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site())),
+        ops.iter()
+            .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site())),
         "undo deve ripristinare il default site: {ops:?}"
     );
 }
@@ -103,9 +106,12 @@ fn absent_default_site_is_not_invented() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(!ops.iter().any(|o| matches!(o, Op::RemoveSymlink(p) if *p == default_site())));
+    assert!(!ops
+        .iter()
+        .any(|o| matches!(o, Op::RemoveSymlink(p) if *p == default_site())));
     assert!(
-        !ops.iter().any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site())),
+        !ops.iter()
+            .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site())),
         "non inventiamo un default site che non c'era"
     );
 }
@@ -130,9 +136,18 @@ fn firewall_undo_removes_only_the_delta() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(ops.contains(&Op::UfwAllow("443/tcp".to_string())), "apre solo il delta (443)");
-    assert!(!ops.contains(&Op::UfwAllow("80/tcp".to_string())), "80 c'era già: non riaperta");
-    assert!(ops.contains(&Op::UfwDelete("443/tcp".to_string())), "undo rimuove il delta");
+    assert!(
+        ops.contains(&Op::UfwAllow("443/tcp".to_string())),
+        "apre solo il delta (443)"
+    );
+    assert!(
+        !ops.contains(&Op::UfwAllow("80/tcp".to_string())),
+        "80 c'era già: non riaperta"
+    );
+    assert!(
+        ops.contains(&Op::UfwDelete("443/tcp".to_string())),
+        "undo rimuove il delta"
+    );
     assert!(
         !ops.contains(&Op::UfwDelete("80/tcp".to_string())),
         "MAI rimuovere una regola preesistente del cliente"
@@ -154,7 +169,10 @@ fn firewall_noop_when_ufw_inactive() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    assert!(ops_of(&log).is_empty(), "ufw inattivo → nessuna azione firewall");
+    assert!(
+        ops_of(&log).is_empty(),
+        "ufw inattivo → nessuna azione firewall"
+    );
 }
 
 // --- Reload / Install --------------------------------------------------------
@@ -170,9 +188,14 @@ fn reload_fails_on_invalid_config() {
     let c = ctx(true, false);
 
     step.snapshot(&c).expect("snapshot");
-    assert!(step.run(&c).is_err(), "non ricaricare una config che non passa nginx -t");
     assert!(
-        !ops_of(&log).iter().any(|o| matches!(o, Op::ServiceReload(_))),
+        step.run(&c).is_err(),
+        "non ricaricare una config che non passa nginx -t"
+    );
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|o| matches!(o, Op::ServiceReload(_))),
         "nessun reload di config rotta"
     );
 }
@@ -191,7 +214,10 @@ fn install_undo_does_not_purge_without_aggressive() {
     assert!(ops.iter().any(|o| matches!(o, Op::AptInstall(_))));
     assert!(ops.iter().any(|o| matches!(o, Op::ServiceStop(_))));
     assert!(ops.iter().any(|o| matches!(o, Op::ServiceDisable(_))));
-    assert!(!ops.iter().any(|o| matches!(o, Op::AptPurge(_))), "coerenza D3: no purge senza flag");
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::AptPurge(_))),
+        "coerenza D3: no purge senza flag"
+    );
 }
 
 #[test]

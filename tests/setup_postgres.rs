@@ -48,11 +48,26 @@ fn installed_but_stopped_starts_then_stops_no_purge() {
     };
     let ops = run_cycle(cfg, false);
 
-    assert!(has(&ops, |o| matches!(o, Op::ServiceStart(_))), "deve avviare");
-    assert!(has(&ops, |o| matches!(o, Op::ServiceStop(_))), "undo deve fermare (D4)");
-    assert!(!has(&ops, |o| matches!(o, Op::ServiceDisable(_))), "non disabilitare: era già enabled");
-    assert!(!has(&ops, |o| matches!(o, Op::AptInstall(_))), "già installato: non installare");
-    assert!(!has(&ops, |o| matches!(o, Op::AptPurge(_))), "mai purgare senza --aggressive-rollback");
+    assert!(
+        has(&ops, |o| matches!(o, Op::ServiceStart(_))),
+        "deve avviare"
+    );
+    assert!(
+        has(&ops, |o| matches!(o, Op::ServiceStop(_))),
+        "undo deve fermare (D4)"
+    );
+    assert!(
+        !has(&ops, |o| matches!(o, Op::ServiceDisable(_))),
+        "non disabilitare: era già enabled"
+    );
+    assert!(
+        !has(&ops, |o| matches!(o, Op::AptInstall(_))),
+        "già installato: non installare"
+    );
+    assert!(
+        !has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        "mai purgare senza --aggressive-rollback"
+    );
 }
 
 #[test]
@@ -66,17 +81,26 @@ fn all_absent_installs_enables_starts_then_reverts_no_purge() {
     // undo: stop + disable, ma NO purge (default).
     assert!(has(&ops, |o| matches!(o, Op::ServiceStop(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceDisable(_))));
-    assert!(!has(&ops, |o| matches!(o, Op::AptPurge(_))), "no purge senza flag");
+    assert!(
+        !has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        "no purge senza flag"
+    );
 }
 
 #[test]
 fn purge_only_with_aggressive_rollback() {
     // Stesso stato (tutto assente → installed CreatedByUs), due politiche.
     let without = run_cycle(MockConfig::default(), false);
-    assert!(!has(&without, |o| matches!(o, Op::AptPurge(_))), "senza flag: no purge");
+    assert!(
+        !has(&without, |o| matches!(o, Op::AptPurge(_))),
+        "senza flag: no purge"
+    );
 
     let with = run_cycle(MockConfig::default(), true);
-    assert!(has(&with, |o| matches!(o, Op::AptPurge(_))), "con --aggressive-rollback: purga");
+    assert!(
+        has(&with, |o| matches!(o, Op::AptPurge(_))),
+        "con --aggressive-rollback: purga"
+    );
     assert!(has(&with, |o| matches!(o, Op::AptAutoremove)));
 }
 
@@ -105,7 +129,10 @@ fn aggressive_purge_allowed_when_only_our_database() {
         ..Default::default()
     };
     let ops = run_cycle(cfg, true);
-    assert!(has(&ops, |o| matches!(o, Op::AptPurge(_))), "solo il nostro DB → purge consentito");
+    assert!(
+        has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        "solo il nostro DB → purge consentito"
+    );
 }
 
 #[test]
@@ -119,6 +146,12 @@ fn already_active_is_left_running() {
     };
     let ops = run_cycle(cfg, false);
 
-    assert!(!has(&ops, |o| matches!(o, Op::ServiceStop(_))), "un servizio già attivo va lasciato running");
-    assert!(!has(&ops, |o| matches!(o, Op::ServiceStart(_))), "già attivo: nessuno start");
+    assert!(
+        !has(&ops, |o| matches!(o, Op::ServiceStop(_))),
+        "un servizio già attivo va lasciato running"
+    );
+    assert!(
+        !has(&ops, |o| matches!(o, Op::ServiceStart(_))),
+        "già attivo: nessuno start"
+    );
 }

@@ -19,7 +19,12 @@ fn cli_base() -> RawConfig {
 }
 
 fn resolve(cli: &RawConfig, env: &RawConfig) -> Result<ResolvedConfig, ConfigError> {
-    ResolvedConfig::resolve(cli, env, &RawConfig::default(), /* interactive */ false)
+    ResolvedConfig::resolve(
+        cli,
+        env,
+        &RawConfig::default(),
+        /* interactive */ false,
+    )
 }
 
 // --- Cascata -----------------------------------------------------------------
@@ -152,7 +157,10 @@ fn env_parser_does_not_execute_command_substitution() {
     );
     assert_eq!(raw.odoo_user.as_deref(), Some("`whoami`"));
     // E soprattutto: il file-sentinella esiste ancora (niente esecuzione).
-    assert!(sentinel.exists(), "il parser .env NON deve eseguire comandi");
+    assert!(
+        sentinel.exists(),
+        "il parser .env NON deve eseguire comandi"
+    );
 }
 
 // --- Validazione -------------------------------------------------------------
@@ -169,7 +177,10 @@ fn invalid_version_is_typed_error() {
 
 #[test]
 fn port_out_of_range_is_typed_error() {
-    assert!(matches!(validate_port("0"), Err(ConfigError::InvalidPort(_))));
+    assert!(matches!(
+        validate_port("0"),
+        Err(ConfigError::InvalidPort(_))
+    ));
     assert!(matches!(
         validate_port("70000"),
         Err(ConfigError::InvalidPort(_))

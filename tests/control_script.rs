@@ -28,7 +28,10 @@ fn all_paths(ops: &[Op]) -> Vec<String> {
             | Op::Chmod { path: p, .. } => vec![p.to_string_lossy().into_owned()],
             Op::MkdirAsUser { path, .. } => vec![path.to_string_lossy().into_owned()],
             Op::CreateSymlink { src, link } => {
-                vec![src.to_string_lossy().into_owned(), link.to_string_lossy().into_owned()]
+                vec![
+                    src.to_string_lossy().into_owned(),
+                    link.to_string_lossy().into_owned(),
+                ]
             }
             Op::ChownToUser { path, .. } => vec![path.to_string_lossy().into_owned()],
             _ => vec![],
@@ -54,8 +57,12 @@ fn absent_creates_owned_by_sudo_user_and_undo_removes() {
 
     let ops = ops_of(&log);
     // Script + symlink creati.
-    assert!(ops.iter().any(|o| matches!(o, Op::WritePrivateFile(p) if p.ends_with(".scripts/odoo.sh"))));
-    assert!(ops.iter().any(|o| matches!(o, Op::CreateSymlink { link, .. } if link.ends_with(".local/bin/odoo"))));
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::WritePrivateFile(p) if p.ends_with(".scripts/odoo.sh"))));
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::CreateSymlink { link, .. } if link.ends_with(".local/bin/odoo"))));
 
     // Ownership: SUDO_USER (alice), MAI odoo o root.
     let chowns: Vec<&String> = ops
@@ -66,7 +73,10 @@ fn absent_creates_owned_by_sudo_user_and_undo_removes() {
         })
         .collect();
     assert!(!chowns.is_empty());
-    assert!(chowns.iter().all(|u| *u == "alice"), "owner deve essere SUDO_USER, trovato: {chowns:?}");
+    assert!(
+        chowns.iter().all(|u| *u == "alice"),
+        "owner deve essere SUDO_USER, trovato: {chowns:?}"
+    );
 
     // Non globale: nulla in /usr/local/bin o path di sistema.
     assert!(
@@ -77,8 +87,12 @@ fn absent_creates_owned_by_sudo_user_and_undo_removes() {
     // Undo rimuove i nostri artefatti.
     step.undo(&c).expect("undo");
     let ops = ops_of(&log);
-    assert!(ops.iter().any(|o| matches!(o, Op::RemoveSymlink(p) if p.ends_with(".local/bin/odoo"))));
-    assert!(ops.iter().any(|o| matches!(o, Op::RemoveFile(p) if p.ends_with(".scripts/odoo.sh"))));
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::RemoveSymlink(p) if p.ends_with(".local/bin/odoo"))));
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::RemoveFile(p) if p.ends_with(".scripts/odoo.sh"))));
 }
 
 #[test]
@@ -98,9 +112,18 @@ fn preexisting_artifacts_are_not_recreated_or_removed() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(!ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))), "script preesistente: non riscritto");
-    assert!(!ops.iter().any(|o| matches!(o, Op::CreateSymlink { .. })), "symlink preesistente: non ricreato");
-    assert!(!ops.iter().any(|o| matches!(o, Op::RemoveFile(_))), "non rimuoviamo artefatti non nostri");
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
+        "script preesistente: non riscritto"
+    );
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::CreateSymlink { .. })),
+        "symlink preesistente: non ricreato"
+    );
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::RemoveFile(_))),
+        "non rimuoviamo artefatti non nostri"
+    );
     assert!(!ops.iter().any(|o| matches!(o, Op::RemoveSymlink(_))));
 }
 
@@ -109,7 +132,10 @@ fn missing_sudo_user_is_error() {
     let (mock, _log) = MockSystemOps::new(MockConfig::default());
     let mut step = WriteControlScript::with_ops(Box::new(mock));
     let c = ctx(None); // SUDO_USER assente
-    assert!(step.snapshot(&c).is_err(), "senza SUDO_USER lo step deve fallire");
+    assert!(
+        step.snapshot(&c).is_err(),
+        "senza SUDO_USER lo step deve fallire"
+    );
 }
 
 #[test]

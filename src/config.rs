@@ -37,7 +37,9 @@ pub enum ConfigError {
     #[error("versione Odoo non valida: '{0}'. Valori ammessi: 16|17|18|19 oppure 16.0..19.0")]
     InvalidVersion(String),
 
-    #[error("{field} non valido: '{value}'. Usa solo lettere, numeri, punto, trattino o underscore")]
+    #[error(
+        "{field} non valido: '{value}'. Usa solo lettere, numeri, punto, trattino o underscore"
+    )]
     InvalidIdentifier { field: &'static str, value: String },
 
     #[error("porta Odoo non valida: '{0}'. Inserisci un numero tra 1 e 65535")]
@@ -351,8 +353,8 @@ impl ResolvedConfig {
         let home = PathBuf::from(ODOO_HOME);
 
         // Versione (+ short).
-        let version_raw =
-            pick(&cli.version, &prompted.version, &env.version).unwrap_or_else(|| DEFAULT_VERSION.to_string());
+        let version_raw = pick(&cli.version, &prompted.version, &env.version)
+            .unwrap_or_else(|| DEFAULT_VERSION.to_string());
         let (version, version_short) = normalize_version(&version_raw)?;
 
         // Utente OS.

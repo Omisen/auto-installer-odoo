@@ -239,10 +239,11 @@ fn nearest_existing_ancestor(path: &Path) -> PathBuf {
 pub fn check_disk(target: &Path, required_gb: u64) -> Result<(), CheckError> {
     let measure = nearest_existing_ancestor(target);
 
-    let stat = nix::sys::statvfs::statvfs(measure.as_path()).map_err(|e| CheckError::DiskProbe {
-        path: measure.clone(),
-        reason: e.to_string(),
-    })?;
+    let stat =
+        nix::sys::statvfs::statvfs(measure.as_path()).map_err(|e| CheckError::DiskProbe {
+            path: measure.clone(),
+            reason: e.to_string(),
+        })?;
 
     // Spazio disponibile all'utente non privilegiato: blocchi * frammento.
     let available_bytes =
@@ -292,7 +293,10 @@ pub fn check_ports(odoo_port: u16, with_nginx: bool) -> Result<(), CheckError> {
         match probe_port(port) {
             PortStatus::Free => info!(port, "✔ porta disponibile"),
             PortStatus::Unknown => {
-                warn!(port, "impossibile verificare la porta (ss/netstat/lsof assenti): assumo libera")
+                warn!(
+                    port,
+                    "impossibile verificare la porta (ss/netstat/lsof assenti): assumo libera"
+                )
             }
             PortStatus::InUse => return Err(CheckError::PortInUse { port }),
         }
@@ -376,7 +380,10 @@ pub fn check_commands() -> Result<(), CheckError> {
         if command_exists(command) {
             info!(command, "✔ presente");
         } else {
-            info!(command, "ℹ opzionale, non trovato (installabile se necessario)");
+            info!(
+                command,
+                "ℹ opzionale, non trovato (installabile se necessario)"
+            );
         }
     }
     Ok(())

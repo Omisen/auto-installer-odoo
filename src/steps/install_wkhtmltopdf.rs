@@ -121,10 +121,7 @@ impl InstallWkhtmltopdf {
 
     /// Scarica, **verifica il checksum**, installa. Pulisce sempre il temp.
     fn download_verify_install(&self, ctx: &Context) -> Result<(), StepError> {
-        let codename = ctx
-            .os_info
-            .as_ref()
-            .and_then(|os| os.codename.as_deref());
+        let codename = ctx.os_info.as_ref().and_then(|os| os.codename.as_deref());
         let mapping = map_codename(codename);
         if mapping.fallback {
             warn!(codename = ?codename, "codename non mappato: uso il pacchetto jammy come fallback");

@@ -60,17 +60,24 @@ fn full_rollback_restores_default_site_and_removes_only_delta() {
     .with_state_path(dir.path().join("state.json"));
 
     let mut installer = Installer::new();
-    assert!(installer.execute(&mut steps, &ctx).is_err(), "lo step finale innesca il rollback");
+    assert!(
+        installer.execute(&mut steps, &ctx).is_err(),
+        "lo step finale innesca il rollback"
+    );
 
     let ops = ops_of(&log);
     let default_site = PathBuf::from("/etc/nginx/sites-enabled/default");
 
     // Default site ripristinato.
     assert!(
-        ops.iter().any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site)),
+        ops.iter()
+            .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site)),
         "il rollback deve ripristinare il default site del cliente"
     );
     // Firewall: rimosso solo il delta (443), mai la 80 preesistente.
     assert!(ops.contains(&Op::UfwDelete("443/tcp".to_string())));
-    assert!(!ops.contains(&Op::UfwDelete("80/tcp".to_string())), "la 80 del cliente non va rimossa");
+    assert!(
+        !ops.contains(&Op::UfwDelete("80/tcp".to_string())),
+        "la 80 del cliente non va rimossa"
+    );
 }

@@ -22,8 +22,7 @@ fn read_rs_files(dir: &Path) -> Vec<(String, String)> {
 /// `true` se il file **importa o usa** la crate (non un semplice riferimento in
 /// un commento). Cerca `use <crate>` o `<crate>::`.
 fn imports_or_uses(content: &str, krate: &str) -> bool {
-    content.contains(&format!("use {krate}"))
-        || content.contains(&format!("{krate}::"))
+    content.contains(&format!("use {krate}")) || content.contains(&format!("{krate}::"))
 }
 
 #[test]
@@ -31,8 +30,14 @@ fn steps_do_not_import_ui_crates() {
     let root = env!("CARGO_MANIFEST_DIR");
     let steps_dir = Path::new(root).join("src").join("steps");
     for (name, content) in read_rs_files(&steps_dir) {
-        assert!(!imports_or_uses(&content, "inquire"), "{name} non deve dipendere da inquire");
-        assert!(!imports_or_uses(&content, "indicatif"), "{name} non deve dipendere da indicatif");
+        assert!(
+            !imports_or_uses(&content, "inquire"),
+            "{name} non deve dipendere da inquire"
+        );
+        assert!(
+            !imports_or_uses(&content, "indicatif"),
+            "{name} non deve dipendere da indicatif"
+        );
     }
 }
 
@@ -46,5 +51,8 @@ fn engine_does_not_depend_on_indicatif() {
         "il motore deve dipendere dall'astrazione ProgressReporter, non da indicatif"
     );
     // Ma deve usare l'astrazione.
-    assert!(content.contains("ProgressReporter"), "il motore usa l'astrazione di progresso");
+    assert!(
+        content.contains("ProgressReporter"),
+        "il motore usa l'astrazione di progresso"
+    );
 }

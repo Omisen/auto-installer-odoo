@@ -185,17 +185,27 @@ impl Step for AptPackagesStep {
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.delta.is_empty() {
-            info!(step = self.name, "run: tutti i pacchetti già presenti, niente da installare");
+            info!(
+                step = self.name,
+                "run: tutti i pacchetti già presenti, niente da installare"
+            );
             return Ok(());
         }
         if ctx.dry_run {
-            info!(step = self.name, "run (dry-run): apt-get install dell'intera lista (installa solo i mancanti)");
+            info!(
+                step = self.name,
+                "run (dry-run): apt-get install dell'intera lista (installa solo i mancanti)"
+            );
             return Ok(());
         }
         // Installa l'intera lista: apt aggiunge solo i mancanti (idempotente).
         let refs: Vec<&str> = self.packages.iter().map(String::as_str).collect();
         self.ops.apt_install(&refs)?;
-        info!(step = self.name, installed = self.snap.delta.len(), "run: pacchetti installati");
+        info!(
+            step = self.name,
+            installed = self.snap.delta.len(),
+            "run: pacchetti installati"
+        );
         Ok(())
     }
 

@@ -198,7 +198,10 @@ impl Step for CloneOdooRepo {
 
         // Fallback tarball se il clone è fallito dopo tutti i tentativi.
         if !cloned {
-            warn!(retries = self.retries, "run: clone fallito, attivo fallback tarball");
+            warn!(
+                retries = self.retries,
+                "run: clone fallito, attivo fallback tarball"
+            );
             let tar_url = format!(
                 "https://codeload.github.com/odoo/odoo/tar.gz/refs/heads/{}",
                 ctx.odoo_version

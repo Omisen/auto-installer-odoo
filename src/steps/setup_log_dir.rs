@@ -121,10 +121,16 @@ impl Step for SetupLogDir {
         match self.ops.dir_is_empty(dir) {
             Ok(true) => match self.ops.rmdir(dir) {
                 Ok(()) => info!(dir = %dir.display(), "undo: log dir rimossa"),
-                Err(e) => warn!(dir = %dir.display(), error = %e, "undo: rmdir fallito, proseguo (best-effort)"),
+                Err(e) => {
+                    warn!(dir = %dir.display(), error = %e, "undo: rmdir fallito, proseguo (best-effort)")
+                }
             },
-            Ok(false) => warn!(dir = %dir.display(), "undo: log dir non vuota, non la rimuovo (best-effort)"),
-            Err(e) => warn!(dir = %dir.display(), error = %e, "undo: impossibile verificare la log dir, non rimuovo"),
+            Ok(false) => {
+                warn!(dir = %dir.display(), "undo: log dir non vuota, non la rimuovo (best-effort)")
+            }
+            Err(e) => {
+                warn!(dir = %dir.display(), error = %e, "undo: impossibile verificare la log dir, non rimuovo")
+            }
         }
         Ok(())
     }

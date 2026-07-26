@@ -39,7 +39,10 @@ fn absent_creates_and_undo_removes() {
 
     let ops = ops_of(&log);
     assert!(ops.contains(&Op::CreateVenv(venv_dir())));
-    assert!(ops.contains(&Op::RemoveDirAll(venv_dir())), "undo: rm -rf del venv");
+    assert!(
+        ops.contains(&Op::RemoveDirAll(venv_dir())),
+        "undo: rm -rf del venv"
+    );
 }
 
 #[test]
@@ -56,7 +59,10 @@ fn preexisting_venv_is_noop() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    assert!(ops_of(&log).is_empty(), "un venv preesistente non va né creato né rimosso");
+    assert!(
+        ops_of(&log).is_empty(),
+        "un venv preesistente non va né creato né rimosso"
+    );
 }
 
 #[test]
@@ -71,5 +77,8 @@ fn missing_python_venv_is_error() {
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
-    assert!(step.run(&c).is_err(), "senza python3-venv il run deve fallire");
+    assert!(
+        step.run(&c).is_err(),
+        "senza python3-venv il run deve fallire"
+    );
 }

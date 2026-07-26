@@ -83,8 +83,11 @@ impl Step for InstallPythonRequirements {
         let content = self.ops.read_to_string(&requirements)?;
 
         // 1) pip + wheel aggiornati.
-        self.ops
-            .run_as_user(user, &pip, &["install", "--quiet", "--upgrade", "pip", "wheel"])?;
+        self.ops.run_as_user(
+            user,
+            &pip,
+            &["install", "--quiet", "--upgrade", "pip", "wheel"],
+        )?;
 
         // 2) Cython compatibile (< 3.0).
         self.ops
@@ -106,7 +109,13 @@ impl Step for InstallPythonRequirements {
         let outcome = self.ops.run_as_user(
             user,
             &pip,
-            &["install", "--quiet", "--prefer-binary", "--requirement", &tmp_str],
+            &[
+                "install",
+                "--quiet",
+                "--prefer-binary",
+                "--requirement",
+                &tmp_str,
+            ],
         );
         let _ = std::fs::remove_file(&tmp_req);
         outcome?;

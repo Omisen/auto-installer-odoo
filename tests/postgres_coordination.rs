@@ -52,14 +52,23 @@ fn rollback_drops_database_before_role() {
 
     let mut installer = Installer::new();
     let result = installer.execute(&mut steps, &ctx);
-    assert!(result.is_err(), "lo step finale fallisce e innesca il rollback");
+    assert!(
+        result.is_err(),
+        "lo step finale fallisce e innesca il rollback"
+    );
 
     let ops = ops_of(&log);
     let drop_db = ops.iter().position(|o| matches!(o, Op::DropDb(_)));
     let drop_role = ops.iter().position(|o| matches!(o, Op::PgDropRole(_)));
 
-    assert!(drop_db.is_some(), "il DB creato da noi deve essere droppato");
-    assert!(drop_role.is_some(), "il ruolo creato da noi deve essere droppato");
+    assert!(
+        drop_db.is_some(),
+        "il DB creato da noi deve essere droppato"
+    );
+    assert!(
+        drop_role.is_some(),
+        "il ruolo creato da noi deve essere droppato"
+    );
     assert!(
         drop_db < drop_role,
         "l'undo del database deve precedere l'undo del ruolo (ordine inverso), ops: {ops:?}"

@@ -33,7 +33,11 @@ fn rollback_runs_undo_in_reverse_order() {
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha").with_undo_log(Arc::clone(&log))),
         Box::new(NoopStep::new("beta").with_undo_log(Arc::clone(&log))),
-        Box::new(NoopStep::new("gamma").fail_on_run().with_undo_log(Arc::clone(&log))),
+        Box::new(
+            NoopStep::new("gamma")
+                .fail_on_run()
+                .with_undo_log(Arc::clone(&log)),
+        ),
     ];
 
     let mut installer = Installer::new();
@@ -56,8 +60,16 @@ fn rollback_is_best_effort() {
     // beta fallirà l'undo; alpha deve comunque essere ripulito dopo.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha").with_undo_log(Arc::clone(&log))),
-        Box::new(NoopStep::new("beta").fail_on_undo().with_undo_log(Arc::clone(&log))),
-        Box::new(NoopStep::new("gamma").fail_on_run().with_undo_log(Arc::clone(&log))),
+        Box::new(
+            NoopStep::new("beta")
+                .fail_on_undo()
+                .with_undo_log(Arc::clone(&log)),
+        ),
+        Box::new(
+            NoopStep::new("gamma")
+                .fail_on_run()
+                .with_undo_log(Arc::clone(&log)),
+        ),
     ];
 
     let mut installer = Installer::new();
@@ -85,7 +97,11 @@ fn preexisting_step_undo_is_noop() {
 
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(alpha),
-        Box::new(NoopStep::new("beta").fail_on_run().with_undo_log(Arc::clone(&log))),
+        Box::new(
+            NoopStep::new("beta")
+                .fail_on_run()
+                .with_undo_log(Arc::clone(&log)),
+        ),
     ];
 
     let mut installer = Installer::new();
@@ -124,7 +140,10 @@ fn install_state_roundtrip_and_permissions() {
     state.save(&path).expect("save");
 
     // Permessi 0600.
-    let mode = std::fs::metadata(&path).expect("metadata").permissions().mode();
+    let mode = std::fs::metadata(&path)
+        .expect("metadata")
+        .permissions()
+        .mode();
     assert_eq!(mode & 0o777, 0o600, "il file di stato deve essere 0600");
 
     // Round-trip: i record sopravvivono al ciclo scrittura/lettura.

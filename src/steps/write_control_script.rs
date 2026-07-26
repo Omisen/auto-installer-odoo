@@ -101,7 +101,14 @@ pub fn control_script_content(service: &str, os_user: &str) -> String {
         .replace("__OSUSER__", os_user)
 }
 
-fn paths(home: &std::path::Path) -> (std::path::PathBuf, std::path::PathBuf, std::path::PathBuf, std::path::PathBuf) {
+fn paths(
+    home: &std::path::Path,
+) -> (
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+    std::path::PathBuf,
+) {
     let scripts_dir = home.join(".scripts");
     let script = scripts_dir.join("odoo.sh");
     let localbin = home.join(".local").join("bin");

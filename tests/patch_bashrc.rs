@@ -44,17 +44,29 @@ fn round_trip_restores_file_byte_for_byte() {
 
     // Il run ha SOLO appeso (mai riscritto l'intero file).
     let ops = ops_of(&log);
-    assert!(ops.iter().any(|o| matches!(o, Op::AppendLine(_))), "run deve appendere la riga");
-    assert!(!ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))), "mai riscrivere il .bashrc intero");
+    assert!(
+        ops.iter().any(|o| matches!(o, Op::AppendLine(_))),
+        "run deve appendere la riga"
+    );
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
+        "mai riscrivere il .bashrc intero"
+    );
     // Dopo il run la nostra riga c'è.
     let after_run = std::fs::read_to_string(&bashrc).expect("read");
     assert!(after_run.contains(PATH_LINE));
-    assert!(after_run.starts_with(original), "il contenuto originale resta in testa, intatto");
+    assert!(
+        after_run.starts_with(original),
+        "il contenuto originale resta in testa, intatto"
+    );
 
     step.undo(&c).expect("undo");
 
     let after_undo = std::fs::read_to_string(&bashrc).expect("read");
-    assert_eq!(after_undo, original, "dopo l'undo il .bashrc è identico all'originale");
+    assert_eq!(
+        after_undo, original,
+        "dopo l'undo il .bashrc è identico all'originale"
+    );
 }
 
 #[test]
@@ -74,7 +86,11 @@ fn line_already_present_is_noop() {
 
     // Nessun append (niente duplicati), nessuna modifica del file dell'utente.
     assert!(!ops_of(&log).iter().any(|o| matches!(o, Op::AppendLine(_))));
-    assert_eq!(std::fs::read_to_string(&bashrc).expect("read"), content, "riga preesistente: file invariato");
+    assert_eq!(
+        std::fs::read_to_string(&bashrc).expect("read"),
+        content,
+        "riga preesistente: file invariato"
+    );
 }
 
 #[test]
@@ -104,18 +120,22 @@ fn missing_sudo_user_is_error() {
         sudo_user: None,
         ..Default::default()
     };
-    assert!(step.snapshot(&c).is_err(), "senza SUDO_USER lo step deve fallire");
+    assert!(
+        step.snapshot(&c).is_err(),
+        "senza SUDO_USER lo step deve fallire"
+    );
 }
 
 #[test]
 fn remove_exact_line_is_not_fuzzy() {
     // Una riga PATH DIVERSA scritta a mano dall'utente NON viene rimossa.
-    let content = format!(
-        "alias x='y'\nexport PATH=\"$HOME/bin:$PATH\"\n{PATH_LINE}\n"
-    );
+    let content = format!("alias x='y'\nexport PATH=\"$HOME/bin:$PATH\"\n{PATH_LINE}\n");
     let cleaned = remove_exact_line(&content, PATH_LINE);
 
-    assert!(!cleaned.contains(PATH_LINE), "la nostra riga esatta è rimossa");
+    assert!(
+        !cleaned.contains(PATH_LINE),
+        "la nostra riga esatta è rimossa"
+    );
     assert!(
         cleaned.contains(r#"export PATH="$HOME/bin:$PATH""#),
         "la riga PATH diversa dell'utente resta (match esatto, non parziale)"

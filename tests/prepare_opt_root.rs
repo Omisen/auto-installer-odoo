@@ -37,7 +37,10 @@ fn created_by_us_round_trip() {
     assert_eq!(persisted_prestate(&step), PreState::CreatedByUs);
 
     step.undo(&c).expect("undo");
-    assert!(!home.exists(), "undo deve rimuovere la directory creata da noi");
+    assert!(
+        !home.exists(),
+        "undo deve rimuovere la directory creata da noi"
+    );
 }
 
 #[test]

@@ -8,10 +8,10 @@ use common::{ops_of, MockConfig, MockSystemOps, Op};
 use odoo_installer::context::Context;
 use odoo_installer::secret::Secret;
 use odoo_installer::step::Step;
+use odoo_installer::steps::generate_config::GenerateConfig;
 use odoo_installer::steps::generate_config::{
     normalize_empty_directives, render_config, validate_rendered,
 };
-use odoo_installer::steps::generate_config::GenerateConfig;
 
 fn ctx(install_dir: PathBuf) -> Context {
     Context {
@@ -56,12 +56,22 @@ fn created_by_us_generates_640_and_undo_removes() {
     assert!(!content.contains("${"), "nessun placeholder residuo");
     assert!(content.contains("[options]"));
     assert!(content.contains("http_port = 8069"));
-    assert!(content.contains("db_host = False"), "direttiva vuota → False");
+    assert!(
+        content.contains("db_host = False"),
+        "direttiva vuota → False"
+    );
 
     let ops = ops_of(&log);
-    assert!(ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))), "scrittura privata (600)");
-    assert!(ops.iter().any(|o| matches!(o, Op::Chmod { mode, .. } if *mode == 0o640)));
-    assert!(ops.iter().any(|o| matches!(o, Op::ChownNamed { owner, .. } if owner == "odoo")));
+    assert!(
+        ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
+        "scrittura privata (600)"
+    );
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::Chmod { mode, .. } if *mode == 0o640)));
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::ChownNamed { owner, .. } if owner == "odoo")));
 
     step.undo(&c).expect("undo");
     assert!(!dest.exists(), "undo: il file creato da noi viene rimosso");
@@ -89,13 +99,19 @@ fn preexisting_undo_restores_backup() {
 
     // Dopo il run il file è la nostra config (originale messo da parte nel backup).
     let after_run = std::fs::read_to_string(&dest).expect("read");
-    assert_ne!(after_run, original, "il run sovrascrive con la config generata");
+    assert_ne!(
+        after_run, original,
+        "il run sovrascrive con la config generata"
+    );
 
     step.undo(&c).expect("undo");
 
     // Dopo l'undo il file torna ESATTAMENTE l'originale del cliente.
     let after_undo = std::fs::read_to_string(&dest).expect("read");
-    assert_eq!(after_undo, original, "undo deve ripristinare il file originale dal backup");
+    assert_eq!(
+        after_undo, original,
+        "undo deve ripristinare il file originale dal backup"
+    );
 }
 
 #[test]
@@ -114,15 +130,26 @@ fn rendering_normalizes_empty_directives_and_no_residue() {
     assert!(!content.contains("${"), "nessun placeholder residuo");
     assert!(content.contains("http_port = 8069"));
     assert!(content.contains("db_host = False"), "db_host vuoto → False");
-    assert!(content.contains("db_password = False"), "db_password vuota → False");
-    assert!(content.contains("logfile = False"), "logfile assente → False");
-    assert!(content.contains("admin_passwd = s3cret"), "la password è nel file (non nei log)");
+    assert!(
+        content.contains("db_password = False"),
+        "db_password vuota → False"
+    );
+    assert!(
+        content.contains("logfile = False"),
+        "logfile assente → False"
+    );
+    assert!(
+        content.contains("admin_passwd = s3cret"),
+        "la password è nel file (non nei log)"
+    );
     validate_rendered(&content).expect("valido");
 }
 
 #[test]
 fn validation_rejects_residue_and_missing_section() {
-    assert!(validate_rendered("[options]\naddons_path = /x\nhttp_port = 8069\nfoo = ${BAR}\n").is_err());
+    assert!(
+        validate_rendered("[options]\naddons_path = /x\nhttp_port = 8069\nfoo = ${BAR}\n").is_err()
+    );
     assert!(validate_rendered("addons_path = /x\nhttp_port = 8069\n").is_err()); // no [options]
     assert!(validate_rendered("[options]\nhttp_port = 8069\n").is_err()); // no addons_path
     assert!(validate_rendered("[options]\naddons_path = /x\nhttp_port = 8069\n").is_ok());
@@ -130,7 +157,10 @@ fn validation_rejects_residue_and_missing_section() {
 
 #[test]
 fn normalize_directive_helper() {
-    assert_eq!(normalize_empty_directives("db_host = \n"), "db_host = False\n");
+    assert_eq!(
+        normalize_empty_directives("db_host = \n"),
+        "db_host = False\n"
+    );
     assert_eq!(normalize_empty_directives("key = value\n"), "key = value\n");
     assert_eq!(normalize_empty_directives("; comment\n"), "; comment\n");
 }

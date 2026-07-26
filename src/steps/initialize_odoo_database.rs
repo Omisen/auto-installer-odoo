@@ -54,7 +54,10 @@ impl InitializeOdooDatabase {
     }
 
     fn python_bin(ctx: &Context) -> std::path::PathBuf {
-        ctx.install_dir.join(VENV_SUBDIR).join("bin").join("python3")
+        ctx.install_dir
+            .join(VENV_SUBDIR)
+            .join("bin")
+            .join("python3")
     }
     fn odoo_bin(ctx: &Context) -> std::path::PathBuf {
         ctx.install_dir.join(REPO_SUBDIR).join("odoo-bin")

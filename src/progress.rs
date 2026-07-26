@@ -55,8 +55,7 @@ pub struct IndicatifReporter {
 impl IndicatifReporter {
     pub fn new(total: usize) -> Self {
         let bar = ProgressBar::new(total as u64);
-        if let Ok(style) =
-            ProgressStyle::with_template("{spinner:.green} [{pos}/{len}] {wide_msg}")
+        if let Ok(style) = ProgressStyle::with_template("{spinner:.green} [{pos}/{len}] {wide_msg}")
         {
             bar.set_style(style);
         }

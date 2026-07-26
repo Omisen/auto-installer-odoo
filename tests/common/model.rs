@@ -84,8 +84,8 @@ impl SystemOps for SystemModel {
     }
     fn dir_is_empty(&self, path: &Path) -> Result<bool, StepError> {
         let s = self.state.lock().expect("l");
-        let has_child = s.paths.iter().any(|e| under(e, path))
-            || s.symlinks.iter().any(|e| under(e, path));
+        let has_child =
+            s.paths.iter().any(|e| under(e, path)) || s.symlinks.iter().any(|e| under(e, path));
         Ok(!has_child)
     }
     fn dpkg_is_installed(&self, pkg: &str) -> bool {
@@ -110,7 +110,14 @@ impl SystemOps for SystemModel {
         Ok(self.state.lock().expect("l").pg_initialized.contains(db))
     }
     fn pg_list_databases(&self) -> Result<Vec<String>, StepError> {
-        Ok(self.state.lock().expect("l").pg_dbs.iter().cloned().collect())
+        Ok(self
+            .state
+            .lock()
+            .expect("l")
+            .pg_dbs
+            .iter()
+            .cloned()
+            .collect())
     }
     fn symlink_exists(&self, link: &Path) -> bool {
         self.state.lock().expect("l").symlinks.contains(link)
@@ -159,9 +166,7 @@ impl SystemOps for SystemModel {
             .file_contents
             .get(path)
             .cloned()
-            .ok_or_else(|| {
-                StepError::io(path, std::io::Error::from(std::io::ErrorKind::NotFound))
-            })
+            .ok_or_else(|| StepError::io(path, std::io::Error::from(std::io::ErrorKind::NotFound)))
     }
     fn getent_home(&self, _user: &str) -> Result<Option<String>, StepError> {
         Ok(self.state.lock().expect("l").sudo_home.clone())
@@ -197,11 +202,19 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn mkdir(&self, path: &Path) -> Result<(), StepError> {
-        self.state.lock().expect("l").paths.insert(path.to_path_buf());
+        self.state
+            .lock()
+            .expect("l")
+            .paths
+            .insert(path.to_path_buf());
         Ok(())
     }
     fn mkdir_p_as_user(&self, _user: &str, path: &Path) -> Result<(), StepError> {
-        self.state.lock().expect("l").paths.insert(path.to_path_buf());
+        self.state
+            .lock()
+            .expect("l")
+            .paths
+            .insert(path.to_path_buf());
         Ok(())
     }
     fn rmdir(&self, path: &Path) -> Result<(), StepError> {
@@ -212,11 +225,16 @@ impl SystemOps for SystemModel {
         let mut s = self.state.lock().expect("l");
         s.paths.retain(|e| e != path && !e.starts_with(path));
         s.symlinks.retain(|e| e != path && !e.starts_with(path));
-        s.file_contents.retain(|k, _| k != path && !k.starts_with(path));
+        s.file_contents
+            .retain(|k, _| k != path && !k.starts_with(path));
         Ok(())
     }
     fn create_symlink(&self, _src: &Path, link: &Path) -> Result<(), StepError> {
-        self.state.lock().expect("l").symlinks.insert(link.to_path_buf());
+        self.state
+            .lock()
+            .expect("l")
+            .symlinks
+            .insert(link.to_path_buf());
         Ok(())
     }
     fn remove_symlink(&self, link: &Path) -> Result<(), StepError> {
@@ -226,7 +244,8 @@ impl SystemOps for SystemModel {
     fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
         s.paths.insert(path.to_path_buf());
-        s.file_contents.insert(path.to_path_buf(), content.to_string());
+        s.file_contents
+            .insert(path.to_path_buf(), content.to_string());
         Ok(())
     }
     fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError> {
@@ -291,7 +310,11 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn service_enable(&self, service: &str) -> Result<(), StepError> {
-        self.state.lock().expect("l").svc_enabled.insert(service.to_string());
+        self.state
+            .lock()
+            .expect("l")
+            .svc_enabled
+            .insert(service.to_string());
         Ok(())
     }
     fn service_disable(&self, service: &str) -> Result<(), StepError> {
@@ -299,7 +322,11 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn service_start(&self, service: &str) -> Result<(), StepError> {
-        self.state.lock().expect("l").svc_active.insert(service.to_string());
+        self.state
+            .lock()
+            .expect("l")
+            .svc_active
+            .insert(service.to_string());
         Ok(())
     }
     fn service_stop(&self, service: &str) -> Result<(), StepError> {
@@ -307,7 +334,11 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn service_restart(&self, service: &str) -> Result<(), StepError> {
-        self.state.lock().expect("l").svc_active.insert(service.to_string());
+        self.state
+            .lock()
+            .expect("l")
+            .svc_active
+            .insert(service.to_string());
         Ok(())
     }
     fn service_reload(&self, _service: &str) -> Result<(), StepError> {
@@ -317,7 +348,11 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
-        self.state.lock().expect("l").ufw_rules.insert(rule.to_string());
+        self.state
+            .lock()
+            .expect("l")
+            .ufw_rules
+            .insert(rule.to_string());
         Ok(())
     }
     fn ufw_delete(&self, rule: &str) -> Result<(), StepError> {
@@ -325,7 +360,11 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn pg_create_role(&self, role: &str, _pw: Option<&str>) -> Result<(), StepError> {
-        self.state.lock().expect("l").pg_roles.insert(role.to_string());
+        self.state
+            .lock()
+            .expect("l")
+            .pg_roles
+            .insert(role.to_string());
         Ok(())
     }
     fn pg_drop_role(&self, role: &str) -> Result<(), StepError> {
@@ -350,7 +389,11 @@ impl SystemOps for SystemModel {
         _conf: &Path,
         db: &str,
     ) -> Result<(), StepError> {
-        self.state.lock().expect("l").pg_initialized.insert(db.to_string());
+        self.state
+            .lock()
+            .expect("l")
+            .pg_initialized
+            .insert(db.to_string());
         Ok(())
     }
     fn git_clone(
@@ -367,7 +410,8 @@ impl SystemOps for SystemModel {
         s.paths.insert(target.join("odoo-bin"));
         let req = target.join("requirements.txt");
         s.paths.insert(req.clone());
-        s.file_contents.insert(req, "gevent==21.12.0\npytz\n".to_string());
+        s.file_contents
+            .insert(req, "gevent==21.12.0\npytz\n".to_string());
         Ok(())
     }
     fn tarball_install(&self, _user: &str, _url: &str, target: &Path) -> Result<(), StepError> {

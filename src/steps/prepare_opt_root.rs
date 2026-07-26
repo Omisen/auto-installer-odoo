@@ -130,7 +130,9 @@ impl Step for PrepareOptRoot {
 
         match fs::remove_dir(dir) {
             Ok(()) => info!(dir = %dir.display(), "undo: directory rimossa"),
-            Err(e) => warn!(dir = %dir.display(), error = %e, "undo: rimozione fallita, proseguo (best-effort)"),
+            Err(e) => {
+                warn!(dir = %dir.display(), error = %e, "undo: rimozione fallita, proseguo (best-effort)")
+            }
         }
         Ok(())
     }

@@ -152,7 +152,9 @@ impl Step for SetupPostgres {
         // E solo se il cluster non ospita altri database (cautela cluster).
         if self.snap.installed == PreState::CreatedByUs {
             if purge_safe {
-                warn!("--aggressive-rollback: purge PostgreSQL (nessun altro database nel cluster)");
+                warn!(
+                    "--aggressive-rollback: purge PostgreSQL (nessun altro database nel cluster)"
+                );
                 if let Err(e) = self.ops.apt_purge(PG_PACKAGES) {
                     warn!(error = %e, "undo: purge postgresql fallito, proseguo (best-effort)");
                 }

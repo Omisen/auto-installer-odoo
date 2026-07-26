@@ -41,8 +41,14 @@ fn all_absent_installs_then_undo_in_order() {
 
     // run: installa + enable + start.
     assert!(has(&ops, |o| matches!(o, Op::WritePrivateFile(_))));
-    assert!(has(&ops, |o| matches!(o, Op::Chmod { mode, .. } if *mode == 0o644)));
-    assert!(has(&ops, |o| matches!(o, Op::ChownNamed { owner, .. } if owner == "root")));
+    assert!(has(
+        &ops,
+        |o| matches!(o, Op::Chmod { mode, .. } if *mode == 0o644)
+    ));
+    assert!(has(
+        &ops,
+        |o| matches!(o, Op::ChownNamed { owner, .. } if owner == "root")
+    ));
     assert!(has(&ops, |o| matches!(o, Op::ServiceEnable(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceStart(_))));
 
@@ -78,7 +84,10 @@ fn d4_active_already_running_not_stopped() {
     let ops = ops_of(&log);
     // Già attivo → restart in run (non start), e undo NON ferma (D4).
     assert!(has(&ops, |o| matches!(o, Op::ServiceRestart(_))));
-    assert!(!has(&ops, |o| matches!(o, Op::ServiceStop(_))), "un servizio già attivo va lasciato running");
+    assert!(
+        !has(&ops, |o| matches!(o, Op::ServiceStop(_))),
+        "un servizio già attivo va lasciato running"
+    );
 }
 
 #[test]
@@ -96,8 +105,14 @@ fn d4_enabled_already_enabled_not_disabled() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(!has(&ops, |o| matches!(o, Op::ServiceEnable(_))), "già enabled: nessun enable");
-    assert!(!has(&ops, |o| matches!(o, Op::ServiceDisable(_))), "già enabled: nessun disable in undo (D4)");
+    assert!(
+        !has(&ops, |o| matches!(o, Op::ServiceEnable(_))),
+        "già enabled: nessun enable"
+    );
+    assert!(
+        !has(&ops, |o| matches!(o, Op::ServiceDisable(_))),
+        "già enabled: nessun disable in undo (D4)"
+    );
 }
 
 #[test]
@@ -111,7 +126,10 @@ fn start_failure_is_error() {
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
-    assert!(step.run(&c).is_err(), "se il servizio non parte, il run deve fallire");
+    assert!(
+        step.run(&c).is_err(),
+        "se il servizio non parte, il run deve fallire"
+    );
 }
 
 #[test]

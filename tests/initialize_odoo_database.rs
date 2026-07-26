@@ -41,9 +41,14 @@ fn hard_stop_on_preexisting_db_never_inits() {
     let c = ctx(/* db_created_by_us */ false);
 
     let result = step.snapshot(&c);
-    assert!(result.is_err(), "init su DB preesistente deve essere rifiutato (hard-stop)");
     assert!(
-        !ops_of(&log).iter().any(|o| matches!(o, Op::OdooInitBase { .. })),
+        result.is_err(),
+        "init su DB preesistente deve essere rifiutato (hard-stop)"
+    );
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|o| matches!(o, Op::OdooInitBase { .. })),
         "l'init NON deve mai essere invocato su un DB preesistente"
     );
 }
@@ -65,9 +70,15 @@ fn created_by_us_runs_init_and_undo_is_noop() {
     let after_run = ops_of(&log).len();
 
     step.undo(&c).expect("undo");
-    assert_eq!(ops_of(&log).len(), after_run, "undo è no-op (pulizia coperta dal dropdb di Fase 5)");
+    assert_eq!(
+        ops_of(&log).len(),
+        after_run,
+        "undo è no-op (pulizia coperta dal dropdb di Fase 5)"
+    );
 
-    assert!(ops_of(&log).iter().any(|o| matches!(o, Op::OdooInitBase { db, conf }
+    assert!(ops_of(&log)
+        .iter()
+        .any(|o| matches!(o, Op::OdooInitBase { db, conf }
         if db == "odoo" && conf == Path::new("/opt/odoo/odoo18/odoo18.conf"))));
 }
 
@@ -88,5 +99,7 @@ fn already_initialized_schema_is_noop_even_if_preexisting_db() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    assert!(!ops_of(&log).iter().any(|o| matches!(o, Op::OdooInitBase { .. })));
+    assert!(!ops_of(&log)
+        .iter()
+        .any(|o| matches!(o, Op::OdooInitBase { .. })));
 }

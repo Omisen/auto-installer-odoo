@@ -56,10 +56,14 @@ fn undo_purges_only_the_delta() {
 
     let ops = ops_of(&log);
     // Purge del solo delta, mai 'a'.
-    assert!(ops.contains(&Op::AptPurge(strings(&["b", "c"]))), "atteso purge di [b,c], trovato: {ops:?}");
+    assert!(
+        ops.contains(&Op::AptPurge(strings(&["b", "c"]))),
+        "atteso purge di [b,c], trovato: {ops:?}"
+    );
     assert!(ops.contains(&Op::AptAutoremove));
     assert!(
-        !ops.iter().any(|op| matches!(op, Op::AptPurge(p) if p.contains(&"a".to_string()))),
+        !ops.iter()
+            .any(|op| matches!(op, Op::AptPurge(p) if p.contains(&"a".to_string()))),
         "il pacchetto preesistente 'a' non deve mai essere purgato"
     );
 }
@@ -85,7 +89,11 @@ fn empty_delta_is_noop() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    assert!(ops_of(&log).is_empty(), "delta vuoto → nessuna azione, trovato: {:?}", ops_of(&log));
+    assert!(
+        ops_of(&log).is_empty(),
+        "delta vuoto → nessuna azione, trovato: {:?}",
+        ops_of(&log)
+    );
 }
 
 #[test]
@@ -101,7 +109,10 @@ fn bootstrap_does_not_purge_on_normal_undo() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(ops.iter().any(|op| matches!(op, Op::AptInstall(_))), "il run deve installare");
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::AptInstall(_))),
+        "il run deve installare"
+    );
     assert!(
         !ops.iter().any(|op| matches!(op, Op::AptPurge(_))),
         "undo normale non deve purgare le utility bootstrap, trovato: {ops:?}"
@@ -141,8 +152,14 @@ fn deps_delta_excludes_bootstrap_overlap() {
     let snap = snapshot_of(&step);
 
     assert!(snap.already_installed.contains(&"git".to_string()));
-    assert!(!snap.delta.contains(&"git".to_string()), "git non deve essere nel delta");
-    assert!(snap.delta.contains(&"python3-pip".to_string()), "gli altri deps restano nel delta");
+    assert!(
+        !snap.delta.contains(&"git".to_string()),
+        "git non deve essere nel delta"
+    );
+    assert!(
+        snap.delta.contains(&"python3-pip".to_string()),
+        "gli altri deps restano nel delta"
+    );
 }
 
 #[test]

@@ -52,7 +52,9 @@ fn undo_is_noop_pip_removal_belongs_to_venv() {
 
     // L'undo non esegue NULLA: nessuna disinstallazione, nessun rm.
     assert_eq!(after_run, after_undo, "9c.undo deve essere no-op");
-    assert!(!ops_of(&log).iter().any(|o| matches!(o, Op::RemoveDirAll(_))));
+    assert!(!ops_of(&log)
+        .iter()
+        .any(|o| matches!(o, Op::RemoveDirAll(_))));
 }
 
 #[test]
@@ -98,7 +100,10 @@ fn missing_requirements_is_error() {
 
     step.snapshot(&c).expect("snapshot");
     assert!(step.run(&c).is_err(), "requirements.txt mancante → errore");
-    assert!(pip_calls(&ops_of(&log)).is_empty(), "nessuna install se manca requirements");
+    assert!(
+        pip_calls(&ops_of(&log)).is_empty(),
+        "nessuna install se manca requirements"
+    );
 }
 
 #[test]

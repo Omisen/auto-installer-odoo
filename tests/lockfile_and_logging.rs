@@ -12,7 +12,10 @@ fn second_concurrent_lock_is_refused_and_released_on_drop() {
 
     let guard = lockfile::acquire(&path).expect("primo lock acquisito");
     // Una seconda esecuzione (nuovo descriptor sullo stesso file) è rifiutata.
-    assert!(lockfile::acquire(&path).is_err(), "una seconda installazione deve essere rifiutata");
+    assert!(
+        lockfile::acquire(&path).is_err(),
+        "una seconda installazione deve essere rifiutata"
+    );
 
     drop(guard); // RAII: il lock è rilasciato al Drop.
     let _again = lockfile::acquire(&path).expect("dopo il rilascio si può riacquisire");

@@ -58,15 +58,31 @@ fn rollback_removes_venv_then_sources_once() {
     .with_state_path(dir.path().join("state.json"));
 
     let mut installer = Installer::new();
-    assert!(installer.execute(&mut steps, &ctx).is_err(), "lo step finale innesca il rollback");
+    assert!(
+        installer.execute(&mut steps, &ctx).is_err(),
+        "lo step finale innesca il rollback"
+    );
 
     let ops = ops_of(&log);
-    let rm_venv = ops.iter().position(|o| matches!(o, Op::RemoveDirAll(p) if *p == venv_dir));
-    let rm_repo = ops.iter().position(|o| matches!(o, Op::RemoveDirAll(p) if *p == repo_dir));
+    let rm_venv = ops
+        .iter()
+        .position(|o| matches!(o, Op::RemoveDirAll(p) if *p == venv_dir));
+    let rm_repo = ops
+        .iter()
+        .position(|o| matches!(o, Op::RemoveDirAll(p) if *p == repo_dir));
 
-    assert!(rm_venv.is_some(), "il venv creato da noi deve essere rimosso");
-    assert!(rm_repo.is_some(), "i sorgenti creati da noi devono essere rimossi");
-    assert!(rm_venv < rm_repo, "l'undo del venv precede quello dei sorgenti (ordine inverso)");
+    assert!(
+        rm_venv.is_some(),
+        "il venv creato da noi deve essere rimosso"
+    );
+    assert!(
+        rm_repo.is_some(),
+        "i sorgenti creati da noi devono essere rimossi"
+    );
+    assert!(
+        rm_venv < rm_repo,
+        "l'undo del venv precede quello dei sorgenti (ordine inverso)"
+    );
 
     // Il contenitore install_dir viene rimosso al massimo una volta (rmdir),
     // senza doppie rimozioni conflittuali.
@@ -74,5 +90,8 @@ fn rollback_removes_venv_then_sources_once() {
         .iter()
         .filter(|o| matches!(o, Op::Rmdir(p) if *p == install_dir))
         .count();
-    assert!(container_removals <= 1, "nessuna doppia rimozione del contenitore");
+    assert!(
+        container_removals <= 1,
+        "nessuna doppia rimozione del contenitore"
+    );
 }

@@ -266,14 +266,15 @@ fn run_apt(args: &[&str]) -> Result<(), StepError> {
 /// Esegue un comando catturandone lo stdout (per query psql/systemctl).
 fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
     let rendered = format!("{program} {}", args.join(" "));
-    let output = Command::new(program)
-        .args(args)
-        .output()
-        .map_err(|e| StepError::CommandFailed {
-            command: rendered.clone(),
-            status: "spawn-failed".to_string(),
-            stderr: e.to_string(),
-        })?;
+    let output =
+        Command::new(program)
+            .args(args)
+            .output()
+            .map_err(|e| StepError::CommandFailed {
+                command: rendered.clone(),
+                status: "spawn-failed".to_string(),
+                stderr: e.to_string(),
+            })?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -371,10 +372,7 @@ fn errno_io(e: nix::errno::Errno) -> std::io::Error {
 
 impl SystemOps for RealSystemOps {
     fn user_exists(&self, user: &str) -> bool {
-        nix::unistd::User::from_name(user)
-            .ok()
-            .flatten()
-            .is_some()
+        nix::unistd::User::from_name(user).ok().flatten().is_some()
     }
 
     fn path_exists(&self, path: &Path) -> bool {
@@ -614,13 +612,19 @@ impl SystemOps for RealSystemOps {
     }
 
     fn pg_role_exists(&self, role: &str) -> Result<bool, StepError> {
-        let sql = format!("SELECT 1 FROM pg_roles WHERE rolname = '{}';", escape_sql_literal(role));
+        let sql = format!(
+            "SELECT 1 FROM pg_roles WHERE rolname = '{}';",
+            escape_sql_literal(role)
+        );
         let out = capture_command("sudo", &["-Hiu", "postgres", "--", "psql", "-tAc", &sql])?;
         Ok(!out.trim().is_empty())
     }
 
     fn pg_db_exists(&self, db: &str) -> Result<bool, StepError> {
-        let sql = format!("SELECT 1 FROM pg_database WHERE datname = '{}';", escape_sql_literal(db));
+        let sql = format!(
+            "SELECT 1 FROM pg_database WHERE datname = '{}';",
+            escape_sql_literal(db)
+        );
         let out = capture_command("sudo", &["-Hiu", "postgres", "--", "psql", "-tAc", &sql])?;
         Ok(!out.trim().is_empty())
     }
@@ -647,7 +651,16 @@ impl SystemOps for RealSystemOps {
         let sql = format!("DROP ROLE IF EXISTS \"{role}\";");
         run_command(
             "sudo",
-            &["-Hiu", "postgres", "--", "psql", "-v", "ON_ERROR_STOP=1", "-c", &sql],
+            &[
+                "-Hiu",
+                "postgres",
+                "--",
+                "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
+                "-c",
+                &sql,
+            ],
         )
     }
 
@@ -661,7 +674,15 @@ impl SystemOps for RealSystemOps {
     fn dropdb(&self, db: &str) -> Result<(), StepError> {
         run_command(
             "sudo",
-            &["-Hiu", "postgres", "--", "dropdb", "--if-exists", "--force", db],
+            &[
+                "-Hiu",
+                "postgres",
+                "--",
+                "dropdb",
+                "--if-exists",
+                "--force",
+                db,
+            ],
         )
     }
 
@@ -669,7 +690,11 @@ impl SystemOps for RealSystemOps {
         let out = capture_command(
             "sudo",
             &[
-                "-Hiu", "postgres", "--", "psql", "-tAc",
+                "-Hiu",
+                "postgres",
+                "--",
+                "psql",
+                "-tAc",
                 "SELECT datname FROM pg_database WHERE datistemplate = false;",
             ],
         )?;
@@ -704,7 +729,17 @@ impl SystemOps for RealSystemOps {
             let target_str = target.to_string_lossy();
             let branch = capture_command(
                 "sudo",
-                &["-u", user, "--", "git", "-C", &target_str, "rev-parse", "--abbrev-ref", "HEAD"],
+                &[
+                    "-u",
+                    user,
+                    "--",
+                    "git",
+                    "-C",
+                    &target_str,
+                    "rev-parse",
+                    "--abbrev-ref",
+                    "HEAD",
+                ],
             )
             .map(|s| s.trim().to_string())
             .unwrap_or_else(|_| "unknown".to_string());
@@ -732,14 +767,22 @@ impl SystemOps for RealSystemOps {
         run_command(
             "sudo",
             &[
-                "-u", user, "--", "git",
-                "-c", "http.version=HTTP/1.1",
-                "-c", "core.compression=0",
-                "clone", url,
-                "--branch", branch,
+                "-u",
+                user,
+                "--",
+                "git",
+                "-c",
+                "http.version=HTTP/1.1",
+                "-c",
+                "core.compression=0",
+                "clone",
+                url,
+                "--branch",
+                branch,
                 "--single-branch",
                 "--no-tags",
-                "--depth", &depth_str,
+                "--depth",
+                &depth_str,
                 &target_str,
             ],
         )
@@ -756,7 +799,17 @@ impl SystemOps for RealSystemOps {
             run_command("sudo", &["-u", user, "--", "mkdir", "-p", &target_str])?;
             run_command(
                 "sudo",
-                &["-u", user, "--", "tar", "-xzf", &tmp_str, "-C", &target_str, "--strip-components=1"],
+                &[
+                    "-u",
+                    user,
+                    "--",
+                    "tar",
+                    "-xzf",
+                    &tmp_str,
+                    "-C",
+                    &target_str,
+                    "--strip-components=1",
+                ],
             )?;
             if !target.join("odoo-bin").is_file() {
                 return Err(StepError::Precondition(format!(
@@ -788,7 +841,10 @@ impl SystemOps for RealSystemOps {
 
     fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError> {
         let venv_str = venv.to_string_lossy();
-        run_command("sudo", &["-u", user, "--", "python3", "-m", "venv", &venv_str])
+        run_command(
+            "sudo",
+            &["-u", user, "--", "python3", "-m", "venv", &venv_str],
+        )
     }
 
     fn read_to_string(&self, path: &Path) -> Result<String, StepError> {
@@ -856,10 +912,17 @@ impl SystemOps for RealSystemOps {
         run_command(
             "sudo",
             &[
-                "-u", user, "--", &python, &odoo_bin,
-                "-c", &conf,
-                "-d", db,
-                "-i", "base",
+                "-u",
+                user,
+                "--",
+                &python,
+                &odoo_bin,
+                "-c",
+                &conf,
+                "-d",
+                db,
+                "-i",
+                "base",
                 "--without-demo=all",
                 "--stop-after-init",
             ],
@@ -892,7 +955,9 @@ impl SystemOps for RealSystemOps {
         let u = nix::unistd::User::from_name(user)
             .ok()
             .flatten()
-            .ok_or_else(|| StepError::Precondition(format!("utente '{user}' non trovato per chown")))?;
+            .ok_or_else(|| {
+                StepError::Precondition(format!("utente '{user}' non trovato per chown"))
+            })?;
         // gruppo omonimo se esiste, altrimenti gruppo primario dell'utente.
         let gid = nix::unistd::Group::from_name(user)
             .ok()

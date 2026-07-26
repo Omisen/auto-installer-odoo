@@ -62,9 +62,15 @@ fn checksum_mismatch_fails_without_installing() {
     step.snapshot(&c).expect("snapshot");
     let result = step.run(&c);
 
-    assert!(result.is_err(), "checksum errato deve far fallire il run (G3)");
+    assert!(
+        result.is_err(),
+        "checksum errato deve far fallire il run (G3)"
+    );
     let ops = ops_of(&log);
-    assert!(ops.iter().any(|op| matches!(op, Op::Download { .. })), "il download avviene");
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::Download { .. })),
+        "il download avviene"
+    );
     assert!(
         !ops.iter().any(|op| matches!(op, Op::DpkgInstallFile(_))),
         "con checksum errato NON si deve installare il .deb"
@@ -94,7 +100,10 @@ fn checksum_match_installs() {
     step.run(&c).expect("run con checksum valido");
 
     let ops = ops_of(&log);
-    assert!(ops.iter().any(|op| matches!(op, Op::DpkgInstallFile(_))), "checksum valido → installa");
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::DpkgInstallFile(_))),
+        "checksum valido → installa"
+    );
     assert!(ops.contains(&Op::AptFixBroken));
     assert_eq!(
         serde_json::from_value::<PreState>(step.snapshot_value()).expect("prestate"),
@@ -119,9 +128,14 @@ fn missing_checksum_refuses_to_install() {
     let c = ctx("jammy");
 
     step.snapshot(&c).expect("snapshot");
-    assert!(step.run(&c).is_err(), "senza checksum atteso si rifiuta di installare (G3)");
     assert!(
-        !ops_of(&log).iter().any(|op| matches!(op, Op::DpkgInstallFile(_))),
+        step.run(&c).is_err(),
+        "senza checksum atteso si rifiuta di installare (G3)"
+    );
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::DpkgInstallFile(_))),
         "nessuna installazione senza checksum verificabile"
     );
 }
@@ -152,7 +166,10 @@ fn preexisting_correct_version_is_skipped() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(ops.is_empty(), "versione corretta già presente → nessuna azione, trovato: {ops:?}");
+    assert!(
+        ops.is_empty(),
+        "versione corretta già presente → nessuna azione, trovato: {ops:?}"
+    );
 }
 
 #[test]
@@ -164,7 +181,10 @@ fn codename_mapping() {
 
     let unknown = map_codename(Some("chimera"));
     assert_eq!(unknown.suffix, "jammy");
-    assert!(unknown.fallback, "un codename ignoto usa jammy come fallback (con warning)");
+    assert!(
+        unknown.fallback,
+        "un codename ignoto usa jammy come fallback (con warning)"
+    );
 
     let none = map_codename(None);
     assert_eq!(none.suffix, "jammy");

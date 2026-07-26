@@ -82,9 +82,12 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     } else {
         let suggested = env.version.clone().unwrap_or_else(|| "18.0".to_string());
         let start = VERSIONS.iter().position(|v| *v == suggested).unwrap_or(2);
-        let choice = Select::new("Versione Odoo", VERSIONS.iter().map(|s| s.to_string()).collect())
-            .with_starting_cursor(start)
-            .prompt()?;
+        let choice = Select::new(
+            "Versione Odoo",
+            VERSIONS.iter().map(|s| s.to_string()).collect(),
+        )
+        .with_starting_cursor(start)
+        .prompt()?;
         out.version = Some(choice);
     }
 

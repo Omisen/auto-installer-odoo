@@ -63,7 +63,10 @@ impl InstallState {
     pub fn load(path: &Path) -> Result<Self, StepError> {
         match fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
-                StepError::io(path, std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+                StepError::io(
+                    path,
+                    std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+                )
             }),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Self::default()),
             Err(e) => Err(StepError::io(path, e)),
@@ -81,7 +84,10 @@ impl InstallState {
         }
 
         let json = serde_json::to_vec_pretty(self).map_err(|e| {
-            StepError::io(path, std::io::Error::new(std::io::ErrorKind::InvalidData, e))
+            StepError::io(
+                path,
+                std::io::Error::new(std::io::ErrorKind::InvalidData, e),
+            )
         })?;
 
         // `mode()` applica i permessi solo alla *creazione* del file.

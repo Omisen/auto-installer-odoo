@@ -35,11 +35,11 @@ use odoo_installer::steps::nginx_install::NginxInstall;
 use odoo_installer::steps::nginx_reload::NginxReload;
 use odoo_installer::steps::nginx_write_config::NginxWriteConfig;
 use odoo_installer::steps::patch_bashrc::PatchBashrc;
-use odoo_installer::steps::write_control_script::WriteControlScript;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
 use odoo_installer::steps::setup_log_dir::SetupLogDir;
 use odoo_installer::steps::setup_postgres::SetupPostgres;
 use odoo_installer::steps::setup_systemd::SetupSystemd;
+use odoo_installer::steps::write_control_script::WriteControlScript;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -69,8 +69,8 @@ fn main() -> Result<()> {
     };
 
     // Cascata + validazione (pura).
-    let resolved =
-        ResolvedConfig::resolve(&cli_raw, &env_raw, &prompted, interactive).map_err(|e| anyhow!(e))?;
+    let resolved = ResolvedConfig::resolve(&cli_raw, &env_raw, &prompted, interactive)
+        .map_err(|e| anyhow!(e))?;
 
     // Conferma interattiva della password debole 'admin' (l'hard-stop
     // non-interattivo è già stato applicato dentro `resolve`).
@@ -211,7 +211,10 @@ fn print_configuration(ctx: &Context) {
     println!("  DB user       : {}", ctx.db_user);
     println!("  Porta HTTP    : {}", ctx.port);
     println!("  Install dir   : {}", ctx.install_dir.display());
-    println!("  Nginx         : {}", if ctx.with_nginx { "attivo" } else { "no" });
+    println!(
+        "  Nginx         : {}",
+        if ctx.with_nginx { "attivo" } else { "no" }
+    );
     println!("  Admin passwd  : {admin_line}");
     if ctx.dry_run {
         println!("  Modalità      : dry-run (nessuna mutazione)");

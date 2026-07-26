@@ -56,8 +56,12 @@ fn created_by_us_runs_useradd_and_undo_userdel_without_r() {
     assert_eq!(spec.shell, "/bin/false");
 
     // run: chown esplicito odoo:odoo + chmod 0750 sulla home.
-    assert!(ops.iter().any(|op| matches!(op, Op::ChownNamed { owner, group, .. } if owner == "odoo" && group == "odoo")));
-    assert!(ops.iter().any(|op| matches!(op, Op::Chmod { mode, .. } if *mode == 0o750)));
+    assert!(ops.iter().any(
+        |op| matches!(op, Op::ChownNamed { owner, group, .. } if owner == "odoo" && group == "odoo")
+    ));
+    assert!(ops
+        .iter()
+        .any(|op| matches!(op, Op::Chmod { mode, .. } if *mode == 0o750)));
 
     // undo: userdel + groupdel, MAI con la home (nessun path/`-r`).
     assert!(ops.contains(&Op::DeleteUser("odoo".to_string())));
@@ -87,7 +91,10 @@ fn preexisting_user_is_never_touched() {
 
     let ops = ops_of(&log);
     // Nessuna mutazione: un utente preesistente non viene mai toccato.
-    assert!(ops.is_empty(), "un utente Preexisting non deve subire alcuna azione, trovato: {ops:?}");
+    assert!(
+        ops.is_empty(),
+        "un utente Preexisting non deve subire alcuna azione, trovato: {ops:?}"
+    );
 }
 
 #[test]
@@ -144,5 +151,8 @@ fn dry_run_creates_nothing() {
     assert_eq!(persisted(&step).user_prestate, PreState::Untracked);
     step.undo(&c).expect("undo");
 
-    assert!(ops_of(&log).is_empty(), "dry-run non deve eseguire alcuna operazione");
+    assert!(
+        ops_of(&log).is_empty(),
+        "dry-run non deve eseguire alcuna operazione"
+    );
 }

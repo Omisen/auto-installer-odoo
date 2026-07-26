@@ -99,11 +99,7 @@ impl Step for GenerateConfig {
 
         // Backup se sovrascriviamo un file esistente (per un undo ripristinante).
         if self.snap.prestate == PreState::Preexisting {
-            let backup = format!(
-                "{}.bak.{}",
-                dest.display(),
-                unix_timestamp()
-            );
+            let backup = format!("{}.bak.{}", dest.display(), unix_timestamp());
             self.ops.copy_file(&dest, std::path::Path::new(&backup))?;
             self.snap.backup_path = Some(backup.clone());
             warn!(backup = %backup, "run: file esistente, backup creato prima di sovrascrivere");
@@ -119,7 +115,8 @@ impl Step for GenerateConfig {
         let tmp = Self::temp_path(&dest);
         self.ops.write_private_file(&tmp, &content)?;
         self.ops.move_file(&tmp, &dest)?;
-        self.ops.chown_named(&dest, &ctx.odoo_user, &ctx.odoo_user)?;
+        self.ops
+            .chown_named(&dest, &ctx.odoo_user, &ctx.odoo_user)?;
         self.ops.chmod(&dest, CONF_MODE)?;
 
         if self.snap.prestate == PreState::Untracked {
@@ -187,7 +184,8 @@ fn unix_timestamp() -> u64 {
 /// atteso da Odoo). La password in chiaro entra qui e **solo qui**.
 pub fn render_config(template: &str, ctx: &Context) -> String {
     let install = ctx.install_dir.to_string_lossy();
-    let addons = format!("{install}/odoo/odoo/addons,{install}/odoo/addons,{install}/repos/modules");
+    let addons =
+        format!("{install}/odoo/odoo/addons,{install}/odoo/addons,{install}/repos/modules");
     let data_dir = format!("{}/.local/share/Odoo", ctx.odoo_home.to_string_lossy());
     let logfile = ctx
         .odoo_logfile

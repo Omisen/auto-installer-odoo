@@ -116,7 +116,10 @@ impl Installer {
         if completed.is_empty() {
             return;
         }
-        warn!(steps = completed.len(), "rollback in corso (ordine inverso)");
+        warn!(
+            steps = completed.len(),
+            "rollback in corso (ordine inverso)"
+        );
         reporter.rollback_start(completed.len());
         for &idx in completed.iter().rev() {
             let step = &steps[idx];
@@ -141,11 +144,7 @@ impl Installer {
 ///
 /// Uno snapshot non disponibile (es. query di sistema non ancora possibile) non
 /// interrompe il piano: viene segnalato e si prosegue col prossimo step.
-pub fn dry_run_plan(
-    steps: &mut [Box<dyn Step>],
-    ctx: &Context,
-    reporter: &dyn ProgressReporter,
-) {
+pub fn dry_run_plan(steps: &mut [Box<dyn Step>], ctx: &Context, reporter: &dyn ProgressReporter) {
     let total = steps.len();
     for (idx, step) in steps.iter_mut().enumerate() {
         let name = step.name().to_string();

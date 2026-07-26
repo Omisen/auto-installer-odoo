@@ -35,7 +35,10 @@ fn disabled_logfile_is_full_noop() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    assert!(ops_of(&log).is_empty(), "logfile disabilitato → nessuna azione");
+    assert!(
+        ops_of(&log).is_empty(),
+        "logfile disabilitato → nessuna azione"
+    );
 }
 
 #[test]
@@ -59,9 +62,16 @@ fn created_by_us_creates_and_removes() {
 
     let ops = ops_of(&log);
     assert!(ops.contains(&Op::Mkdir(dir.clone())));
-    assert!(ops.iter().any(|op| matches!(op, Op::ChownNamed { owner, group, .. } if owner == "odoo" && group == "odoo")));
-    assert!(ops.iter().any(|op| matches!(op, Op::Chmod { mode, .. } if *mode == 0o750)));
-    assert!(ops.contains(&Op::Rmdir(dir)), "undo deve rimuovere la dir creata (vuota)");
+    assert!(ops.iter().any(
+        |op| matches!(op, Op::ChownNamed { owner, group, .. } if owner == "odoo" && group == "odoo")
+    ));
+    assert!(ops
+        .iter()
+        .any(|op| matches!(op, Op::Chmod { mode, .. } if *mode == 0o750)));
+    assert!(
+        ops.contains(&Op::Rmdir(dir)),
+        "undo deve rimuovere la dir creata (vuota)"
+    );
 }
 
 #[test]
@@ -80,7 +90,10 @@ fn preexisting_dir_is_not_touched() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    assert!(ops_of(&log).is_empty(), "una log dir Preexisting non va toccata");
+    assert!(
+        ops_of(&log).is_empty(),
+        "una log dir Preexisting non va toccata"
+    );
 }
 
 #[test]

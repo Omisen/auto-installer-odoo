@@ -51,7 +51,9 @@ fn absent_clones_and_undo_removes_target() {
         depth: 5,
     }));
     // Struttura directory creata come utente odoo.
-    assert!(ops.iter().any(|o| matches!(o, Op::MkdirAsUser { user, .. } if user == "odoo")));
+    assert!(ops
+        .iter()
+        .any(|o| matches!(o, Op::MkdirAsUser { user, .. } if user == "odoo")));
     // Undo: rm -rf del target (nostro perimetro).
     assert!(ops.contains(&Op::RemoveDirAll(repo_dir())));
 }
@@ -73,8 +75,14 @@ fn git_existing_correct_branch_is_noop() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(!ops.iter().any(|o| matches!(o, Op::GitClone { .. })), "già clonato: nessun clone");
-    assert!(!ops.iter().any(|o| matches!(o, Op::RemoveDirAll(_))), "Preexisting: undo no-op");
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::GitClone { .. })),
+        "già clonato: nessun clone"
+    );
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::RemoveDirAll(_))),
+        "Preexisting: undo no-op"
+    );
 }
 
 #[test]
@@ -90,7 +98,10 @@ fn branch_mismatch_is_error_not_regenerated() {
     let c = ctx();
 
     // Branch diverso → errore in snapshot, NON si rigenera silenziosamente.
-    assert!(step.snapshot(&c).is_err(), "branch mismatch deve essere un errore");
+    assert!(
+        step.snapshot(&c).is_err(),
+        "branch mismatch deve essere un errore"
+    );
 }
 
 #[test]
@@ -109,9 +120,16 @@ fn retries_then_succeeds_with_cleanup_between() {
     step.run(&c).expect("run"); // NON chiamo undo, per isolare i conteggi
 
     let ops = ops_of(&log);
-    assert_eq!(count(&ops, |o| matches!(o, Op::GitClone { .. })), 3, "3 tentativi di clone");
     assert_eq!(
-        count(&ops, |o| matches!(o, Op::RemoveDirAll(p) if *p == repo_dir())),
+        count(&ops, |o| matches!(o, Op::GitClone { .. })),
+        3,
+        "3 tentativi di clone"
+    );
+    assert_eq!(
+        count(
+            &ops,
+            |o| matches!(o, Op::RemoveDirAll(p) if *p == repo_dir())
+        ),
         2,
         "pulizia degli artefatti parziali tra i tentativi"
     );
@@ -133,7 +151,9 @@ fn falls_back_to_tarball_after_all_retries() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run con fallback tarball");
 
-    assert!(ops_of(&log).iter().any(|o| matches!(o, Op::TarballInstall { .. })));
+    assert!(ops_of(&log)
+        .iter()
+        .any(|o| matches!(o, Op::TarballInstall { .. })));
 }
 
 #[test]
@@ -149,5 +169,8 @@ fn tarball_failure_after_clone_failure_errors() {
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
-    assert!(step.run(&c).is_err(), "clone + tarball entrambi falliti → errore");
+    assert!(
+        step.run(&c).is_err(),
+        "clone + tarball entrambi falliti → errore"
+    );
 }

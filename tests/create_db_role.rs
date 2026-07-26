@@ -76,7 +76,10 @@ fn preexisting_role_is_never_touched() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    assert!(ops_of(&log).is_empty(), "un ruolo preesistente non va né creato né droppato");
+    assert!(
+        ops_of(&log).is_empty(),
+        "un ruolo preesistente non va né creato né droppato"
+    );
 }
 
 #[test]

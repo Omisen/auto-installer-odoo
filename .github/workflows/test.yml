@@ -1,93 +1,48 @@
 # =============================================================================
 # .github/workflows/test.yml
-# Verifica la qualità degli script bash ad ogni push/PR.
+# CI del port Rust dell'installer Odoo.
 #
-# NON esegue l'installazione reale di Odoo (troppo lenta per CI).
-# Esegue invece:
-#   1. shellcheck    — analisi statica su tutti gli script
-#   2. bash -n       — syntax check
-#   3. check_install.sh --dry-run  — validazione logica senza effetti collaterali
+# Verifica formattazione, lint, build e test ad ogni push/PR.
+# I test girano SENZA root: il sistema è modellato via il confine SystemOps
+# (mock), quindi non servono privilegi né servizi esterni nel runner.
 # =============================================================================
 
-name: Lint & Validate
+name: Rust CI
 
 on:
   push:
     branches: ["**"]
   pull_request:
-    branches: [main, master]
+    branches: [main, dev]
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
-
-  # ---------------------------------------------------------------------------
-  # JOB 1 — ShellCheck: analisi statica
-  # Viene eseguito su tutti i file .sh del progetto.
-  # ---------------------------------------------------------------------------
-  shellcheck:
-    name: ShellCheck
+  build-and-test:
+    name: build & test
     runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Installa ShellCheck
-        run: sudo apt-get install -y shellcheck
+      - name: Toolchain Rust (stable + clippy + rustfmt)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
 
-      - name: Esegui ShellCheck su tutti gli script
-        run: |
-          find . -name "*.sh" -not -path "./.git/*" | sort | while read -r f; do
-            echo "→ $f"
-            shellcheck --severity=warning --shell=bash "$f"
-          done
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
 
-  # ---------------------------------------------------------------------------
-  # JOB 2 — Syntax check: bash -n su ogni file
-  # Rapido, non richiede dipendenze esterne.
-  # ---------------------------------------------------------------------------
-  syntax:
-    name: Syntax check (bash -n)
-    runs-on: ubuntu-22.04
+      - name: Formattazione (cargo fmt --check)
+        run: cargo fmt --all -- --check
 
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - name: Lint (clippy, warning = errore)
+        run: cargo clippy --all-targets -- -D warnings
 
-      - name: Verifica sintassi bash
-        run: |
-          errors=0
-          find . -name "*.sh" -not -path "./.git/*" | sort | while read -r f; do
-            if bash -n "$f" 2>&1; then
-              echo "  OK  $f"
-            else
-              echo "  FAIL $f"
-              errors=$((errors + 1))
-            fi
-          done
-          exit $errors
+      - name: Build (release)
+        run: cargo build --release
 
-  # ---------------------------------------------------------------------------
-  # JOB 3 — Dry-run di check_install.sh
-  # Esegue lo script in modalità --dry-run: stampa i comandi che verrebbero
-  # eseguiti senza toccare il sistema.
-  # ---------------------------------------------------------------------------
-  dry-run:
-    name: check_install.sh --dry-run
-    runs-on: ubuntu-22.04
-    needs: [shellcheck, syntax]   # solo se i job precedenti passano
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Rendi eseguibili gli script
-        run: chmod +x installer.sh tests/check_install.sh lib/*.sh
-
-      - name: Esegui check_install.sh in dry-run
-        run: sudo bash tests/check_install.sh --dry-run --verbose
-        env:
-          ODOO_VERSION: "18"
-          ODOO_USER: "odoo"
-          ODOO_HOME: "/opt/odoo"
-          ODOO_PORT: "8069"
-          DB_USER: "odoo"
+      - name: Test (senza root, sistema mockato)
+        run: cargo test

@@ -43,10 +43,7 @@ impl NginxWriteConfig {
     }
 
     fn dest(ctx: &Context) -> std::path::PathBuf {
-        std::path::PathBuf::from(format!(
-            "{SITES_AVAILABLE}/odoo{}",
-            ctx.odoo_version_short
-        ))
+        std::path::PathBuf::from(format!("{SITES_AVAILABLE}/odoo{}", ctx.odoo_version_short))
     }
     fn temp_path(dest: &std::path::Path) -> std::path::PathBuf {
         let parent = dest
