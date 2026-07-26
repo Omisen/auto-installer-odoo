@@ -19,9 +19,12 @@ use odoo_installer::prompt;
 use odoo_installer::state::DEFAULT_STATE_PATH;
 use odoo_installer::step::Step;
 use odoo_installer::steps::apt_packages::AptPackagesStep;
+use odoo_installer::steps::clone_odoo_repo::CloneOdooRepo;
 use odoo_installer::steps::create_database::CreateDatabase;
 use odoo_installer::steps::create_db_role::CreateDbRole;
 use odoo_installer::steps::create_odoo_user::CreateOdooUser;
+use odoo_installer::steps::create_virtualenv::CreateVirtualenv;
+use odoo_installer::steps::install_python_requirements::InstallPythonRequirements;
 use odoo_installer::steps::install_wkhtmltopdf::InstallWkhtmltopdf;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
 use odoo_installer::steps::setup_log_dir::SetupLogDir;
@@ -94,6 +97,11 @@ fn main() -> Result<()> {
         Box::new(SetupPostgres::new()),
         Box::new(CreateDbRole::new()),
         Box::new(CreateDatabase::new()),
+        // Sorgenti Odoo: clone → venv → pip. Rollback inverso: pip (no-op) →
+        // venv (rm -rf sandbox) → clone (rm -rf odoo + contenitore se vuoto).
+        Box::new(CloneOdooRepo::new()),
+        Box::new(CreateVirtualenv::new()),
+        Box::new(InstallPythonRequirements::new()),
     ];
     let mut installer = Installer::new();
     installer.execute(&mut steps, &ctx).map_err(|e| {

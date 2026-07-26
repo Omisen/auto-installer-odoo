@@ -13,7 +13,9 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use odoo_installer::error::StepError;
-use odoo_installer::system_ops::{Downloader, OwnerId, SystemOps, UserSpec};
+use odoo_installer::system_ops::{
+    Downloader, OdooSourceState, OwnerId, SystemOps, UserSpec,
+};
 
 /// Operazione mutante registrata dal mock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +62,25 @@ pub enum Op {
         db: String,
     },
     DropDb(String),
+    RunAsUser {
+        user: String,
+        program: String,
+        args: Vec<String>,
+    },
+    MkdirAsUser {
+        user: String,
+        path: PathBuf,
+    },
+    RemoveDirAll(PathBuf),
+    GitClone {
+        target: PathBuf,
+        branch: String,
+        depth: u32,
+    },
+    TarballInstall {
+        target: PathBuf,
+    },
+    CreateVenv(PathBuf),
 }
 
 /// Risposte statiche del mock alle query di stato.
@@ -79,6 +100,18 @@ pub struct MockConfig {
     /// Esistenza iniziale di ruolo/database PostgreSQL.
     pub role_exists: bool,
     pub db_exists: bool,
+    /// Stato dei sorgenti Odoo rilevato da `detect_odoo_source`.
+    pub source_state: OdooSourceState,
+    /// Numero di tentativi di `git_clone` che falliscono prima di riuscire.
+    pub git_clone_fail_times: u32,
+    /// Se `true`, `tarball_install` fallisce.
+    pub tarball_fails: bool,
+    /// Il python del venv esiste già?
+    pub venv_exists: bool,
+    /// `python3 -m venv` disponibile?
+    pub venv_available: bool,
+    /// Contenuto di requirements.txt (None → read_to_string fallisce).
+    pub requirements_content: Option<String>,
 }
 
 impl Default for MockConfig {
@@ -94,6 +127,12 @@ impl Default for MockConfig {
             service_active: false,
             role_exists: false,
             db_exists: false,
+            source_state: OdooSourceState::Absent,
+            git_clone_fail_times: 0,
+            tarball_fails: false,
+            venv_exists: false,
+            venv_available: true,
+            requirements_content: None,
         }
     }
 }
@@ -109,6 +148,8 @@ pub struct MockSystemOps {
     // aggiornano, così la verifica post-start di SetupPostgres funziona.
     active: Cell<bool>,
     enabled: Cell<bool>,
+    // Conteggio chiamate a git_clone (per simulare i fallimenti iniziali).
+    git_clone_calls: Cell<u32>,
 }
 
 impl MockSystemOps {
@@ -127,6 +168,7 @@ impl MockSystemOps {
             cfg,
             active,
             enabled,
+            git_clone_calls: Cell::new(0),
         }
     }
 
@@ -275,6 +317,83 @@ impl SystemOps for MockSystemOps {
     fn dropdb(&self, db: &str) -> Result<(), StepError> {
         self.record(Op::DropDb(db.to_string()));
         Ok(())
+    }
+
+    fn run_as_user(&self, user: &str, program: &str, args: &[&str]) -> Result<(), StepError> {
+        self.record(Op::RunAsUser {
+            user: user.to_string(),
+            program: program.to_string(),
+            args: args.iter().map(|s| s.to_string()).collect(),
+        });
+        Ok(())
+    }
+    fn mkdir_p_as_user(&self, user: &str, path: &Path) -> Result<(), StepError> {
+        self.record(Op::MkdirAsUser {
+            user: user.to_string(),
+            path: path.to_path_buf(),
+        });
+        Ok(())
+    }
+    fn remove_dir_all(&self, path: &Path) -> Result<(), StepError> {
+        self.record(Op::RemoveDirAll(path.to_path_buf()));
+        Ok(())
+    }
+    fn detect_odoo_source(
+        &self,
+        _user: &str,
+        _target: &Path,
+    ) -> Result<OdooSourceState, StepError> {
+        Ok(self.cfg.source_state.clone())
+    }
+    fn git_clone(
+        &self,
+        _user: &str,
+        _url: &str,
+        branch: &str,
+        depth: u32,
+        target: &Path,
+    ) -> Result<(), StepError> {
+        let n = self.git_clone_calls.get();
+        self.git_clone_calls.set(n + 1);
+        self.record(Op::GitClone {
+            target: target.to_path_buf(),
+            branch: branch.to_string(),
+            depth,
+        });
+        if n < self.cfg.git_clone_fail_times {
+            Err(StepError::CommandFailed {
+                command: "git clone".to_string(),
+                status: "1".to_string(),
+                stderr: "fallimento clone simulato".to_string(),
+            })
+        } else {
+            Ok(())
+        }
+    }
+    fn tarball_install(&self, _user: &str, _url: &str, target: &Path) -> Result<(), StepError> {
+        self.record(Op::TarballInstall {
+            target: target.to_path_buf(),
+        });
+        if self.cfg.tarball_fails {
+            Err(StepError::Precondition("tarball fallito (simulato)".to_string()))
+        } else {
+            Ok(())
+        }
+    }
+    fn venv_python_exists(&self, _venv: &Path) -> bool {
+        self.cfg.venv_exists
+    }
+    fn python_venv_available(&self) -> bool {
+        self.cfg.venv_available
+    }
+    fn create_venv(&self, _user: &str, venv: &Path) -> Result<(), StepError> {
+        self.record(Op::CreateVenv(venv.to_path_buf()));
+        Ok(())
+    }
+    fn read_to_string(&self, path: &Path) -> Result<String, StepError> {
+        self.cfg.requirements_content.clone().ok_or_else(|| {
+            StepError::io(path, std::io::Error::from(std::io::ErrorKind::NotFound))
+        })
     }
 }
 

@@ -23,6 +23,20 @@ pub struct OwnerId {
     pub gid: u32,
 }
 
+/// Stato rilevato dei sorgenti Odoo in una directory target.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub enum OdooSourceState {
+    /// La directory non esiste.
+    #[default]
+    Absent,
+    /// Clone git presente, sul branch indicato.
+    GitRepo { branch: String },
+    /// Directory con `odoo-bin` ma senza `.git` (es. estratta da tarball).
+    TarballPresent,
+    /// Directory esistente ma non valida (né git corretto né `odoo-bin`).
+    InvalidDir,
+}
+
 /// Specifica per la creazione di un utente di sistema (argomenti di `useradd`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserSpec {
@@ -96,6 +110,36 @@ pub trait SystemOps {
     fn createdb(&self, owner: &str, db: &str) -> Result<(), StepError>;
     /// `dropdb --if-exists --force <db>` (chiude le connessioni attive).
     fn dropdb(&self, db: &str) -> Result<(), StepError>;
+
+    // --- sorgenti Odoo (Fase 6, tutto come utente non-root) ------------------
+    /// Esegue `sudo -u <user> -- <program> <args>` (privilegio minimo).
+    fn run_as_user(&self, user: &str, program: &str, args: &[&str]) -> Result<(), StepError>;
+    /// `sudo -u <user> -- mkdir -p <path>`.
+    fn mkdir_p_as_user(&self, user: &str, path: &Path) -> Result<(), StepError>;
+    /// Rimozione ricorsiva (`rm -rf`) di una dir del **nostro** perimetro
+    /// (`<install_dir>/...`). Idempotente: dir assente → no-op.
+    fn remove_dir_all(&self, path: &Path) -> Result<(), StepError>;
+    /// Rileva lo stato dei sorgenti Odoo in `target`.
+    fn detect_odoo_source(&self, user: &str, target: &Path) -> Result<OdooSourceState, StepError>;
+    /// Un singolo tentativo di `git clone` come `user`.
+    fn git_clone(
+        &self,
+        user: &str,
+        url: &str,
+        branch: &str,
+        depth: u32,
+        target: &Path,
+    ) -> Result<(), StepError>;
+    /// Fallback: scarica ed estrae il tarball del branch in `target` (come user).
+    fn tarball_install(&self, user: &str, url: &str, target: &Path) -> Result<(), StepError>;
+    /// `<venv>/bin/python3` esiste ed è eseguibile?
+    fn venv_python_exists(&self, venv: &Path) -> bool;
+    /// `python3 -m venv` è disponibile sul sistema?
+    fn python_venv_available(&self) -> bool;
+    /// `sudo -u <user> -- python3 -m venv <venv>`.
+    fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError>;
+    /// Legge un file di testo (es. requirements.txt).
+    fn read_to_string(&self, path: &Path) -> Result<String, StepError>;
 }
 
 /// Implementazione reale: esegue i comandi di sistema.
@@ -494,6 +538,121 @@ impl SystemOps for RealSystemOps {
             "sudo",
             &["-Hiu", "postgres", "--", "dropdb", "--if-exists", "--force", db],
         )
+    }
+
+    fn run_as_user(&self, user: &str, program: &str, args: &[&str]) -> Result<(), StepError> {
+        let mut full = vec!["-u", user, "--", program];
+        full.extend_from_slice(args);
+        run_command("sudo", &full)
+    }
+
+    fn mkdir_p_as_user(&self, user: &str, path: &Path) -> Result<(), StepError> {
+        let p = path.to_string_lossy();
+        run_command("sudo", &["-u", user, "--", "mkdir", "-p", &p])
+    }
+
+    fn remove_dir_all(&self, path: &Path) -> Result<(), StepError> {
+        match std::fs::remove_dir_all(path) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(StepError::io(path, e)),
+        }
+    }
+
+    fn detect_odoo_source(&self, user: &str, target: &Path) -> Result<OdooSourceState, StepError> {
+        if target.join(".git").is_dir() {
+            let target_str = target.to_string_lossy();
+            let branch = capture_command(
+                "sudo",
+                &["-u", user, "--", "git", "-C", &target_str, "rev-parse", "--abbrev-ref", "HEAD"],
+            )
+            .map(|s| s.trim().to_string())
+            .unwrap_or_else(|_| "unknown".to_string());
+            return Ok(OdooSourceState::GitRepo { branch });
+        }
+        if target.is_dir() {
+            if target.join("odoo-bin").is_file() {
+                return Ok(OdooSourceState::TarballPresent);
+            }
+            return Ok(OdooSourceState::InvalidDir);
+        }
+        Ok(OdooSourceState::Absent)
+    }
+
+    fn git_clone(
+        &self,
+        user: &str,
+        url: &str,
+        branch: &str,
+        depth: u32,
+        target: &Path,
+    ) -> Result<(), StepError> {
+        let target_str = target.to_string_lossy();
+        let depth_str = depth.to_string();
+        run_command(
+            "sudo",
+            &[
+                "-u", user, "--", "git",
+                "-c", "http.version=HTTP/1.1",
+                "-c", "core.compression=0",
+                "clone", url,
+                "--branch", branch,
+                "--single-branch",
+                "--no-tags",
+                "--depth", &depth_str,
+                &target_str,
+            ],
+        )
+    }
+
+    fn tarball_install(&self, user: &str, url: &str, target: &Path) -> Result<(), StepError> {
+        let tmp = std::env::temp_dir().join("odoo-src.tar.gz");
+        let tmp_str = tmp.to_string_lossy().into_owned();
+        let target_str = target.to_string_lossy().into_owned();
+
+        // Scarica; poi crea/estrai come utente (i file risultano owned da lui).
+        let outcome = (|| {
+            run_command("wget", &["-qO", &tmp_str, url])?;
+            run_command("sudo", &["-u", user, "--", "mkdir", "-p", &target_str])?;
+            run_command(
+                "sudo",
+                &["-u", user, "--", "tar", "-xzf", &tmp_str, "-C", &target_str, "--strip-components=1"],
+            )?;
+            if !target.join("odoo-bin").is_file() {
+                return Err(StepError::Precondition(format!(
+                    "fallback tarball completato ma odoo-bin assente in {target_str}"
+                )));
+            }
+            Ok(())
+        })();
+        let _ = std::fs::remove_file(&tmp);
+        outcome
+    }
+
+    fn venv_python_exists(&self, venv: &Path) -> bool {
+        use std::os::unix::fs::PermissionsExt;
+        let python = venv.join("bin").join("python3");
+        python
+            .metadata()
+            .map(|m| m.is_file() && m.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+    }
+
+    fn python_venv_available(&self) -> bool {
+        Command::new("python3")
+            .args(["-m", "venv", "--help"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError> {
+        let venv_str = venv.to_string_lossy();
+        run_command("sudo", &["-u", user, "--", "python3", "-m", "venv", &venv_str])
+    }
+
+    fn read_to_string(&self, path: &Path) -> Result<String, StepError> {
+        std::fs::read_to_string(path).map_err(|e| StepError::io(path, e))
     }
 }
 
