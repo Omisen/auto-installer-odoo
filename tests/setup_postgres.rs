@@ -11,6 +11,7 @@ use odoo_installer::steps::setup_postgres::SetupPostgres;
 
 fn ctx(aggressive: bool) -> Context {
     Context {
+        db_name: "odoo".to_string(),
         dry_run: false,
         aggressive_rollback: aggressive,
         ..Default::default()
@@ -77,6 +78,34 @@ fn purge_only_with_aggressive_rollback() {
     let with = run_cycle(MockConfig::default(), true);
     assert!(has(&with, |o| matches!(o, Op::AptPurge(_))), "con --aggressive-rollback: purga");
     assert!(has(&with, |o| matches!(o, Op::AptAutoremove)));
+}
+
+#[test]
+fn aggressive_purge_declined_when_other_databases_present() {
+    // --aggressive-rollback ma il cluster ospita un DB non-Odoo → NON purgare.
+    let cfg = MockConfig {
+        pg_databases_list: vec!["clientapp".to_string()],
+        ..Default::default()
+    };
+    let ops = run_cycle(cfg, /* aggressive */ true);
+    assert!(
+        !has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        "con altri database nel cluster il purge va declinato"
+    );
+    // stop+disable sono comunque applicati.
+    assert!(has(&ops, |o| matches!(o, Op::ServiceStop(_))));
+    assert!(has(&ops, |o| matches!(o, Op::ServiceDisable(_))));
+}
+
+#[test]
+fn aggressive_purge_allowed_when_only_our_database() {
+    // Nessun altro DB (solo il nostro / nessuno) + aggressive → purge consentito.
+    let cfg = MockConfig {
+        pg_databases_list: vec!["odoo".to_string()], // il nostro
+        ..Default::default()
+    };
+    let ops = run_cycle(cfg, true);
+    assert!(has(&ops, |o| matches!(o, Op::AptPurge(_))), "solo il nostro DB → purge consentito");
 }
 
 #[test]

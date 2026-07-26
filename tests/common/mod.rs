@@ -7,6 +7,8 @@
 
 #![allow(dead_code)] // non tutti i test usano tutte le utility
 
+pub mod model;
+
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -133,6 +135,8 @@ pub struct MockConfig {
     /// Esistenza iniziale di ruolo/database PostgreSQL.
     pub role_exists: bool,
     pub db_exists: bool,
+    /// Database non-template restituiti da `pg_list_databases` (cautela cluster).
+    pub pg_databases_list: Vec<String>,
     /// Stato dei sorgenti Odoo rilevato da `detect_odoo_source`.
     pub source_state: OdooSourceState,
     /// Numero di tentativi di `git_clone` che falliscono prima di riuscire.
@@ -178,6 +182,7 @@ impl Default for MockConfig {
             service_start_fails: false,
             role_exists: false,
             db_exists: false,
+            pg_databases_list: Vec::new(),
             source_state: OdooSourceState::Absent,
             git_clone_fail_times: 0,
             tarball_fails: false,
@@ -441,6 +446,9 @@ impl SystemOps for MockSystemOps {
     fn dropdb(&self, db: &str) -> Result<(), StepError> {
         self.record(Op::DropDb(db.to_string()));
         Ok(())
+    }
+    fn pg_list_databases(&self) -> Result<Vec<String>, StepError> {
+        Ok(self.cfg.pg_databases_list.clone())
     }
 
     fn run_as_user(&self, user: &str, program: &str, args: &[&str]) -> Result<(), StepError> {

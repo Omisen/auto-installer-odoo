@@ -15,6 +15,8 @@ pub mod config;
 pub mod context;
 pub mod engine;
 pub mod error;
+pub mod lockfile;
+pub mod logging;
 pub mod progress;
 pub mod prompt;
 pub mod secret;

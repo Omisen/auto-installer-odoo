@@ -136,6 +136,8 @@ pub trait SystemOps {
     fn createdb(&self, owner: &str, db: &str) -> Result<(), StepError>;
     /// `dropdb --if-exists --force <db>` (chiude le connessioni attive).
     fn dropdb(&self, db: &str) -> Result<(), StepError>;
+    /// Elenca i database non-template del cluster (per la cautela sul purge).
+    fn pg_list_databases(&self) -> Result<Vec<String>, StepError>;
 
     // --- sorgenti Odoo (Fase 6, tutto come utente non-root) ------------------
     /// Esegue `sudo -u <user> -- <program> <args>` (privilegio minimo).
@@ -661,6 +663,21 @@ impl SystemOps for RealSystemOps {
             "sudo",
             &["-Hiu", "postgres", "--", "dropdb", "--if-exists", "--force", db],
         )
+    }
+
+    fn pg_list_databases(&self) -> Result<Vec<String>, StepError> {
+        let out = capture_command(
+            "sudo",
+            &[
+                "-Hiu", "postgres", "--", "psql", "-tAc",
+                "SELECT datname FROM pg_database WHERE datistemplate = false;",
+            ],
+        )?;
+        Ok(out
+            .lines()
+            .map(|l| l.trim().to_string())
+            .filter(|l| !l.is_empty())
+            .collect())
     }
 
     fn run_as_user(&self, user: &str, program: &str, args: &[&str]) -> Result<(), StepError> {

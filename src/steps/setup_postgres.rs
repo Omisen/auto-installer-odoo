@@ -128,7 +128,10 @@ impl Step for SetupPostgres {
             return Ok(());
         }
 
-        // Ordine: stop → disable → (eventuale purge).
+        // Ordine: stop → disable → (eventuale purge). Ma la DECISIONE di purgare
+        // va presa PRIMA dello stop: elencare i DB richiede un postgres attivo.
+        let purge_wanted = self.snap.installed == PreState::CreatedByUs && ctx.aggressive_rollback;
+        let purge_safe = purge_wanted && self.cluster_safe_to_purge(ctx);
 
         // active: fermo solo se l'avevamo avviato noi (D4). Se era già attivo,
         // lo lasciamo running.
@@ -145,24 +148,22 @@ impl Step for SetupPostgres {
             }
         }
 
-        // installed: NON purgare di default. Il purge è troppo distruttivo per
-        // un rollback automatico (rischio dati del cliente). Solo con flag.
+        // installed: NON purgare di default (troppo distruttivo). Solo con flag,
+        // E solo se il cluster non ospita altri database (cautela cluster).
         if self.snap.installed == PreState::CreatedByUs {
-            if ctx.aggressive_rollback {
-                // TODO(cluster-safety): prima di purgare, rilevare best-effort
-                // eventuali cluster/DB non-Odoo e declinare il purge con warning.
-                // Non ancora implementato in modo affidabile: per ora il purge è
-                // gated solo dal flag esplicito.
-                warn!(
-                    "--aggressive-rollback: purgo PostgreSQL. \
-                     ATTENZIONE: eventuali database non-Odoo verrebbero rimossi."
-                );
+            if purge_safe {
+                warn!("--aggressive-rollback: purge PostgreSQL (nessun altro database nel cluster)");
                 if let Err(e) = self.ops.apt_purge(PG_PACKAGES) {
                     warn!(error = %e, "undo: purge postgresql fallito, proseguo (best-effort)");
                 }
                 if let Err(e) = self.ops.apt_autoremove() {
                     warn!(error = %e, "undo: autoremove fallito, proseguo (best-effort)");
                 }
+            } else if purge_wanted {
+                warn!(
+                    "PostgreSQL ospita altri database (o non verificabile): NON lo rimuovo per \
+                     sicurezza. Applicati solo stop+disable."
+                );
             } else {
                 info!(
                     "undo: PostgreSQL lasciato installato (stop+disable sono reversibili; \
@@ -175,5 +176,31 @@ impl Step for SetupPostgres {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
+    }
+}
+
+impl SetupPostgres {
+    /// Cautela cluster (best-effort): purga solo se nel cluster non c'è alcun
+    /// database oltre al nostro (`ctx.db_name`) e a quello di manutenzione
+    /// `postgres`. Se l'elenco non è ottenibile → **non** purgare (fail-safe).
+    fn cluster_safe_to_purge(&self, ctx: &Context) -> bool {
+        match self.ops.pg_list_databases() {
+            Ok(dbs) => {
+                let others: Vec<&String> = dbs
+                    .iter()
+                    .filter(|d| d.as_str() != ctx.db_name && d.as_str() != "postgres")
+                    .collect();
+                if others.is_empty() {
+                    true
+                } else {
+                    warn!(others = ?others, "cluster PostgreSQL con altri database: purge declinato");
+                    false
+                }
+            }
+            Err(e) => {
+                warn!(error = %e, "impossibile elencare i database: per sicurezza non purgo");
+                false
+            }
+        }
     }
 }

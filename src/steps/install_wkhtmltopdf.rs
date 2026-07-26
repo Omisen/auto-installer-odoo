@@ -52,11 +52,35 @@ pub fn map_codename(codename: Option<&str>) -> CodenameMapping {
 
 /// Tabella dei checksum SHA-256 attesi, per suffisso di pacchetto.
 ///
-/// TODO(G3): popolare con i checksum reali delle release wkhtmltopdf
-/// `0.12.6.1-3`. Procedura: scaricare ogni `.deb`, calcolarne lo
-/// `sha256sum` e inserirlo qui. Finché una voce manca, il run **rifiuta** di
-/// installare quel pacchetto (la verifica non va mai silenziata).
+/// # Natura della garanzia: pinning TOFU (trust-on-first-use)
+///
+/// La release ufficiale `wkhtmltopdf/packaging` `0.12.6.1-3` **non** pubblica
+/// checksum né firme per i `.deb` (upstream costruisce in CI e dichiara che
+/// checksum/firme non sono forniti; solo il tag git è firmato GPG). Non esiste
+/// quindi un checksum *upstream* da inserire.
+///
+/// Decisione onesta: **pinning manuale TOFU**. Questi non sono checksum
+/// ufficiali, ma pin generati una volta da una fonte fidata (HTTPS, sito
+/// ufficiale). Da lì l'installer verifica ogni download contro il pin:
+/// protegge da mirror compromessi, download corrotti e alterazioni successive
+/// — anche senza una firma upstream a garantire il primo scaricamento.
+///
+/// ## Procedura per (ri)generare i pin
+/// ```text
+/// for cn in jammy focal bookworm bullseye; do
+///   url="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.${cn}_amd64.deb"
+///   curl -fsSL "$url" | sha256sum        # inserisci il valore per ${cn} qui sotto
+/// done
+/// ```
+/// Aggiorna questi valori quando cambi la versione pinnata.
+///
+/// **Stato attuale: tabella vuota** → il meccanismo fail-closed **rifiuta**
+/// l'installazione finché i pin non sono inseriti (comportamento onesto e
+/// testato). I valori reali li fornisce chi installa, scaricando i `.deb`: NON
+/// vanno inventati. La verifica non va mai bypassata né silenziata.
 pub fn default_checksums() -> BTreeMap<String, String> {
+    // Esempio (PLACEHOLDER da sostituire con pin reali):
+    //   ("jammy".to_string(), "<sha256 del .deb jammy>".to_string()),
     BTreeMap::new()
 }
 

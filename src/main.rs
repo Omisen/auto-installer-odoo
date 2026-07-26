@@ -42,9 +42,11 @@ use odoo_installer::steps::setup_postgres::SetupPostgres;
 use odoo_installer::steps::setup_systemd::SetupSystemd;
 
 fn main() -> Result<()> {
-    init_tracing();
-
     let cli = Cli::parse();
+    // Logging TTY + file (degrada senza root; niente file in dry-run). Il guard
+    // va tenuto in vita per tutta l'esecuzione.
+    let _log_guard = odoo_installer::logging::init(cli.dry_run);
+
     let interactive = prompt::is_interactive();
 
     // Sorgenti grezze: CLI e (opzionale) file .env — parsato, mai eseguito.
@@ -116,6 +118,14 @@ fn main() -> Result<()> {
     // Preflight checks NON mutanti: falliscono prima di ogni mutazione.
     let os_info = run_preflight_checks(&ctx)?;
     ctx.os_info = Some(os_info);
+
+    // Lock esclusivo: impedisce due installazioni simultanee. Il guard rilascia
+    // il lock al Drop (successo, errore o panic). Acquisito dopo i check e prima
+    // di ogni mutazione.
+    let _lock = odoo_installer::lockfile::acquire(std::path::Path::new(
+        odoo_installer::lockfile::DEFAULT_LOCK_PATH,
+    ))
+    .map_err(|e| anyhow!(e))?;
 
     let mut installer = Installer::new();
     installer
@@ -208,13 +218,4 @@ fn print_configuration(ctx: &Context) {
     }
     println!("================================================================");
     println!();
-}
-
-/// Inizializza `tracing` verso il TTY, con livello controllabile da `RUST_LOG`
-/// (default `info`).
-fn init_tracing() {
-    use tracing_subscriber::{fmt, EnvFilter};
-
-    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    let _ = fmt().with_env_filter(filter).try_init();
 }
