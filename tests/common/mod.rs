@@ -61,6 +61,11 @@ pub enum Op {
     RemoveSymlink(PathBuf),
     UfwAllow(String),
     UfwDelete(String),
+    ChownToUser {
+        path: PathBuf,
+        user: String,
+    },
+    AppendLine(PathBuf),
     PgCreateRole {
         role: String,
         // Solo se la password è presente — MAI il valore, per non registrarlo.
@@ -154,6 +159,8 @@ pub struct MockConfig {
     pub existing_ufw_rules: HashSet<String>,
     /// `nginx -t` passa?
     pub nginx_test_ok: bool,
+    /// Home restituita da `getent_home` (None → utente non trovato).
+    pub sudo_home: Option<String>,
 }
 
 impl Default for MockConfig {
@@ -184,6 +191,7 @@ impl Default for MockConfig {
             ufw_active: false,
             existing_ufw_rules: HashSet::new(),
             nginx_test_ok: true,
+            sudo_home: None,
         }
     }
 }
@@ -578,6 +586,29 @@ impl SystemOps for MockSystemOps {
             db: db.to_string(),
         });
         self.db_initialized.set(true);
+        Ok(())
+    }
+    fn getent_home(&self, _user: &str) -> Result<Option<String>, StepError> {
+        Ok(self.cfg.sudo_home.clone())
+    }
+    fn chown_to_user(&self, path: &Path, user: &str) -> Result<(), StepError> {
+        self.record(Op::ChownToUser {
+            path: path.to_path_buf(),
+            user: user.to_string(),
+        });
+        Ok(())
+    }
+    fn append_line(&self, path: &Path, line: &str) -> Result<(), StepError> {
+        self.record(Op::AppendLine(path.to_path_buf()));
+        if self.cfg.real_fs {
+            use std::io::Write;
+            let mut f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(path)
+                .map_err(|e| StepError::io(path, e))?;
+            writeln!(f, "{line}").map_err(|e| StepError::io(path, e))?;
+        }
         Ok(())
     }
 }

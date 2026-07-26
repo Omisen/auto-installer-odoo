@@ -58,6 +58,9 @@ pub struct Context {
     /// Info OS rilevate dai preflight checks; popolate in `main` dopo `check_os`
     /// e usate dalle fasi successive (es. wkhtmltopdf). `None` finché non note.
     pub os_info: Option<OsInfo>,
+    /// Utente che ha lanciato `sudo` (`SUDO_USER`), proprietario del
+    /// control-script e del `.bashrc`. Popolato in `main`. `None` se assente.
+    pub sudo_user: Option<String>,
     /// Risultato condiviso pubblicato da `CreateDatabase` e letto da
     /// `InitializeOdooDatabase`: `true` = il DB è nostro (non preesistente),
     /// quindi è lecito inizializzarne lo schema. **Default `false`** = rifiuta
@@ -89,6 +92,7 @@ impl Context {
             aggressive_rollback: false,
             state_path,
             os_info: None,
+            sudo_user: None,
             db_created_by_us: Arc::new(AtomicBool::new(false)),
         }
     }

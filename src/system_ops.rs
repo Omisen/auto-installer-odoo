@@ -189,6 +189,15 @@ pub trait SystemOps {
         conf: &Path,
         db: &str,
     ) -> Result<(), StepError>;
+
+    // --- control-script + bashrc (Fase 10) -----------------------------------
+    /// Home dell'utente da `getent passwd <user>` (campo 6). `None` se assente.
+    fn getent_home(&self, user: &str) -> Result<Option<String>, StepError>;
+    /// `chown <user>:<user> <path>` (i file restano dell'utente installatore).
+    fn chown_to_user(&self, path: &Path, user: &str) -> Result<(), StepError>;
+    /// Appende una singola riga a un file (creandolo se assente). **Mai**
+    /// riscrivere l'intero file.
+    fn append_line(&self, path: &Path, line: &str) -> Result<(), StepError>;
 }
 
 /// Implementazione reale: esegue i comandi di sistema.
@@ -838,6 +847,53 @@ impl SystemOps for RealSystemOps {
                 "--stop-after-init",
             ],
         )
+    }
+
+    fn getent_home(&self, user: &str) -> Result<Option<String>, StepError> {
+        let output = Command::new("getent")
+            .args(["passwd", user])
+            .output()
+            .map_err(|e| StepError::CommandFailed {
+                command: format!("getent passwd {user}"),
+                status: "spawn-failed".to_string(),
+                stderr: e.to_string(),
+            })?;
+        if !output.status.success() {
+            return Ok(None); // utente non trovato
+        }
+        let line = String::from_utf8_lossy(&output.stdout);
+        let home = line
+            .trim()
+            .split(':')
+            .nth(5)
+            .map(|s| s.to_string())
+            .filter(|s| !s.is_empty());
+        Ok(home)
+    }
+
+    fn chown_to_user(&self, path: &Path, user: &str) -> Result<(), StepError> {
+        let u = nix::unistd::User::from_name(user)
+            .ok()
+            .flatten()
+            .ok_or_else(|| StepError::Precondition(format!("utente '{user}' non trovato per chown")))?;
+        // gruppo omonimo se esiste, altrimenti gruppo primario dell'utente.
+        let gid = nix::unistd::Group::from_name(user)
+            .ok()
+            .flatten()
+            .map(|g| g.gid)
+            .unwrap_or(u.gid);
+        nix::unistd::chown(path, Some(u.uid), Some(gid))
+            .map_err(|e| StepError::io(path, errno_io(e)))
+    }
+
+    fn append_line(&self, path: &Path, line: &str) -> Result<(), StepError> {
+        use std::io::Write;
+        let mut file = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(path)
+            .map_err(|e| StepError::io(path, e))?;
+        writeln!(file, "{line}").map_err(|e| StepError::io(path, e))
     }
 }
 

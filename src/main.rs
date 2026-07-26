@@ -33,6 +33,8 @@ use odoo_installer::steps::nginx_firewall::NginxFirewall;
 use odoo_installer::steps::nginx_install::NginxInstall;
 use odoo_installer::steps::nginx_reload::NginxReload;
 use odoo_installer::steps::nginx_write_config::NginxWriteConfig;
+use odoo_installer::steps::patch_bashrc::PatchBashrc;
+use odoo_installer::steps::write_control_script::WriteControlScript;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
 use odoo_installer::steps::setup_log_dir::SetupLogDir;
 use odoo_installer::steps::setup_postgres::SetupPostgres;
@@ -83,6 +85,7 @@ fn main() -> Result<()> {
     let state_path = PathBuf::from(DEFAULT_STATE_PATH);
     let mut ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
     ctx.aggressive_rollback = cli.aggressive_rollback;
+    ctx.sudo_user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty());
 
     print_configuration(&ctx);
 
@@ -123,6 +126,9 @@ fn main() -> Result<()> {
         Box::new(NginxEnableSite::new()),
         Box::new(NginxFirewall::new()),
         Box::new(NginxReload::new()),
+        // Ultimo step: comando helper `odoo` + patch PATH nel .bashrc dell'utente.
+        Box::new(WriteControlScript::new()),
+        Box::new(PatchBashrc::new()),
     ];
     let mut installer = Installer::new();
     installer.execute(&mut steps, &ctx).map_err(|e| {
