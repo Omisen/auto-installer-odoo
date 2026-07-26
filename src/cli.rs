@@ -31,6 +31,10 @@ pub struct Cli {
     #[arg(long, value_name = "USER")]
     pub db_user: Option<String>,
 
+    /// Password del ruolo PostgreSQL. Vuota/assente → autenticazione peer.
+    #[arg(long, value_name = "PASS")]
+    pub db_password: Option<String>,
+
     /// Porta HTTP di Odoo (default: 8069).
     #[arg(long, value_name = "PORT")]
     pub port: Option<u16>,

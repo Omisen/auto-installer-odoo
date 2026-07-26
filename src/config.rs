@@ -80,6 +80,7 @@ pub struct RawConfig {
     pub version: Option<String>,
     pub odoo_user: Option<String>,
     pub db_user: Option<String>,
+    pub db_password: Option<String>,
     pub port: Option<String>,
     pub db_name: Option<String>,
     pub install_dir: Option<String>,
@@ -95,6 +96,7 @@ impl RawConfig {
             version: cli.version.clone(),
             odoo_user: cli.odoo_user.clone(),
             db_user: cli.db_user.clone(),
+            db_password: cli.db_password.clone(),
             port: cli.port.map(|p| p.to_string()),
             db_name: cli.db_name.clone(),
             install_dir: cli
@@ -154,6 +156,7 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
             "ODOO_VERSION" => raw.version = Some(value),
             "ODOO_USER" => raw.odoo_user = Some(value),
             "DB_USER" => raw.db_user = Some(value),
+            "DB_PASSWORD" => raw.db_password = Some(value),
             "ODOO_PORT" => raw.port = Some(value),
             "DB_NAME" => raw.db_name = Some(value),
             "ODOO_INSTALL_DIR" => raw.install_dir = Some(value),
@@ -303,6 +306,8 @@ pub struct ResolvedConfig {
     pub version_short: String,
     pub odoo_user: String,
     pub db_user: String,
+    /// Password del ruolo PostgreSQL; vuota = autenticazione peer.
+    pub db_password: Secret,
     pub odoo_home: PathBuf,
     pub port: u16,
     pub db_name: String,
@@ -360,6 +365,11 @@ impl ResolvedConfig {
         // Utente DB: segue odoo_user se non disaccoppiato esplicitamente.
         let db_user = resolve_db_user(cli.db_user.as_deref(), env.db_user.as_deref(), &odoo_user)?;
 
+        // Password del ruolo DB: vuota/assente → peer auth (Secret vuoto).
+        let db_password = Secret::new(
+            pick(&cli.db_password, &prompted.db_password, &env.db_password).unwrap_or_default(),
+        );
+
         // Install dir (default derivato, assoluta, sotto home).
         let install_dir_raw = pick(&cli.install_dir, &prompted.install_dir, &env.install_dir);
         let install_dir = resolve_install_dir(install_dir_raw.as_deref(), &home, &version_short)?;
@@ -387,6 +397,7 @@ impl ResolvedConfig {
             version_short,
             odoo_user,
             db_user,
+            db_password,
             odoo_home: home,
             port,
             db_name,

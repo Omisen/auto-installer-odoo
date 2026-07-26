@@ -7,6 +7,7 @@
 
 #![allow(dead_code)] // non tutti i test usano tutte le utility
 
+use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -44,6 +45,21 @@ pub enum Op {
         url: String,
         dest: PathBuf,
     },
+    ServiceEnable(String),
+    ServiceDisable(String),
+    ServiceStart(String),
+    ServiceStop(String),
+    PgCreateRole {
+        role: String,
+        // Solo se la password è presente — MAI il valore, per non registrarlo.
+        has_password: bool,
+    },
+    PgDropRole(String),
+    CreateDb {
+        owner: String,
+        db: String,
+    },
+    DropDb(String),
 }
 
 /// Risposte statiche del mock alle query di stato.
@@ -57,6 +73,12 @@ pub struct MockConfig {
     pub installed_packages: HashSet<String>,
     /// Versione riportata da `wkhtmltopdf_version` (None = non installato).
     pub wk_version: Option<String>,
+    /// Stato iniziale del servizio (postgresql): enabled/active.
+    pub service_enabled: bool,
+    pub service_active: bool,
+    /// Esistenza iniziale di ruolo/database PostgreSQL.
+    pub role_exists: bool,
+    pub db_exists: bool,
 }
 
 impl Default for MockConfig {
@@ -68,6 +90,10 @@ impl Default for MockConfig {
             dir_empty: true,
             installed_packages: HashSet::new(),
             wk_version: None,
+            service_enabled: false,
+            service_active: false,
+            role_exists: false,
+            db_exists: false,
         }
     }
 }
@@ -79,19 +105,29 @@ pub type OpLog = Arc<Mutex<Vec<Op>>>;
 pub struct MockSystemOps {
     log: OpLog,
     cfg: MockConfig,
+    // Stato del servizio con interior mutability: start/stop/enable/disable lo
+    // aggiornano, così la verifica post-start di SetupPostgres funziona.
+    active: Cell<bool>,
+    enabled: Cell<bool>,
 }
 
 impl MockSystemOps {
     /// Crea il mock e ritorna l'handle al log per le asserzioni.
     pub fn new(cfg: MockConfig) -> (Self, OpLog) {
         let log: OpLog = Arc::new(Mutex::new(Vec::new()));
-        (
-            MockSystemOps {
-                log: Arc::clone(&log),
-                cfg,
-            },
+        (Self::with_log(cfg, Arc::clone(&log)), log)
+    }
+
+    /// Crea il mock su un log condiviso (per verificare l'ordine tra più step).
+    pub fn with_log(cfg: MockConfig, log: OpLog) -> Self {
+        let active = Cell::new(cfg.service_active);
+        let enabled = Cell::new(cfg.service_enabled);
+        MockSystemOps {
             log,
-        )
+            cfg,
+            active,
+            enabled,
+        }
     }
 
     fn record(&self, op: Op) {
@@ -182,6 +218,63 @@ impl SystemOps for MockSystemOps {
     }
     fn wkhtmltopdf_version(&self) -> Option<String> {
         self.cfg.wk_version.clone()
+    }
+
+    fn service_is_enabled(&self, _service: &str) -> bool {
+        self.enabled.get()
+    }
+    fn service_is_active(&self, _service: &str) -> bool {
+        self.active.get()
+    }
+    fn service_enable(&self, service: &str) -> Result<(), StepError> {
+        self.enabled.set(true);
+        self.record(Op::ServiceEnable(service.to_string()));
+        Ok(())
+    }
+    fn service_disable(&self, service: &str) -> Result<(), StepError> {
+        self.enabled.set(false);
+        self.record(Op::ServiceDisable(service.to_string()));
+        Ok(())
+    }
+    fn service_start(&self, service: &str) -> Result<(), StepError> {
+        self.active.set(true);
+        self.record(Op::ServiceStart(service.to_string()));
+        Ok(())
+    }
+    fn service_stop(&self, service: &str) -> Result<(), StepError> {
+        self.active.set(false);
+        self.record(Op::ServiceStop(service.to_string()));
+        Ok(())
+    }
+
+    fn pg_role_exists(&self, _role: &str) -> Result<bool, StepError> {
+        Ok(self.cfg.role_exists)
+    }
+    fn pg_db_exists(&self, _db: &str) -> Result<bool, StepError> {
+        Ok(self.cfg.db_exists)
+    }
+    fn pg_create_role(&self, role: &str, password: Option<&str>) -> Result<(), StepError> {
+        // Registra SOLO la presenza della password, mai il valore.
+        self.record(Op::PgCreateRole {
+            role: role.to_string(),
+            has_password: password.is_some(),
+        });
+        Ok(())
+    }
+    fn pg_drop_role(&self, role: &str) -> Result<(), StepError> {
+        self.record(Op::PgDropRole(role.to_string()));
+        Ok(())
+    }
+    fn createdb(&self, owner: &str, db: &str) -> Result<(), StepError> {
+        self.record(Op::CreateDb {
+            owner: owner.to_string(),
+            db: db.to_string(),
+        });
+        Ok(())
+    }
+    fn dropdb(&self, db: &str) -> Result<(), StepError> {
+        self.record(Op::DropDb(db.to_string()));
+        Ok(())
     }
 }
 

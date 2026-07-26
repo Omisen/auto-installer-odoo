@@ -72,6 +72,30 @@ pub trait SystemOps {
     fn dpkg_install_file(&self, path: &Path) -> Result<(), StepError>;
     /// Versione di `wkhtmltopdf` installata (es. `"0.12.6.1"`), o `None`.
     fn wkhtmltopdf_version(&self) -> Option<String>;
+
+    // --- servizi systemd (Fase 5) --------------------------------------------
+    fn service_is_enabled(&self, service: &str) -> bool;
+    fn service_is_active(&self, service: &str) -> bool;
+    fn service_enable(&self, service: &str) -> Result<(), StepError>;
+    fn service_disable(&self, service: &str) -> Result<(), StepError>;
+    fn service_start(&self, service: &str) -> Result<(), StepError>;
+    fn service_stop(&self, service: &str) -> Result<(), StepError>;
+
+    // --- PostgreSQL (Fase 5) -------------------------------------------------
+    /// `true` se il ruolo esiste (`SELECT 1 FROM pg_roles ...`).
+    fn pg_role_exists(&self, role: &str) -> Result<bool, StepError>;
+    /// `true` se il database esiste (`SELECT 1 FROM pg_database ...`).
+    fn pg_db_exists(&self, db: &str) -> Result<bool, StepError>;
+    /// Crea il ruolo. `password` è il segreto in chiaro (o `None` = peer auth):
+    /// l'escaping e l'invio sicuro (stdin, stderr soppresso) sono qui dentro,
+    /// così la password non trapela mai fuori dal confine.
+    fn pg_create_role(&self, role: &str, password: Option<&str>) -> Result<(), StepError>;
+    /// `DROP ROLE IF EXISTS "<role>"`.
+    fn pg_drop_role(&self, role: &str) -> Result<(), StepError>;
+    /// `createdb --owner <owner> <db>`.
+    fn createdb(&self, owner: &str, db: &str) -> Result<(), StepError>;
+    /// `dropdb --if-exists --force <db>` (chiude le connessioni attive).
+    fn dropdb(&self, db: &str) -> Result<(), StepError>;
 }
 
 /// Implementazione reale: esegue i comandi di sistema.
@@ -133,6 +157,107 @@ fn run_apt(args: &[&str]) -> Result<(), StepError> {
             ("NEEDRESTART_MODE", "a"),
         ],
     )
+}
+
+/// Esegue un comando catturandone lo stdout (per query psql/systemctl).
+fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
+    let rendered = format!("{program} {}", args.join(" "));
+    let output = Command::new(program)
+        .args(args)
+        .output()
+        .map_err(|e| StepError::CommandFailed {
+            command: rendered.clone(),
+            status: "spawn-failed".to_string(),
+            stderr: e.to_string(),
+        })?;
+    if output.status.success() {
+        Ok(String::from_utf8_lossy(&output.stdout).into_owned())
+    } else {
+        Err(StepError::CommandFailed {
+            command: rendered,
+            status: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        })
+    }
+}
+
+/// Esegue un comando passando `input` via **stdin** (non in argv).
+///
+/// Se `secret` è `true`, lo stderr NON viene incluso nell'errore: psql, in caso
+/// di errore, ristampa la riga fallita — che conterrebbe la password. Per i
+/// comandi che portano segreti si preferisce perdere il dettaglio diagnostico
+/// piuttosto che rischiare un leak nei log.
+fn run_command_stdin(
+    program: &str,
+    args: &[&str],
+    input: &str,
+    secret: bool,
+) -> Result<(), StepError> {
+    use std::io::Write;
+    use std::process::Stdio;
+
+    let rendered = format!("{program} {}", args.join(" "));
+    let mut child = Command::new(program)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| StepError::CommandFailed {
+            command: rendered.clone(),
+            status: "spawn-failed".to_string(),
+            stderr: e.to_string(),
+        })?;
+
+    // `take()` per chiudere lo stdin (EOF) dopo la scrittura ed evitare deadlock.
+    if let Some(mut stdin) = child.stdin.take() {
+        stdin
+            .write_all(input.as_bytes())
+            .map_err(|e| StepError::CommandFailed {
+                command: rendered.clone(),
+                status: "stdin-write-failed".to_string(),
+                stderr: e.to_string(),
+            })?;
+    }
+
+    let output = child
+        .wait_with_output()
+        .map_err(|e| StepError::CommandFailed {
+            command: rendered.clone(),
+            status: "wait-failed".to_string(),
+            stderr: e.to_string(),
+        })?;
+
+    if output.status.success() {
+        Ok(())
+    } else {
+        let stderr = if secret {
+            "<output soppresso: potrebbe contenere segreti>".to_string()
+        } else {
+            String::from_utf8_lossy(&output.stderr).into_owned()
+        };
+        Err(StepError::CommandFailed {
+            command: rendered,
+            status: output
+                .status
+                .code()
+                .map(|c| c.to_string())
+                .unwrap_or_else(|| "signal".to_string()),
+            stderr,
+        })
+    }
+}
+
+/// Escape di un literal SQL: raddoppia gli apici singoli (standard SQL).
+///
+/// Usato per la password del ruolo. Gli identifier (nome ruolo/DB) sono
+/// validati come identifier in Fase 1 e vengono comunque double-quotati.
+pub fn escape_sql_literal(value: &str) -> String {
+    value.replace('\'', "''")
 }
 
 /// Converte un `Errno` di nix in `io::Error` per allegarlo a `StepError::Io`.
@@ -286,6 +411,89 @@ impl SystemOps for RealSystemOps {
                     && tok.matches('.').count() >= 2
             })
             .map(|s| s.to_string())
+    }
+
+    fn service_is_enabled(&self, service: &str) -> bool {
+        matches!(
+            Command::new("systemctl").args(["is-enabled", service]).output(),
+            Ok(out) if String::from_utf8_lossy(&out.stdout).trim() == "enabled"
+        )
+    }
+
+    fn service_is_active(&self, service: &str) -> bool {
+        Command::new("systemctl")
+            .args(["is-active", "--quiet", service])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    fn service_enable(&self, service: &str) -> Result<(), StepError> {
+        run_command("systemctl", &["enable", service])
+    }
+
+    fn service_disable(&self, service: &str) -> Result<(), StepError> {
+        run_command("systemctl", &["disable", service])
+    }
+
+    fn service_start(&self, service: &str) -> Result<(), StepError> {
+        run_command("systemctl", &["start", service])
+    }
+
+    fn service_stop(&self, service: &str) -> Result<(), StepError> {
+        run_command("systemctl", &["stop", service])
+    }
+
+    fn pg_role_exists(&self, role: &str) -> Result<bool, StepError> {
+        let sql = format!("SELECT 1 FROM pg_roles WHERE rolname = '{}';", escape_sql_literal(role));
+        let out = capture_command("sudo", &["-Hiu", "postgres", "--", "psql", "-tAc", &sql])?;
+        Ok(!out.trim().is_empty())
+    }
+
+    fn pg_db_exists(&self, db: &str) -> Result<bool, StepError> {
+        let sql = format!("SELECT 1 FROM pg_database WHERE datname = '{}';", escape_sql_literal(db));
+        let out = capture_command("sudo", &["-Hiu", "postgres", "--", "psql", "-tAc", &sql])?;
+        Ok(!out.trim().is_empty())
+    }
+
+    fn pg_create_role(&self, role: &str, password: Option<&str>) -> Result<(), StepError> {
+        // Identifier double-quotato; password come literal escaped. L'SQL va via
+        // stdin e, in caso di errore, lo stderr è soppresso (potrebbe contenerla).
+        let sql = match password {
+            Some(pw) => format!(
+                "CREATE ROLE \"{role}\" WITH LOGIN CREATEDB PASSWORD '{}';",
+                escape_sql_literal(pw)
+            ),
+            None => format!("CREATE ROLE \"{role}\" WITH LOGIN CREATEDB;"),
+        };
+        run_command_stdin(
+            "sudo",
+            &["-Hiu", "postgres", "--", "psql", "-v", "ON_ERROR_STOP=1"],
+            &sql,
+            /* secret */ true,
+        )
+    }
+
+    fn pg_drop_role(&self, role: &str) -> Result<(), StepError> {
+        let sql = format!("DROP ROLE IF EXISTS \"{role}\";");
+        run_command(
+            "sudo",
+            &["-Hiu", "postgres", "--", "psql", "-v", "ON_ERROR_STOP=1", "-c", &sql],
+        )
+    }
+
+    fn createdb(&self, owner: &str, db: &str) -> Result<(), StepError> {
+        run_command(
+            "sudo",
+            &["-Hiu", "postgres", "--", "createdb", "--owner", owner, db],
+        )
+    }
+
+    fn dropdb(&self, db: &str) -> Result<(), StepError> {
+        run_command(
+            "sudo",
+            &["-Hiu", "postgres", "--", "dropdb", "--if-exists", "--force", db],
+        )
     }
 }
 

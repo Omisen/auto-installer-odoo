@@ -25,6 +25,8 @@ pub struct Context {
     pub odoo_user: String,
     /// Utente PostgreSQL.
     pub db_user: String,
+    /// Password del ruolo PostgreSQL (redatta nei log); vuota = peer auth.
+    pub db_password: Secret,
     /// Home dell'installazione: costante `/opt/odoo`.
     pub odoo_home: PathBuf,
     /// Porta HTTP di Odoo.
@@ -61,6 +63,7 @@ impl Context {
             odoo_version_short: config.version_short,
             odoo_user: config.odoo_user,
             db_user: config.db_user,
+            db_password: config.db_password,
             odoo_home: config.odoo_home,
             port: config.port,
             db_name: config.db_name,

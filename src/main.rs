@@ -19,10 +19,13 @@ use odoo_installer::prompt;
 use odoo_installer::state::DEFAULT_STATE_PATH;
 use odoo_installer::step::Step;
 use odoo_installer::steps::apt_packages::AptPackagesStep;
+use odoo_installer::steps::create_database::CreateDatabase;
+use odoo_installer::steps::create_db_role::CreateDbRole;
 use odoo_installer::steps::create_odoo_user::CreateOdooUser;
 use odoo_installer::steps::install_wkhtmltopdf::InstallWkhtmltopdf;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
 use odoo_installer::steps::setup_log_dir::SetupLogDir;
+use odoo_installer::steps::setup_postgres::SetupPostgres;
 
 fn main() -> Result<()> {
     init_tracing();
@@ -86,6 +89,11 @@ fn main() -> Result<()> {
         Box::new(AptPackagesStep::bootstrap()),
         Box::new(AptPackagesStep::odoo_dependencies()),
         Box::new(InstallWkhtmltopdf::new()),
+        // PostgreSQL: ordine cruciale per il rollback inverso —
+        // undo: CreateDatabase (drop DB) → CreateDbRole (drop ruolo) → SetupPostgres (stop/disable).
+        Box::new(SetupPostgres::new()),
+        Box::new(CreateDbRole::new()),
+        Box::new(CreateDatabase::new()),
     ];
     let mut installer = Installer::new();
     installer.execute(&mut steps, &ctx).map_err(|e| {
