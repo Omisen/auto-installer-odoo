@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use odoo_installer::error::StepError;
+use odoo_installer::progress::ProgressReporter;
 use odoo_installer::system_ops::{
     Downloader, OdooSourceState, OwnerId, SystemOps, UserSpec,
 };
@@ -641,5 +642,51 @@ impl Downloader for MockDownloader {
 
 /// Snapshot del log per le asserzioni.
 pub fn ops_of(log: &OpLog) -> Vec<Op> {
+    log.lock().expect("lock").clone()
+}
+
+/// Reporter di progresso che registra gli eventi come stringhe (per i test).
+pub type EventLog = Arc<Mutex<Vec<String>>>;
+
+pub struct RecordingReporter {
+    events: EventLog,
+}
+
+impl RecordingReporter {
+    pub fn new() -> (Self, EventLog) {
+        let events: EventLog = Arc::new(Mutex::new(Vec::new()));
+        (
+            RecordingReporter {
+                events: Arc::clone(&events),
+            },
+            events,
+        )
+    }
+    fn push(&self, event: String) {
+        if let Ok(mut v) = self.events.lock() {
+            v.push(event);
+        }
+    }
+}
+
+impl ProgressReporter for RecordingReporter {
+    fn step_start(&self, name: &str, _i: usize, _t: usize) {
+        self.push(format!("start:{name}"));
+    }
+    fn step_done(&self, name: &str) {
+        self.push(format!("done:{name}"));
+    }
+    fn step_failed(&self, name: &str) {
+        self.push(format!("failed:{name}"));
+    }
+    fn rollback_start(&self, _total: usize) {
+        self.push("rollback".to_string());
+    }
+    fn undo_start(&self, name: &str) {
+        self.push(format!("undo:{name}"));
+    }
+}
+
+pub fn events_of(log: &EventLog) -> Vec<String> {
     log.lock().expect("lock").clone()
 }

@@ -15,6 +15,7 @@ pub mod config;
 pub mod context;
 pub mod engine;
 pub mod error;
+pub mod progress;
 pub mod prompt;
 pub mod secret;
 pub mod state;

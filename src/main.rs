@@ -14,7 +14,8 @@ use odoo_installer::checks::{self, OsInfo};
 use odoo_installer::cli::Cli;
 use odoo_installer::config::{self, AdminConfirm, RawConfig, ResolvedConfig};
 use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
+use odoo_installer::engine::{dry_run_plan, Installer};
+use odoo_installer::progress::{IndicatifReporter, LogReporter, ProgressReporter};
 use odoo_installer::prompt;
 use odoo_installer::state::DEFAULT_STATE_PATH;
 use odoo_installer::step::Step;
@@ -89,55 +90,78 @@ fn main() -> Result<()> {
 
     print_configuration(&ctx);
 
-    // 1) Preflight checks NON mutanti: falliscono prima di ogni mutazione.
+    let mut steps = build_steps();
+
+    // Reporter: barra `indicatif` solo con TTY interattivo e installazione reale;
+    // altrimenti solo log. Il motore dipende dall'astrazione, non da indicatif.
+    let reporter: Box<dyn ProgressReporter> = if interactive && !ctx.dry_run {
+        Box::new(IndicatifReporter::new(steps.len()))
+    } else {
+        Box::new(LogReporter)
+    };
+
+    // --- dry-run: mostra il piano, non muta nulla, non persiste stato ---------
+    if ctx.dry_run {
+        println!("=== PIANO (dry-run) — nessuna modifica al sistema ===");
+        dry_run_plan(&mut steps, &ctx, reporter.as_ref());
+        println!("=== fine piano (dry-run) ===");
+        return Ok(());
+    }
+
+    // Conferma finale interattiva prima di mutare il sistema.
+    if interactive && !prompt::confirm("Procedere con l'installazione?")? {
+        bail!("Installazione annullata dall'utente.");
+    }
+
+    // Preflight checks NON mutanti: falliscono prima di ogni mutazione.
     let os_info = run_preflight_checks(&ctx)?;
     ctx.os_info = Some(os_info);
 
-    // 2) Step reversibili, in ordine: prima la dir, poi l'utente che ne diventa
-    //    owner, poi l'eventuale log dir che ha bisogno dell'utente. Il rollback
-    //    li annulla in ordine inverso (log dir → utente → dir).
-    let mut steps: Vec<Box<dyn Step>> = vec![
+    let mut installer = Installer::new();
+    installer
+        .execute_with_reporter(&mut steps, &ctx, reporter.as_ref())
+        .map_err(|e| {
+            // Il rollback è già stato eseguito dentro `execute`.
+            anyhow!(e)
+        })?;
+
+    tracing::info!("preparazione completata");
+    Ok(())
+}
+
+/// Costruisce la sequenza di produzione degli step, nell'ordine di esecuzione.
+/// Il rollback li annulla in ordine inverso.
+fn build_steps() -> Vec<Box<dyn Step>> {
+    vec![
         Box::new(PrepareOptRoot::new()),
         Box::new(CreateOdooUser::new()),
         Box::new(SetupLogDir::new()),
         Box::new(AptPackagesStep::bootstrap()),
         Box::new(AptPackagesStep::odoo_dependencies()),
         Box::new(InstallWkhtmltopdf::new()),
-        // PostgreSQL: ordine cruciale per il rollback inverso —
-        // undo: CreateDatabase (drop DB) → CreateDbRole (drop ruolo) → SetupPostgres (stop/disable).
+        // PostgreSQL: undo inverso CreateDatabase → CreateDbRole → SetupPostgres.
         Box::new(SetupPostgres::new()),
         Box::new(CreateDbRole::new()),
         Box::new(CreateDatabase::new()),
-        // Sorgenti Odoo: clone → venv → pip. Rollback inverso: pip (no-op) →
-        // venv (rm -rf sandbox) → clone (rm -rf odoo + contenitore se vuoto).
+        // Sorgenti: clone → venv → pip (undo pip no-op; venv rm; clone rm).
         Box::new(CloneOdooRepo::new()),
         Box::new(CreateVirtualenv::new()),
         Box::new(InstallPythonRequirements::new()),
-        // Config + init schema. L'undo di init è no-op: la pulizia dello schema
-        // è coperta dal dropdb di CreateDatabase (più a valle nella catena inversa).
+        // Config + init schema (undo init no-op: pulizia dal dropdb di Fase 5).
         Box::new(GenerateConfig::new()),
         Box::new(InitializeOdooDatabase::new()),
-        // Servizio systemd. Undo: stop → disable → rm → daemon-reload.
+        // Servizio systemd (undo: stop → disable → rm → daemon-reload).
         Box::new(SetupSystemd::new()),
-        // Nginx (opzionale, gated da --with-nginx): install → vhost → enable
-        // site → firewall → reload. Se non richiesto, i cinque step sono inerti.
+        // Nginx (opzionale, gated): install → vhost → enable → firewall → reload.
         Box::new(NginxInstall::new()),
         Box::new(NginxWriteConfig::new()),
         Box::new(NginxEnableSite::new()),
         Box::new(NginxFirewall::new()),
         Box::new(NginxReload::new()),
-        // Ultimo step: comando helper `odoo` + patch PATH nel .bashrc dell'utente.
+        // Comando helper `odoo` + patch PATH nel .bashrc dell'utente.
         Box::new(WriteControlScript::new()),
         Box::new(PatchBashrc::new()),
-    ];
-    let mut installer = Installer::new();
-    installer.execute(&mut steps, &ctx).map_err(|e| {
-        // Il rollback è già stato eseguito dentro `execute`.
-        anyhow!(e)
-    })?;
-
-    tracing::info!("preparazione completata");
-    Ok(())
+    ]
 }
 
 /// Esegue i preflight checks non mutanti nell'ordine del Bash. Ritorna le info
