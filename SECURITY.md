@@ -52,7 +52,7 @@ I tempi effettivi dipendono dalla complessita del problema e dalla disponibilita
 ## Buone pratiche per chi usa l'installer
 
 - usa password forti e non lasciare i default in ambienti di produzione;
-- proteggi i file `.env` e i file generati contenenti segreti;
+- proteggi i file `.env` e i file generati contenenti segreti; il file `.env` viene **parsato in modo dichiarativo** (`KEY=VALUE`, nessuna esecuzione di codice), quindi non è un vettore di code-execution;
 - esegui l'installer solo su host fidati e aggiornati;
 - limita l'esposizione di porte e servizi con firewall e reverse proxy correttamente configurati;
 - verifica sempre i permessi finali di configurazioni, log e unit systemd.
