@@ -35,6 +35,9 @@ pub struct Context {
     pub install_dir: PathBuf,
     /// Password admin Odoo (redatta nei log).
     pub admin_passwd: Secret,
+    /// Logfile Odoo; `None` = log su journal/stdout. Determina se
+    /// [`crate::steps::setup_log_dir`] crea una directory o è no-op.
+    pub odoo_logfile: Option<PathBuf>,
     /// Se configurare Nginx come reverse proxy.
     pub with_nginx: bool,
     /// Se `true`, `run`/`undo` non devono mutare il sistema né persistere stato.
@@ -60,6 +63,7 @@ impl Context {
             db_name: config.db_name,
             install_dir: config.install_dir,
             admin_passwd: config.admin_passwd,
+            odoo_logfile: config.odoo_logfile,
             with_nginx: config.with_nginx,
             dry_run,
             state_path,

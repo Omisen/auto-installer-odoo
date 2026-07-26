@@ -52,6 +52,10 @@ pub struct Cli {
     #[arg(long)]
     pub with_nginx: bool,
 
+    /// Percorso del logfile Odoo. Se assente, Odoo logga su journal/stdout.
+    #[arg(long, value_name = "FILE")]
+    pub logfile: Option<PathBuf>,
+
     /// Carica variabili da un file .env (parsing dichiarativo, mai eseguito).
     #[arg(long, value_name = "FILE")]
     pub config: Option<PathBuf>,

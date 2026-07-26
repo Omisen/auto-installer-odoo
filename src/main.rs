@@ -18,7 +18,9 @@ use odoo_installer::engine::Installer;
 use odoo_installer::prompt;
 use odoo_installer::state::DEFAULT_STATE_PATH;
 use odoo_installer::step::Step;
+use odoo_installer::steps::create_odoo_user::CreateOdooUser;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
+use odoo_installer::steps::setup_log_dir::SetupLogDir;
 
 fn main() -> Result<()> {
     init_tracing();
@@ -71,8 +73,14 @@ fn main() -> Result<()> {
     let os_info = run_preflight_checks(&ctx)?;
     ctx.os_info = Some(os_info);
 
-    // 2) Step reversibili. Per ora l'unico step reale è PrepareOptRoot.
-    let mut steps: Vec<Box<dyn Step>> = vec![Box::new(PrepareOptRoot::new())];
+    // 2) Step reversibili, in ordine: prima la dir, poi l'utente che ne diventa
+    //    owner, poi l'eventuale log dir che ha bisogno dell'utente. Il rollback
+    //    li annulla in ordine inverso (log dir → utente → dir).
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(PrepareOptRoot::new()),
+        Box::new(CreateOdooUser::new()),
+        Box::new(SetupLogDir::new()),
+    ];
     let mut installer = Installer::new();
     installer.execute(&mut steps, &ctx).map_err(|e| {
         // Il rollback è già stato eseguito dentro `execute`.
