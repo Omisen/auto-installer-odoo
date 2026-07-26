@@ -18,3 +18,4 @@ pub mod noop;
 pub mod prepare_opt_root;
 pub mod setup_log_dir;
 pub mod setup_postgres;
+pub mod setup_systemd;

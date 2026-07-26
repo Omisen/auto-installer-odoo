@@ -94,6 +94,10 @@ pub trait SystemOps {
     fn service_disable(&self, service: &str) -> Result<(), StepError>;
     fn service_start(&self, service: &str) -> Result<(), StepError>;
     fn service_stop(&self, service: &str) -> Result<(), StepError>;
+    /// `systemctl restart <service>` (riavvia per applicare la nuova config).
+    fn service_restart(&self, service: &str) -> Result<(), StepError>;
+    /// `systemctl daemon-reload`.
+    fn daemon_reload(&self) -> Result<(), StepError>;
 
     // --- PostgreSQL (Fase 5) -------------------------------------------------
     /// `true` se il ruolo esiste (`SELECT 1 FROM pg_roles ...`).
@@ -509,6 +513,14 @@ impl SystemOps for RealSystemOps {
 
     fn service_stop(&self, service: &str) -> Result<(), StepError> {
         run_command("systemctl", &["stop", service])
+    }
+
+    fn service_restart(&self, service: &str) -> Result<(), StepError> {
+        run_command("systemctl", &["restart", service])
+    }
+
+    fn daemon_reload(&self) -> Result<(), StepError> {
+        run_command("systemctl", &["daemon-reload"])
     }
 
     fn pg_role_exists(&self, role: &str) -> Result<bool, StepError> {

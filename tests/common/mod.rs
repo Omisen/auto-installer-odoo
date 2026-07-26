@@ -51,6 +51,8 @@ pub enum Op {
     ServiceDisable(String),
     ServiceStart(String),
     ServiceStop(String),
+    ServiceRestart(String),
+    DaemonReload,
     PgCreateRole {
         role: String,
         // Solo se la password è presente — MAI il valore, per non registrarlo.
@@ -108,9 +110,12 @@ pub struct MockConfig {
     pub installed_packages: HashSet<String>,
     /// Versione riportata da `wkhtmltopdf_version` (None = non installato).
     pub wk_version: Option<String>,
-    /// Stato iniziale del servizio (postgresql): enabled/active.
+    /// Stato iniziale del servizio (postgresql/odoo): enabled/active.
     pub service_enabled: bool,
     pub service_active: bool,
+    /// Se `true`, start/restart NON portano il servizio ad attivo (simula un
+    /// avvio fallito).
+    pub service_start_fails: bool,
     /// Esistenza iniziale di ruolo/database PostgreSQL.
     pub role_exists: bool,
     pub db_exists: bool,
@@ -144,6 +149,7 @@ impl Default for MockConfig {
             wk_version: None,
             service_enabled: false,
             service_active: false,
+            service_start_fails: false,
             role_exists: false,
             db_exists: false,
             source_state: OdooSourceState::Absent,
@@ -313,13 +319,22 @@ impl SystemOps for MockSystemOps {
         Ok(())
     }
     fn service_start(&self, service: &str) -> Result<(), StepError> {
-        self.active.set(true);
+        self.active.set(!self.cfg.service_start_fails);
         self.record(Op::ServiceStart(service.to_string()));
         Ok(())
     }
     fn service_stop(&self, service: &str) -> Result<(), StepError> {
         self.active.set(false);
         self.record(Op::ServiceStop(service.to_string()));
+        Ok(())
+    }
+    fn service_restart(&self, service: &str) -> Result<(), StepError> {
+        self.active.set(!self.cfg.service_start_fails);
+        self.record(Op::ServiceRestart(service.to_string()));
+        Ok(())
+    }
+    fn daemon_reload(&self) -> Result<(), StepError> {
+        self.record(Op::DaemonReload);
         Ok(())
     }
 
