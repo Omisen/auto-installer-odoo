@@ -56,6 +56,14 @@ pub struct Cli {
     #[arg(long)]
     pub with_nginx: bool,
 
+    /// Nome server/dominio per il vhost Nginx (default: `_` catch-all).
+    #[arg(long, value_name = "NAME")]
+    pub server_name: Option<String>,
+
+    /// Abilita SSL nel vhost Nginx e apre la porta 443 sul firewall.
+    #[arg(long)]
+    pub enable_ssl: bool,
+
     /// Percorso del logfile Odoo. Se assente, Odoo logga su journal/stdout.
     #[arg(long, value_name = "FILE")]
     pub logfile: Option<PathBuf>,

@@ -87,6 +87,8 @@ pub struct RawConfig {
     pub admin_passwd: Option<String>,
     pub logfile: Option<String>,
     pub with_nginx: Option<bool>,
+    pub server_name: Option<String>,
+    pub enable_ssl: Option<bool>,
 }
 
 impl RawConfig {
@@ -111,6 +113,8 @@ impl RawConfig {
             // `--with-nginx` non passato → None (cade su .env/default); non c'è
             // negazione da CLI, esattamente come nel Bash.
             with_nginx: if cli.with_nginx { Some(true) } else { None },
+            server_name: cli.server_name.clone(),
+            enable_ssl: if cli.enable_ssl { Some(true) } else { None },
         }
     }
 }
@@ -163,6 +167,8 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
             "ODOO_ADMIN_PASSWD" => raw.admin_passwd = Some(value),
             "ODOO_LOGFILE" => raw.logfile = Some(value),
             "WITH_NGINX" => raw.with_nginx = Some(parse_bool(&value)),
+            "NGINX_SERVER_NAME" => raw.server_name = Some(value),
+            "NGINX_ENABLE_SSL" => raw.enable_ssl = Some(parse_bool(&value)),
             "ODOO_HOME" => warn!("ODOO_HOME è una costante fissa, chiave .env ignorata"),
             other => warn!(key = other, "chiave .env sconosciuta ignorata"),
         }
@@ -316,6 +322,8 @@ pub struct ResolvedConfig {
     /// Logfile Odoo; `None` = log su journal/stdout (default).
     pub odoo_logfile: Option<PathBuf>,
     pub with_nginx: bool,
+    pub nginx_server_name: String,
+    pub nginx_enable_ssl: bool,
 }
 
 /// Sceglie il primo valore presente nella cascata (priorità da sinistra).
@@ -391,6 +399,14 @@ impl ResolvedConfig {
             .or(prompted.with_nginx)
             .or(env.with_nginx)
             .unwrap_or(false);
+        let nginx_server_name = pick(&cli.server_name, &prompted.server_name, &env.server_name)
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| "_".to_string());
+        let nginx_enable_ssl = cli
+            .enable_ssl
+            .or(prompted.enable_ssl)
+            .or(env.enable_ssl)
+            .unwrap_or(false);
 
         Ok(ResolvedConfig {
             version,
@@ -405,6 +421,8 @@ impl ResolvedConfig {
             admin_passwd: Secret::new(admin_raw),
             odoo_logfile,
             with_nginx,
+            nginx_server_name,
+            nginx_enable_ssl,
         })
     }
 }

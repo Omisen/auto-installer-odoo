@@ -28,6 +28,11 @@ use odoo_installer::steps::generate_config::GenerateConfig;
 use odoo_installer::steps::initialize_odoo_database::InitializeOdooDatabase;
 use odoo_installer::steps::install_python_requirements::InstallPythonRequirements;
 use odoo_installer::steps::install_wkhtmltopdf::InstallWkhtmltopdf;
+use odoo_installer::steps::nginx_enable_site::NginxEnableSite;
+use odoo_installer::steps::nginx_firewall::NginxFirewall;
+use odoo_installer::steps::nginx_install::NginxInstall;
+use odoo_installer::steps::nginx_reload::NginxReload;
+use odoo_installer::steps::nginx_write_config::NginxWriteConfig;
 use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
 use odoo_installer::steps::setup_log_dir::SetupLogDir;
 use odoo_installer::steps::setup_postgres::SetupPostgres;
@@ -111,6 +116,13 @@ fn main() -> Result<()> {
         Box::new(InitializeOdooDatabase::new()),
         // Servizio systemd. Undo: stop → disable → rm → daemon-reload.
         Box::new(SetupSystemd::new()),
+        // Nginx (opzionale, gated da --with-nginx): install → vhost → enable
+        // site → firewall → reload. Se non richiesto, i cinque step sono inerti.
+        Box::new(NginxInstall::new()),
+        Box::new(NginxWriteConfig::new()),
+        Box::new(NginxEnableSite::new()),
+        Box::new(NginxFirewall::new()),
+        Box::new(NginxReload::new()),
     ];
     let mut installer = Installer::new();
     installer.execute(&mut steps, &ctx).map_err(|e| {

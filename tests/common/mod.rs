@@ -52,7 +52,15 @@ pub enum Op {
     ServiceStart(String),
     ServiceStop(String),
     ServiceRestart(String),
+    ServiceReload(String),
     DaemonReload,
+    CreateSymlink {
+        src: PathBuf,
+        link: PathBuf,
+    },
+    RemoveSymlink(PathBuf),
+    UfwAllow(String),
+    UfwDelete(String),
     PgCreateRole {
         role: String,
         // Solo se la password è presente — MAI il valore, per non registrarlo.
@@ -136,6 +144,16 @@ pub struct MockConfig {
     /// Se `true`, le operazioni su file (write/move/copy/remove) toccano il
     /// filesystem reale (usare solo con path in una tempdir). chown resta finto.
     pub real_fs: bool,
+    /// Nginx: il default site (`sites-enabled/default`) esiste?
+    pub default_site_exists: bool,
+    /// Nginx: il nostro symlink `sites-enabled/odoo<N>` esiste già?
+    pub our_link_exists: bool,
+    /// Firewall: ufw installato / attivo, e regole già presenti.
+    pub ufw_available: bool,
+    pub ufw_active: bool,
+    pub existing_ufw_rules: HashSet<String>,
+    /// `nginx -t` passa?
+    pub nginx_test_ok: bool,
 }
 
 impl Default for MockConfig {
@@ -160,6 +178,12 @@ impl Default for MockConfig {
             requirements_content: None,
             db_initialized: false,
             real_fs: false,
+            default_site_exists: false,
+            our_link_exists: false,
+            ufw_available: false,
+            ufw_active: false,
+            existing_ufw_rules: HashSet::new(),
+            nginx_test_ok: true,
         }
     }
 }
@@ -333,9 +357,51 @@ impl SystemOps for MockSystemOps {
         self.record(Op::ServiceRestart(service.to_string()));
         Ok(())
     }
+    fn service_reload(&self, service: &str) -> Result<(), StepError> {
+        self.record(Op::ServiceReload(service.to_string()));
+        Ok(())
+    }
     fn daemon_reload(&self) -> Result<(), StepError> {
         self.record(Op::DaemonReload);
         Ok(())
+    }
+    fn create_symlink(&self, src: &Path, link: &Path) -> Result<(), StepError> {
+        self.record(Op::CreateSymlink {
+            src: src.to_path_buf(),
+            link: link.to_path_buf(),
+        });
+        Ok(())
+    }
+    fn remove_symlink(&self, link: &Path) -> Result<(), StepError> {
+        self.record(Op::RemoveSymlink(link.to_path_buf()));
+        Ok(())
+    }
+    fn symlink_exists(&self, link: &Path) -> bool {
+        if link.ends_with("default") {
+            self.cfg.default_site_exists
+        } else {
+            self.cfg.our_link_exists
+        }
+    }
+    fn ufw_available(&self) -> bool {
+        self.cfg.ufw_available
+    }
+    fn ufw_is_active(&self) -> bool {
+        self.cfg.ufw_active
+    }
+    fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError> {
+        Ok(self.cfg.existing_ufw_rules.contains(rule))
+    }
+    fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
+        self.record(Op::UfwAllow(rule.to_string()));
+        Ok(())
+    }
+    fn ufw_delete(&self, rule: &str) -> Result<(), StepError> {
+        self.record(Op::UfwDelete(rule.to_string()));
+        Ok(())
+    }
+    fn nginx_test(&self) -> bool {
+        self.cfg.nginx_test_ok
     }
 
     fn pg_role_exists(&self, _role: &str) -> Result<bool, StepError> {

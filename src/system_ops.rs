@@ -96,8 +96,30 @@ pub trait SystemOps {
     fn service_stop(&self, service: &str) -> Result<(), StepError>;
     /// `systemctl restart <service>` (riavvia per applicare la nuova config).
     fn service_restart(&self, service: &str) -> Result<(), StepError>;
+    /// `systemctl reload <service>` (ricarica senza downtime).
+    fn service_reload(&self, service: &str) -> Result<(), StepError>;
     /// `systemctl daemon-reload`.
     fn daemon_reload(&self) -> Result<(), StepError>;
+
+    // --- Nginx / firewall (Fase 9) -------------------------------------------
+    /// `ln -sf <src> <link>` (symlink idempotente).
+    fn create_symlink(&self, src: &Path, link: &Path) -> Result<(), StepError>;
+    /// Rimuove un symlink. Idempotente (assente → no-op).
+    fn remove_symlink(&self, link: &Path) -> Result<(), StepError>;
+    /// `true` se esiste (anche dangling: `test -e`/`test -L`).
+    fn symlink_exists(&self, link: &Path) -> bool;
+    /// `ufw` è installato?
+    fn ufw_available(&self) -> bool;
+    /// `ufw` è attivo (`Status: active`)?
+    fn ufw_is_active(&self) -> bool;
+    /// La regola (es. `"80/tcp"`) è già presente in `ufw status`?
+    fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError>;
+    /// `ufw allow <rule>`.
+    fn ufw_allow(&self, rule: &str) -> Result<(), StepError>;
+    /// `ufw delete allow <rule>`.
+    fn ufw_delete(&self, rule: &str) -> Result<(), StepError>;
+    /// `nginx -t`: la config è valida?
+    fn nginx_test(&self) -> bool;
 
     // --- PostgreSQL (Fase 5) -------------------------------------------------
     /// `true` se il ruolo esiste (`SELECT 1 FROM pg_roles ...`).
@@ -519,8 +541,65 @@ impl SystemOps for RealSystemOps {
         run_command("systemctl", &["restart", service])
     }
 
+    fn service_reload(&self, service: &str) -> Result<(), StepError> {
+        run_command("systemctl", &["reload", service])
+    }
+
     fn daemon_reload(&self) -> Result<(), StepError> {
         run_command("systemctl", &["daemon-reload"])
+    }
+
+    fn create_symlink(&self, src: &Path, link: &Path) -> Result<(), StepError> {
+        let src = src.to_string_lossy();
+        let link = link.to_string_lossy();
+        run_command("ln", &["-sf", &src, &link])
+    }
+
+    fn remove_symlink(&self, link: &Path) -> Result<(), StepError> {
+        match std::fs::remove_file(link) {
+            Ok(()) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(StepError::io(link, e)),
+        }
+    }
+
+    fn symlink_exists(&self, link: &Path) -> bool {
+        link.symlink_metadata().is_ok()
+    }
+
+    fn ufw_available(&self) -> bool {
+        Command::new("ufw")
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+    }
+
+    fn ufw_is_active(&self) -> bool {
+        capture_command("ufw", &["status"])
+            .map(|s| s.contains("Status: active"))
+            .unwrap_or(false)
+    }
+
+    fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError> {
+        let status = capture_command("ufw", &["status"])?;
+        Ok(status.contains(rule))
+    }
+
+    fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
+        run_command("ufw", &["allow", rule])
+    }
+
+    fn ufw_delete(&self, rule: &str) -> Result<(), StepError> {
+        run_command("ufw", &["delete", "allow", rule])
+    }
+
+    fn nginx_test(&self) -> bool {
+        Command::new("nginx")
+            .arg("-t")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
     }
 
     fn pg_role_exists(&self, role: &str) -> Result<bool, StepError> {

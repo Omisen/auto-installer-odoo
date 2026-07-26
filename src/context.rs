@@ -44,6 +44,10 @@ pub struct Context {
     pub odoo_logfile: Option<PathBuf>,
     /// Se configurare Nginx come reverse proxy.
     pub with_nginx: bool,
+    /// Nome server/dominio del vhost Nginx (default `_`).
+    pub nginx_server_name: String,
+    /// Se abilitare SSL nel vhost e aprire la 443 sul firewall.
+    pub nginx_enable_ssl: bool,
     /// Se `true`, `run`/`undo` non devono mutare il sistema né persistere stato.
     pub dry_run: bool,
     /// Se `true`, il rollback purga anche pacchetti che di norma lascerebbe
@@ -79,6 +83,8 @@ impl Context {
             admin_passwd: config.admin_passwd,
             odoo_logfile: config.odoo_logfile,
             with_nginx: config.with_nginx,
+            nginx_server_name: config.nginx_server_name,
+            nginx_enable_ssl: config.nginx_enable_ssl,
             dry_run,
             aggressive_rollback: false,
             state_path,
