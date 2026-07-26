@@ -7,10 +7,6 @@ Installer per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04 e Debian ≥ 11, or
 com'era prima.* Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, config,
 servizio systemd e (opzionale) Nginx.
 
-> **Nota sulla versione.** Questo branch (`dev`) usa l'**installer Rust** (binario `odoo-installer`). I
-> file `installer.sh` e `lib/*.sh` sono la **versione Bash precedente** (tag `v1.x`), mantenuta come
-> storico ma **superata** dal port Rust. Usa il binario Rust.
-
 ---
 
 ## Cosa lo distingue
@@ -251,10 +247,20 @@ AutoInstallerOdoo/
 cargo build
 cargo test          # gira senza root: il sistema è modellato con un mock
 cargo clippy --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
 
 I test coprono ogni step (round-trip snapshot→run→undo), i coordinamenti fra step, e il **rollback
-end-to-end** (fallimento iniettato → stato finale == iniziale; risorse preesistenti intatte).
+end-to-end** (fallimento iniettato → stato finale == iniziale; risorse preesistenti intatte). La CI
+(`.github/workflows/test.yml`) esegue gli stessi controlli ad ogni push/PR.
+
+---
+
+## Storia
+
+L'installer era originariamente scritto in **Bash**. Quelle versioni sono archiviate ai tag
+[`v1.0.0`](../../releases/tag/v1.0.0) e [`v1.2.0`](../../releases/tag/v1.2.0). La versione corrente è un
+**rewrite completo in Rust** con rollback transazionale: è l'unica presente nel repo.
 
 ---
 
