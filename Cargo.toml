@@ -5,6 +5,31 @@ edition = "2021"
 description = "Installer Odoo con rollback chirurgico (port Rust)"
 license = "MIT"
 
+# Metadati per `cargo deb`: producono un .deb che deposita SOLO il binario CLI
+# `odoo-installer` in /usr/bin (+ la doc). Il pacchetto NON installa servizi, NON
+# crea utenti, NON tocca PostgreSQL/Nginx: quelle cose le crea l'installer a
+# runtime sul target quando l'utente lo lancia. Perciò niente `systemd-units` e
+# niente `depends` su postgresql/nginx/python — sono compito del binario, non del
+# pacchetto. `depends = "$auto"` copre le sole dipendenze di linking del binario
+# (per il target musl statico: pressoché nessuna).
+[package.metadata.deb]
+maintainer = "Omisen"
+copyright = "2026, Omisen"
+license-file = ["LICENSE", "0"]
+extended-description = """\
+Installer per Odoo (16/17/18/19) su Ubuntu/Debian, con rollback transazionale. \
+Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, \
+systemd e Nginx opzionale; annulla in modo pulito in caso di errore. \
+Il pacchetto installa solo il tool a riga di comando: l'installazione di Odoo \
+avviene a runtime quando l'utente esegue `odoo-installer`."""
+section = "admin"
+priority = "optional"
+depends = "$auto"
+assets = [
+    ["target/release/odoo-installer", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/odoo-installer/README", "644"],
+]
+
 [lib]
 name = "odoo_installer"
 path = "src/lib.rs"

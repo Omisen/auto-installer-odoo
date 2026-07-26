@@ -30,7 +30,7 @@ servizio systemd e (opzionale) Nginx.
 | Privilegi | utente normale con `sudo` (non login diretto come root) |
 | Disk | ≥ 5 GB liberi (override `MIN_DISK_GB`) |
 | Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx |
-| Build | toolchain Rust stabile (`cargo`) — non è distribuito un binario precompilato |
+| Installazione | **binario precompilato** dalle [release](../../releases/latest), oppure build da sorgente (toolchain Rust `cargo`) |
 
 `ODOO_HOME` è **costante** `/opt/odoo` (non sovrascrivibile).
 
@@ -38,20 +38,67 @@ servizio systemd e (opzionale) Nginx.
 
 ## Installazione rapida
 
+### Opzione A — binario precompilato (consigliata, niente Rust)
+
+Scarica l'ultimo binario dalla pagina **[Releases](../../releases/latest)**. Due varianti Linux x86_64:
+
+- `odoo-installer-x86_64-unknown-linux-musl.tar.gz` → **statico**, gira su **qualsiasi** distro (consigliato per i clienti);
+- `odoo-installer-x86_64-unknown-linux-gnu.tar.gz` → dinamico, per sistemi con glibc recente.
+
+Ogni archivio ha un file `.sha256` per **verificare l'integrità** del download.
+
 ```bash
-# 1. Toolchain Rust (una volta sola)
+VER=v2.0.0                       # sostituisci con l'ultima versione
+file=odoo-installer-x86_64-unknown-linux-musl.tar.gz
+base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
+
+curl -fsSL -O "${base}/${file}" -O "${base}/${file}.sha256"
+sha256sum -c "${file}.sha256"    # deve dire: OK
+tar xzf "${file}"
+
+sudo ./odoo-installer                                        # guidato (interattivo)
+# oppure non-interattivo:
+sudo ./odoo-installer --config production.env --with-nginx
+```
+
+### Opzione A-bis — pacchetto `.deb` (esperienza `apt` nativa)
+
+Su Debian/Ubuntu puoi installare l'installer come pacchetto: il comando `odoo-installer`
+finisce nel `PATH` ed è rimovibile con `apt remove odoo-installer`. Il `.deb` è **statico**
+(musl), quindi gira su qualsiasi distro. Deposita **solo** il binario CLI — non installa
+servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
+
+```bash
+VER=v2.0.0                       # sostituisci con l'ultima versione
+deb=odoo-installer_2.0.0_amd64.deb
+base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
+
+curl -fsSL -O "${base}/${deb}" -O "${base}/${deb}.sha256"
+sha256sum -c "${deb}.sha256"     # deve dire: OK
+
+sudo apt install ./"${deb}"      # oppure: sudo dpkg -i ./"${deb}"
+
+sudo odoo-installer                                          # ora è nel PATH
+# oppure non-interattivo:
+sudo odoo-installer --config production.env --with-nginx
+```
+
+### Opzione B — build da sorgente
+
+```bash
+# Toolchain Rust (una volta sola)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
-# 2. Build del binario
-cargo build --release
-# → target/release/odoo-installer
+# Clona il repository
+git clone https://github.com/Omisen/auto-installer-odoo.git
+cd auto-installer-odoo
 
-# 3a. Esecuzione GUIDATA (prompt interattivi)
+cargo build --release            # → target/release/odoo-installer
+
 sudo ./target/release/odoo-installer
-
-# 3b. Esecuzione NON-INTERATTIVA (.env + flag)
-sudo ./target/release/odoo-installer --config configs/production.env --version 18 --with-nginx
+# oppure non-interattivo (esempi in configs/):
+sudo ./target/release/odoo-installer --config configs/production.env --with-nginx
 ```
 
 Va eseguito **via `sudo` da un utente normale** (l'utente `SUDO_USER` diventa proprietario del comando

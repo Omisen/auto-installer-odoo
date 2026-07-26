@@ -15,13 +15,24 @@ on:
   pull_request:
     branches: [main, dev]
 
+# Permessi minimi: la CI legge soltanto il codice.
+permissions:
+  contents: read
+
+# Annulla run precedenti ancora in corso sullo stesso ref (risparmia minuti CI).
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
 
 jobs:
-  build-and-test:
+  ci:
     name: build & test
     runs-on: ubuntu-22.04
+    timeout-minutes: 20
 
     steps:
       - name: Checkout
@@ -35,14 +46,15 @@ jobs:
       - name: Cache di cargo
         uses: Swatinem/rust-cache@v2
 
+      # Ordine dal più veloce a fallire al più lento, così il feedback è rapido.
       - name: Formattazione (cargo fmt --check)
         run: cargo fmt --all -- --check
 
       - name: Lint (clippy, warning = errore)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Build (release)
-        run: cargo build --release
-
       - name: Test (senza root, sistema mockato)
-        run: cargo test
+        run: cargo test --locked
+
+      - name: Build release (verifica che il binario compili)
+        run: cargo build --release --locked

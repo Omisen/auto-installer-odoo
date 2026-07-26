@@ -1,0 +1,104 @@
+# =============================================================================
+# .github/workflows/release.yml
+# Release automatica con binari LINUX precompilati.
+#
+# A ogni tag di versione (es. v2.0.0), builda l'installer in release per due
+# target Linux x86_64 e allega gli archivi (+ checksum SHA-256) alla GitHub
+# Release. Così clienti e stagisti scaricano un eseguibile pronto, senza avere
+# Rust installato — "un file, lo lanci, funziona".
+#
+# Target:
+#   - x86_64-unknown-linux-gnu   → standard (glibc), per la maggior parte dei server
+#   - x86_64-unknown-linux-musl  → STATICO, gira su qualsiasi distro (consigliato ai clienti)
+#
+# Nota: l'installer è Linux-only per natura (useradd/apt/systemctl/sudo/nix): non
+# esistono target Windows/macOS sensati. Solo binari Linux, ed è voluto.
+#
+# La CI di qualità (fmt/clippy/build/test) resta in test.yml, su push/PR.
+# Qui si producono solo gli artefatti, su tag. Tagga commit già verdi.
+# =============================================================================
+
+name: Release
+
+on:
+  push:
+    tags:
+      - "v[0-9]+.*"
+
+permissions:
+  contents: write # necessario per creare la Release e caricare gli asset
+
+jobs:
+  # Crea la GitHub Release dal tag. Bozza: gli asset vengono allegati ma la
+  # release non è pubblica finché non la revisioni (incolli il changelog) e la
+  # pubblichi manualmente.
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/create-gh-release-action@v1
+        with:
+          draft: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Builda e carica un archivio per ogni target. L'action gestisce cross-build
+  # (musl) e genera archivio .tar.gz + file .sha256 accanto ad esso.
+  upload-assets:
+    needs: create-release
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: taiki-e/upload-rust-binary-action@v1
+        with:
+          bin: odoo-installer
+          target: ${{ matrix.target }}
+          # Naming chiaro: odoo-installer-<target>.tar.gz
+          archive: $bin-$target
+          checksum: sha256
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # Pacchetto .deb "nativo" per Debian/Ubuntu, ACCANTO ai tar.gz (non li
+  # sostituisce). Chi vuole `apt install ./odoo-installer_x.y.z_amd64.deb` e il
+  # comando nel PATH usa questo; chi vuole il binario nudo usa il tar.gz.
+  #
+  # Il .deb impacchetta il TOOL, non Odoo: deposita solo /usr/bin/odoo-installer
+  # (+ doc). Nessun servizio, nessun utente, nessuna dipendenza su postgres/nginx
+  # — quelle le crea l'installer a runtime. Buildato da musl statico, così gira
+  # su qualsiasi distro.
+  deb:
+    needs: create-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Installa cargo-deb
+        run: cargo install cargo-deb --locked
+      - name: Build release (musl, statico)
+        run: cargo build --release --target x86_64-unknown-linux-musl --locked
+      - name: Genera il .deb (senza ricompilare)
+        run: cargo deb --no-build --target x86_64-unknown-linux-musl
+      - name: Checksum SHA-256
+        run: |
+          deb="$(ls target/x86_64-unknown-linux-musl/debian/*.deb)"
+          ( cd "$(dirname "$deb")" && sha256sum "$(basename "$deb")" > "$(basename "$deb").sha256" )
+          echo "DEB=$deb" >> "$GITHUB_ENV"
+      - name: Carica .deb + checksum sulla Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" "$DEB" "$DEB.sha256" --clobber
