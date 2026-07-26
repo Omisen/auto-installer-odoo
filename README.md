@@ -2,8 +2,27 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Installer bash con raccolta input guidata per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04 e Debian ≥ 11.  
-Gestisce dipendenze di sistema, PostgreSQL, virtualenv Python, servizio systemd e (opzionale) Nginx come reverse proxy.
+Installer per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04 e Debian ≥ 11, ora **in Rust** con
+**rollback transazionale**: *o l'installazione riesce completamente, o il sistema torna esattamente
+com'era prima.* Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, config,
+servizio systemd e (opzionale) Nginx.
+
+> **Nota sulla versione.** Questo branch (`dev`) usa l'**installer Rust** (binario `odoo-installer`). I
+> file `installer.sh` e `lib/*.sh` sono la **versione Bash precedente** (tag `v1.x`), mantenuta come
+> storico ma **superata** dal port Rust. Usa il binario Rust.
+
+---
+
+## Cosa lo distingue
+
+- **Rollback chirurgico verificato** — se un passo fallisce, gli step già eseguiti vengono annullati in
+  ordine inverso; le risorse **preesistenti** del cliente non vengono toccate. È una proprietà provata
+  con test end-to-end, non una promessa.
+- **Binario unico, senza runtime** — un eseguibile nativo; git/apt/psql/venv restano comandi esterni.
+- **Idempotente e sicuro** — rileva ciò che esiste già e non lo ricrea; il file `.env` è **parsato in
+  modo dichiarativo**, mai eseguito come codice.
+- **Un solo flusso, due modi** — guidato (prompt interattivi) oppure non-interattivo
+  (`--config`/flag/CI), con la stessa logica.
 
 ---
 
@@ -12,174 +31,236 @@ Gestisce dipendenze di sistema, PostgreSQL, virtualenv Python, servizio systemd 
 | Requisito | Dettaglio |
 |-----------|-----------|
 | OS | Ubuntu ≥ 22.04 **o** Debian ≥ 11 |
-| Utente | utente normale con accesso `sudo` (non login diretto come root) |
-| Disk | ≥ 5 GB liberi |
+| Privilegi | utente normale con `sudo` (non login diretto come root) |
+| Disk | ≥ 5 GB liberi (override `MIN_DISK_GB`) |
 | Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx |
+| Build | toolchain Rust stabile (`cargo`) — non è distribuito un binario precompilato |
+
+`ODOO_HOME` è **costante** `/opt/odoo` (non sovrascrivibile).
 
 ---
 
 ## Installazione rapida
 
 ```bash
-# 1. Clona il repository
-git clone https://github.com/Omisen/auto-installer-odoo.git
-cd auto-installer-odoo
+# 1. Toolchain Rust (una volta sola)
+curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+source "$HOME/.cargo/env"
 
-# 2. Rendi eseguibile lo script
-chmod +x installer.sh
+# 2. Build del binario
+cargo build --release
+# → target/release/odoo-installer
 
-# 3. Avvia l'installazione (utente normale con sudo)
-sudo ./installer.sh
+# 3a. Esecuzione GUIDATA (prompt interattivi)
+sudo ./target/release/odoo-installer
+
+# 3b. Esecuzione NON-INTERATTIVA (.env + flag)
+sudo ./target/release/odoo-installer --config configs/production.env --version 18 --with-nginx
 ```
 
-L'installer raccoglie i parametri principali con questa priorita:
-
-1. argomento CLI
-2. input interattivo
-3. default finale
-
-Premendo Invio su un prompt viene confermato subito il valore suggerito, che viene anche segnalato esplicitamente nel log.
-
-I default iniziali sono:
-
-| Parametro | Default |
-|-----------|---------|
-| Versione Odoo | `18.0` |
-| Utente OS | `odoo` |
-| Porta HTTP | `8069` |
-| Database | `odoo` |
-| ODOO_HOME (fisso) | `/opt/odoo` |
-| Install dir | `/opt/odoo/odoo{Versione Odoo scelta}` |
-| Nginx | disabilitato |
+Va eseguito **via `sudo` da un utente normale** (l'utente `SUDO_USER` diventa proprietario del comando
+helper `odoo`). La priorità di risoluzione dei parametri è: **CLI → `.env` → prompt interattivo →
+default**.
 
 ---
 
-## Opzioni disponibili
+## Opzioni CLI
+
+| Flag | Valore | Default |
+|------|--------|---------|
+| `--version` | `16` \| `17` \| `18` \| `19` (o `NN.0`) | `18.0` |
+| `--odoo-user` | utente di sistema | `odoo` |
+| `--db-user` | ruolo PostgreSQL | = `--odoo-user` |
+| `--db-password` | password del ruolo DB | vuota → autenticazione peer |
+| `--port` | porta HTTP (1–65535) | `8069` |
+| `--db-name` | nome database | `odoo` |
+| `--install-dir` | dir installazione (deve stare sotto `/opt/odoo`) | `/opt/odoo/odoo<N>` |
+| `--admin-passwd` | master password Odoo | `admin` (sconsigliata) |
+| `--logfile` | file di log di Odoo | assente → journal/stdout |
+| `--with-nginx` | reverse proxy Nginx | disattivo |
+| `--server-name` | `server_name` del vhost Nginx | `_` (catch-all) |
+| `--enable-ssl` | blocco SSL nel vhost + porta 443 | disattivo |
+| `--config <FILE>` | carica un file `.env` (dichiarativo) | — |
+| `--dry-run` | mostra il piano senza mutare nulla | disattivo |
+| `--aggressive-rollback` | in rollback purga anche pacchetti che di norma resterebbero | disattivo |
+| `--help` | messaggio d'aiuto | — |
+
+Esempi:
 
 ```bash
-sudo ./installer.sh [opzioni]
+# Nginx + versione 17
+sudo ./target/release/odoo-installer --version 17 --with-nginx
 
-  --version VERSION     Versione Odoo (es. 17.0, 16.0)
-  --odoo-user USER      Utente di sistema (default: odoo)
-  --db-user USER        Utente PostgreSQL (default: uguale a --odoo-user)
-  --port PORT           Porta HTTP (default: 8069)
-  --db-name NAME        Nome database (default: odoo)
-  --install-dir DIR     Directory installazione (solo sotto /opt/odoo, default: /opt/odoo/odoo<versione>)
-  --admin-passwd PASS   Password admin Odoo (se `admin`, richiede conferma esplicita e il check finale fallisce)
-  --with-nginx          Abilita Nginx come reverse proxy
-  --config FILE         Carica variabili da file .env
-  --help                Mostra l'aiuto
-```
+# Tutto da CLI
+sudo ./target/release/odoo-installer --version 18 --odoo-user odoo --db-name odoo --port 8069
 
-Se lasci `admin` come master password, l'installer chiede una conferma esplicita. Questa scelta resta consentita per demo o ambienti temporanei, ma la suite finale [docs/check_install](https://github.com/Omisen/auto-installer-odoo/wiki/8.-Check-Install-%7C-Suite-di-test-post%E2%80%90installazione) la considera non release-ready.
-
-### Esempi
-
-```bash
-# Installazione con Nginx e versione 17
-sudo ./installer.sh --version 17.0 --with-nginx
-
-# Installazione completamente parametrizzata da CLI
-sudo ./installer.sh --version 19.0 --odoo-user odoo19 --db-name odoo19 --port 8079 --install-dir /opt/odoo/odoo19 --admin-passwd change-me
-
-# Installazione da file di configurazione production
-sudo ./installer.sh --config configs/production.env
-
-# Installazione da file di configurazione dev
-sudo ./installer.sh --config configs/dev.env
+# Anteprima (nessuna modifica, non serve nemmeno sudo)
+./target/release/odoo-installer --config configs/production.env --dry-run
 ```
 
 ---
 
 ## File di configurazione `.env`
 
-Puoi sovrascrivere qualsiasi variabile tramite un file `.env`:
+Con `--config <FILE>` i parametri sono letti da un file `KEY=VALUE`. A differenza del Bash (che faceva
+`source` del file — code-execution come root), qui il parsing è **dichiarativo**: righe `KEY=VALUE`,
+commenti `#` e righe vuote ignorati, **nessuna esecuzione** (un valore come `$(...)` resta stringa
+letterale). Le chiavi sconosciute producono un warning e vengono ignorate.
+
+Chiavi riconosciute: `ODOO_VERSION`, `ODOO_USER`, `DB_USER`, `DB_PASSWORD`, `ODOO_PORT`, `DB_NAME`,
+`ODOO_INSTALL_DIR`, `ODOO_ADMIN_PASSWD`, `ODOO_LOGFILE`, `WITH_NGINX`, `NGINX_SERVER_NAME`,
+`NGINX_ENABLE_SSL`. (`ODOO_HOME` è costante e viene ignorata.)
 
 ```bash
 # configs/production.env
-ODOO_VERSION=18.0
+ODOO_VERSION=18
 ODOO_USER=odoo
 ODOO_PORT=8069
-DB_NAME=odoo_prod
+DB_NAME=odoo
 WITH_NGINX=true
+# ODOO_ADMIN_PASSWD=...   # NON usare 'admin' in produzione
 ```
 
-Passa il file con `--config configs/production.env`.
+---
 
-`DB_NAME` è obbligatorio: l'installer crea automaticamente il database PostgreSQL se non esiste già.
+## Cosa fa, in breve
 
-Per `ODOO_ADMIN_PASSWD`, il valore `admin` e' tollerato solo con conferma esplicita e va considerato adatto esclusivamente a demo o ambienti temporanei.
+Preflight non mutanti (root, sudo, OS, disco, porte, comandi) → poi la sequenza reversibile:
+
+1. crea `/opt/odoo` e l'utente di sistema `odoo`;
+2. dipendenze di sistema (apt) e **wkhtmltopdf** (build patchata Qt, con verifica checksum);
+3. **PostgreSQL**: installa/abilita/avvia, crea ruolo e database;
+4. **sorgenti Odoo** (clone git con retry + fallback tarball), virtualenv, dipendenze pip;
+5. genera `odoo<N>.conf`, inizializza lo schema base del DB;
+6. **servizio systemd** `odoo<N>` (unit hardenizzata, enable + start);
+7. **Nginx** opzionale (`--with-nginx`);
+8. comando helper `odoo` per l'utente + patch del `PATH` nel suo `~/.bashrc`.
+
+Il dettaglio di ogni step (snapshot/run/undo) è nella
+[wiki](https://github.com/Omisen/auto-installer-odoo/wiki).
+
+---
+
+## Rollback
+
+Ogni step, prima di mutare, registra se ciò che sta per creare **esisteva già**. Se un passo fallisce,
+gli step precedenti vengono annullati **in ordine inverso** (best-effort, idempotenti). La garanzia
+chiave è sulle **risorse preesistenti**, che non vengono mai toccate da un rollback:
+
+- un **database con lo stesso nome** già esistente **non** viene droppato (potrebbe avere dati reali);
+- **PostgreSQL** già installato **resta** (di default stop/disable, mai purge senza flag);
+- **`/opt/odoo`** già presente **resta**;
+- il **`~/.bashrc`** dell'utente torna **byte-per-byte** com'era (solo la nostra riga viene rimossa).
+
+Usa **`--dry-run`** per vedere il piano prima di eseguire davvero.
+
+---
+
+## Anteprima con `--dry-run`
+
+`--dry-run` esegue solo gli snapshot (in sola lettura) e mostra il **piano** di ciò che verrebbe fatto,
+distinguendo "agirebbe" da "no-op (già presente)". Non muta nulla, non persiste stato, non serve `sudo`.
+Utile per validare un `.env` o capire cosa succederà su una macchina.
+
+```bash
+./target/release/odoo-installer --config configs/production.env --dry-run
+```
 
 ---
 
 ## Verifica post-installazione
 
 ```bash
-# Controlla lo stato del servizio
+# Stato del servizio (N = versione short, es. 18)
 systemctl status odoo18
-
-# Controlla i log
 journalctl -u odoo18 -n 50 --no-pager
 
-# Nota: di default l'installer non forza un logfile su disco.
-# I log vanno su journal/stdout; per avere un file log imposta ODOO_LOGFILE nel tuo .env.
+# Comando helper locale (dopo: source ~/.bashrc)
+odoo status        # start | stop | restart | status | dev
 
-# Esegui la suite di test non distruttivi in modalita' diagnostica automatica
-sudo bash tests/check_install.sh
-
-# Oppure valida una specifica installazione in modo esplicito
-sudo bash tests/check_install.sh --version 19.0 --config /opt/odoo/odoo19/odoo19.conf --verbose
+# Log dell'installer (post-mortem)
+sudo cat /opt/odoo/.installer.log
 ```
-
-La suite usa due modalita' operative:
-
-- default: diagnostica reale dell'installazione trovata automaticamente sul sistema;
-- override espliciti: test mirato di una specifica istanza quando passi `--version`, `--config` o altri parametri.
-
-## Comando helper locale `odoo`
-
-Al termine dell'installazione, l'installer configura anche un comando helper locale `odoo` per `start`, `stop`, `restart`, `status` e `dev`.
-
-Per scelta progettuale, questo comando **non** viene installato globalmente in `/usr/local/bin` o in un path condiviso di sistema: viene reso disponibile solo all'utente che ha eseguito l'installazione via `sudo`.
-
-Questa limitazione e' intenzionale e serve a ridurre l'esposizione del comando su altri utenti del sistema o in contesti di automazione non previsti.
-
-Dopo l'installazione, l'utente installatore puo' renderlo disponibile nella shell corrente con:
-
-```bash
-source ~/.bashrc
-command -v odoo
-```
-
-Se vuoi usare il helper da un altro account, la procedura supportata resta l'uso diretto di `systemctl`.
 
 ---
 
-## Struttura del progetto
+## Sicurezza — note oneste
+
+- **Password admin `admin`**: sconsigliata. In modalità interattiva richiede conferma esplicita; in
+  non-interattiva con `admin_passwd=admin` l'installer **si ferma** (imposta una password diversa).
+  La password non finisce mai nei log né nel riepilogo.
+- **Checksum wkhtmltopdf (TOFU)**: l'installer verifica lo SHA-256 del `.deb` prima di installarlo.
+  Upstream **non** pubblica checksum/firme per i `.deb`, quindi si usa un **pinning manuale TOFU** che va
+  **popolato prima del primo uso reale** (vedi sotto). Finché i pin sono vuoti, la verifica *fail-closed*
+  rifiuta l'installazione — comportamento onesto, mai bypassato.
+- **Comando `odoo` non globale**: installato solo per l'utente installatore (`~/.local/bin`), non in
+  `/usr/local/bin`, per ridurre l'esposizione.
+
+### Popolare i pin checksum wkhtmltopdf
+
+```bash
+for cn in jammy focal bookworm bullseye; do
+  url="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.${cn}_amd64.deb"
+  echo -n "$cn = "; curl -fsSL "$url" | sha256sum | cut -d' ' -f1
+done
+```
+
+Inserisci i valori in `default_checksums()` (`src/steps/install_wkhtmltopdf.rs`). Sono pin **TOFU**, non
+checksum upstream: aggiornali quando cambi la versione pinnata.
+
+---
+
+## Struttura del progetto (port Rust)
 
 ```
 AutoInstallerOdoo/
-├── installer.sh          # Entry point
-├── configs/
-│   ├── dev.env           # Configurazione sviluppo
-│   └── production.env    # Configurazione produzione
-├── lib/
-│   ├── cli.sh            # Prompt, validazione e normalizzazione input CLI
-│   ├── checks.sh         # Controlli prerequisiti OS/porte/disco
-│   ├── system.sh         # Dipendenze di sistema e wkhtmltopdf
-│   ├── postgres.sh       # Setup PostgreSQL e utente DB
-│   ├── odoo.sh           # Clone repo, virtualenv, dipendenze Python
-│   ├── config.sh         # Generazione odoo.conf da template
-│   ├── systemd.sh        # Unit file systemd (enable + start)
-│   └── nginx.sh          # Configurazione Nginx (opzionale)
-├── templates/
-│   ├── odoo.conf.tpl     # Template configurazione Odoo
-│   ├── odoo.service.tpl  # Template unit systemd
-│   └── nginx.conf.tpl    # Template virtualhost Nginx
-├── tests/
-│   └── check_install.sh  # Suite di verifica post-installazione
-└── docs/                 # Documentazione tecnica dei moduli
+├── Cargo.toml
+├── src/
+│   ├── main.rs              # entry point: parse → prompt → checks → lock → execute
+│   ├── cli.rs               # argomenti CLI (clap)
+│   ├── config.rs            # cascata CLI/.env/default + parser .env dichiarativo + validatori
+│   ├── context.rs           # config risolta letta dagli step
+│   ├── engine.rs            # motore: execute + rollback (ordine inverso) + dry-run plan
+│   ├── step.rs              # trait Step (snapshot/run/undo)
+│   ├── state.rs             # PreState + persistenza dello stato
+│   ├── system_ops.rs        # confine sui comandi di sistema (mockabile nei test)
+│   ├── secret.rs            # password redatta (mai nei log)
+│   ├── checks.rs            # preflight non mutanti
+│   ├── progress.rs          # ProgressReporter (indicatif/log/noop)
+│   ├── prompt.rs            # input interattivo (inquire)
+│   ├── logging.rs           # tracing TTY + file
+│   ├── lockfile.rs          # lock anti-concorrenza (RAII)
+│   └── steps/               # gli step reali (uno per file)
+│       ├── prepare_opt_root.rs   create_odoo_user.rs   setup_log_dir.rs
+│       ├── apt_packages.rs       install_wkhtmltopdf.rs
+│       ├── setup_postgres.rs     create_db_role.rs     create_database.rs
+│       ├── clone_odoo_repo.rs    create_virtualenv.rs  install_python_requirements.rs
+│       ├── generate_config.rs    initialize_odoo_database.rs   setup_systemd.rs
+│       ├── nginx_*.rs (install/write_config/enable_site/firewall/reload)
+│       └── write_control_script.rs   patch_bashrc.rs
+├── templates/              # odoo.conf.tpl · odoo.service.tpl · nginx.conf.tpl (embedded nel binario)
+├── configs/               # esempi .env (dev.env, production.env)
+└── tests/                 # test per-step + coordinamenti + rollback end-to-end
 ```
+
+---
+
+## Sviluppo / test
+
+```bash
+cargo build
+cargo test          # gira senza root: il sistema è modellato con un mock
+cargo clippy --all-targets -- -D warnings
+```
+
+I test coprono ogni step (round-trip snapshot→run→undo), i coordinamenti fra step, e il **rollback
+end-to-end** (fallimento iniettato → stato finale == iniziale; risorse preesistenti intatte).
+
+---
+
+## Licenza
+
+MIT — vedi [LICENSE](LICENSE).
 
 ---
 
