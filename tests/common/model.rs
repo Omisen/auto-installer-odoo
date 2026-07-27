@@ -40,6 +40,13 @@ pub struct ModelState {
     /// sembrare completo (i file sono a posto) mentre il servizio del cliente
     /// sta ancora servendo la nostra config.
     pub nginx_loaded_sites: Option<HashSet<PathBuf>>,
+    /// `dpkg` in stato inconsistente: apt rifiuta di operare finché un
+    /// `apt-get install -f` o un `dpkg --configure -a` non lo sistema.
+    pub dpkg_broken: bool,
+    /// Dipendenze di sistema che un `.deb` locale richiede e che non sono
+    /// presenti (es. `fontconfig`, `xfonts-base` su una VM minimale): le
+    /// installa chi risolve le dipendenze, cioè apt.
+    pub pending_deps: HashSet<String>,
     pub file_contents: HashMap<PathBuf, String>,
     // Ambiente (non muta): non entra nel confronto oltre a ciò che sopra copre.
     pub ufw_available: bool,
@@ -70,6 +77,11 @@ impl SystemModel {
     pub fn snapshot(&self) -> ModelState {
         self.state.lock().expect("lock").clone()
     }
+    /// Modifica lo stato dall'esterno: serve agli step di test che devono
+    /// simulare un danno collaterale (es. "questo step ha lasciato dpkg rotto").
+    pub fn mutate(&self, f: impl FnOnce(&mut ModelState)) {
+        f(&mut self.state.lock().expect("lock"));
+    }
     pub fn boxed(&self) -> Box<dyn SystemOps> {
         Box::new(self.handle())
     }
@@ -77,6 +89,17 @@ impl SystemModel {
 
 fn under(entry: &Path, dir: &Path) -> bool {
     entry != dir && entry.starts_with(dir)
+}
+
+/// L'errore che apt restituisce quando `dpkg` è in stato inconsistente.
+fn unmet_dependencies() -> StepError {
+    StepError::CommandFailed {
+        command: "apt-get".to_string(),
+        status: "100".to_string(),
+        stderr: "E: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or \
+                 specify a solution)."
+            .to_string(),
+    }
 }
 
 /// Directory dei siti Nginx abilitati (symlink).
@@ -326,6 +349,11 @@ impl SystemOps for SystemModel {
     }
     fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
+        // A-RT-2: su un dpkg rotto apt si rifiuta di operare. È ciò che sulla VM
+        // di prova lasciava installati i 24 pacchetti del delta.
+        if s.dpkg_broken {
+            return Err(unmet_dependencies());
+        }
         for p in pkgs {
             s.packages.remove(*p);
             if *p == "wkhtmltox" {
@@ -338,11 +366,27 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn apt_fix_broken(&self) -> Result<(), StepError> {
+        let mut s = self.state.lock().expect("l");
+        // Installa le dipendenze mancanti e configura ciò che era a metà.
+        let deps = std::mem::take(&mut s.pending_deps);
+        s.packages.extend(deps);
+        s.dpkg_broken = false;
         Ok(())
     }
-    fn dpkg_install_file(&self, _path: &Path) -> Result<(), StepError> {
+    fn dpkg_configure_all(&self) -> Result<(), StepError> {
+        self.state.lock().expect("l").dpkg_broken = false;
+        Ok(())
+    }
+    fn apt_install_deb_file(&self, _path: &Path) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
+        if s.dpkg_broken {
+            return Err(unmet_dependencies());
+        }
+        // apt risolve le dipendenze di sistema del .deb in un colpo solo: il
+        // pacchetto è configurato e dpkg resta consistente.
         s.packages.insert("wkhtmltox".to_string());
+        let deps = std::mem::take(&mut s.pending_deps);
+        s.packages.extend(deps);
         s.wk_version = Some("0.12.6.1".to_string());
         Ok(())
     }

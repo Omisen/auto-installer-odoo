@@ -115,9 +115,11 @@ impl Step for NginxInstall {
         // purge solo con --aggressive-rollback (coerenza D3).
         if self.snap.installed == PreState::CreatedByUs {
             if ctx.aggressive_rollback {
-                if let Err(e) = self.ops.apt_purge(&[NGINX_PACKAGE]) {
-                    warn!(error = %e, "undo: purge nginx fallito, proseguo (best-effort)");
-                }
+                crate::steps::purge_with_dpkg_recovery(
+                    self.ops.as_ref(),
+                    "nginx-install",
+                    &[NGINX_PACKAGE],
+                );
                 if let Err(e) = self.ops.apt_autoremove() {
                     warn!(error = %e, "undo: autoremove fallito, proseguo (best-effort)");
                 }

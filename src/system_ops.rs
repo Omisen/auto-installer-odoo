@@ -343,10 +343,27 @@ pub trait SystemOps {
     fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError>;
     /// `apt-get autoremove -y`.
     fn apt_autoremove(&self) -> Result<(), StepError>;
-    /// `apt-get install -f -y` (risolve dipendenze rotte dopo `dpkg -i`).
+    /// `apt-get install -f -y`: installa le dipendenze mancanti e completa la
+    /// configurazione dei pacchetti rimasti a metà, riportando `dpkg` in stato
+    /// consistente. È il recovery che precede il purge nel rollback.
     fn apt_fix_broken(&self) -> Result<(), StepError>;
-    /// `dpkg -i <path>`.
-    fn dpkg_install_file(&self, path: &Path) -> Result<(), StepError>;
+    /// `dpkg --configure -a`: riconfigura i pacchetti scompattati ma non
+    /// configurati. Copre il caso in cui `apt-get install -f` non basta perché
+    /// apt stesso si rifiuta di operare.
+    fn dpkg_configure_all(&self) -> Result<(), StepError>;
+    /// `apt-get install -y <path.deb>`: installa un `.deb` **locale**
+    /// risolvendone le dipendenze.
+    ///
+    /// Sostituisce `dpkg -i`, che installa il pacchetto ma **non** risolve le
+    /// dipendenze: su un sistema minimale il `.deb` resta `unconfigured` e
+    /// `dpkg` esce con errore, lasciando l'intero database dpkg in uno stato
+    /// che blocca ogni successivo comando apt (bug A-RT-1/A-RT-2, trovati sulla
+    /// VM di prova). apt fa le due cose in un colpo solo e non lascia macerie.
+    ///
+    /// Il path deve essere **assoluto** (o iniziare con `./`): apt tratta come
+    /// file solo gli argomenti che contengono una `/`, altrimenti li cerca nei
+    /// repository.
+    fn apt_install_deb_file(&self, path: &Path) -> Result<(), StepError>;
     /// Versione di `wkhtmltopdf` installata (es. `"0.12.6.1"`), o `None`.
     fn wkhtmltopdf_version(&self) -> Option<String>;
 
@@ -801,9 +818,22 @@ impl SystemOps for RealSystemOps {
         run_apt(&["install", "-f", "-y"])
     }
 
-    fn dpkg_install_file(&self, path: &Path) -> Result<(), StepError> {
+    fn dpkg_configure_all(&self) -> Result<(), StepError> {
+        run_command_with_env(
+            "dpkg",
+            &["--configure", "-a"],
+            &[
+                ("DEBIAN_FRONTEND", "noninteractive"),
+                ("NEEDRESTART_MODE", "a"),
+            ],
+        )
+    }
+
+    fn apt_install_deb_file(&self, path: &Path) -> Result<(), StepError> {
+        // `--` prima del path: un `.deb` in una directory il cui nome inizia
+        // con `-` non deve diventare un'opzione (stessa rete di R1).
         let rendered = path.to_string_lossy();
-        run_command("dpkg", &["-i", &rendered])
+        run_apt(&["install", "-y", "--", &rendered])
     }
 
     fn wkhtmltopdf_version(&self) -> Option<String> {

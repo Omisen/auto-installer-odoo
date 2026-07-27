@@ -534,6 +534,82 @@ fn nginx_steps_are_inert_in_the_full_chain_without_with_nginx() {
     assert!(!s.svc_enabled.contains("nginx") && !s.svc_active.contains("nginx"));
 }
 
+// --- Regressione dal campo: dpkg rotto (A-RT-1 / A-RT-2) --------------------
+//
+// Scenario reale osservato su Multipass (Ubuntu 22.04 pulita): il `.deb` di
+// wkhtmltopdf ha dipendenze di sistema assenti sulla VM, `dpkg -i` fallisce
+// lasciando dpkg inconsistente, la catena si ferma — e il rollback non riesce a
+// purgare i 24 pacchetti del delta perché apt rifiuta di operare su un dpkg
+// rotto. Il sistema resta sporco: la promessa chirurgica violata proprio nello
+// scenario in cui serve di più.
+
+/// Le dipendenze di sistema del `.deb` di wkhtmltopdf su una VM minimale.
+const WK_SYSTEM_DEPS: &[&str] = &["fontconfig", "libxrender1", "xfonts-75dpi", "xfonts-base"];
+
+/// Step di test che rompe `dpkg` e poi fallisce: modella "uno step a valle ha
+/// lasciato il sistema in stato inconsistente prima che partisse il rollback".
+struct BreakDpkgThenFail {
+    model: SystemModel,
+}
+
+impl Step for BreakDpkgThenFail {
+    fn name(&self) -> &str {
+        "break-dpkg"
+    }
+    fn snapshot(&mut self, _ctx: &Context) -> Result<(), StepError> {
+        Ok(())
+    }
+    fn run(&mut self, _ctx: &Context) -> Result<(), StepError> {
+        self.model.mutate(|s| s.dpkg_broken = true);
+        Err(StepError::Precondition(
+            "step fallito lasciando dpkg in stato inconsistente".to_string(),
+        ))
+    }
+    fn undo(&self, _ctx: &Context) -> Result<(), StepError> {
+        Ok(())
+    }
+    fn snapshot_value(&self) -> serde_json::Value {
+        serde_json::Value::Null
+    }
+}
+
+#[test]
+fn rollback_cleans_the_apt_delta_even_with_a_broken_dpkg() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let model = SystemModel::new(fresh_state());
+    let initial = model.snapshot();
+
+    // Catena reale: i pacchetti di sistema vengono installati, poi uno step a
+    // valle muore lasciando dpkg rotto.
+    let mut steps = chain(&model);
+    steps.push(Box::new(BreakDpkgThenFail {
+        model: model.handle(),
+    }));
+
+    let ctx = ctx(dir.path().join("state.json"), true);
+    let mut installer = Installer::new();
+    assert!(installer.execute(&mut steps, &ctx).is_err());
+
+    let final_state = model.snapshot();
+    // Il cuore della regressione: prima del fix questi 24+ pacchetti restavano
+    // installati perché `apt-get purge` falliva su un dpkg rotto.
+    for pkg in ["build-essential", "python3-dev", "libpq-dev"] {
+        assert!(
+            !final_state.packages.contains(pkg),
+            "'{pkg}' del delta doveva essere purgato: il rollback deve recuperare \
+             dpkg prima di arrendersi"
+        );
+    }
+    assert!(
+        !final_state.dpkg_broken,
+        "il rollback deve lasciare dpkg in stato consistente"
+    );
+    assert_eq!(
+        final_state, initial,
+        "anche partendo da dpkg rotto il sistema torna al vergine"
+    );
+}
+
 // --- wkhtmltopdf nella catena completa (R3, audit A4.2) ---------------------
 
 #[test]
@@ -542,7 +618,11 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
     // l'undo: qui il ramo felice gira nella catena e il rollback deve riportare
     // il sistema a "wkhtmltopdf assente".
     let dir = tempfile::tempdir().expect("tempdir");
-    let model = SystemModel::new(fresh_state());
+    // VM minimale come quella di prova: le dipendenze di sistema del `.deb` non
+    // ci sono e vanno risolte dall'installazione (A-RT-1).
+    let mut init = fresh_state();
+    init.pending_deps = WK_SYSTEM_DEPS.iter().map(|s| s.to_string()).collect();
+    let model = SystemModel::new(init);
     let initial = model.snapshot();
     assert!(initial.wk_version.is_none(), "si parte senza wkhtmltopdf");
 
@@ -590,13 +670,27 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
         "download → checksum verificato → installato"
     );
     assert_eq!(mid.wk_version.as_deref(), Some("0.12.6.1"));
+    // A-RT-1: le dipendenze di sistema del `.deb` sono state risolte, non
+    // ignorate. Con `dpkg -i` lo step sarebbe fallito qui.
+    for dep in WK_SYSTEM_DEPS {
+        assert!(
+            mid.packages.contains(*dep),
+            "'{dep}' doveva essere installato come dipendenza del .deb"
+        );
+    }
 
-    // Secondo tempo: il rollback lo purga.
+    // Secondo tempo: il rollback purga wkhtmltox — ma **non** le sue dipendenze
+    // di sistema, che restano come git/curl del bootstrap (D3).
     let final_state = model.snapshot();
     assert!(
         !final_state.packages.contains("wkhtmltox"),
         "wkhtmltopdf installato da noi va purgato nel rollback"
     );
     assert!(final_state.wk_version.is_none());
-    assert_eq!(final_state, initial, "stato finale == stato iniziale");
+    for dep in WK_SYSTEM_DEPS {
+        assert!(
+            final_state.packages.contains(*dep),
+            "'{dep}' è una libreria di sistema: il rollback la lascia (D3)"
+        );
+    }
 }

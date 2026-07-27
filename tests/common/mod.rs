@@ -43,7 +43,8 @@ pub enum Op {
     AptPurge(Vec<String>),
     AptAutoremove,
     AptFixBroken,
-    DpkgInstallFile(PathBuf),
+    DpkgConfigureAll,
+    AptInstallDebFile(PathBuf),
     Download {
         url: String,
         dest: PathBuf,
@@ -170,6 +171,16 @@ pub struct MockConfig {
     pub nginx_test_ok: bool,
     /// Home restituita da `getent_home` (None → utente non trovato).
     pub sudo_home: Option<String>,
+    /// `dpkg` parte in stato inconsistente: apt rifiuta di operare finché un
+    /// `apt-get install -f` o un `dpkg --configure -a` non lo sistema. È lo
+    /// stato osservato sulla VM di prova dopo un `dpkg -i` con deps mancanti.
+    pub dpkg_broken: bool,
+    /// `apt-get install -f` non riesce a riparare (recovery davvero fallito).
+    pub fix_broken_fails: bool,
+    /// `dpkg --configure -a` non riesce a riparare.
+    pub dpkg_configure_fails: bool,
+    /// `apt-get install -y <deb>` fallisce (errore vero, non deps mancanti).
+    pub apt_install_deb_fails: bool,
 }
 
 impl Default for MockConfig {
@@ -203,6 +214,10 @@ impl Default for MockConfig {
             existing_ufw_rules: HashSet::new(),
             nginx_test_ok: true,
             sudo_home: None,
+            dpkg_broken: false,
+            fix_broken_fails: false,
+            dpkg_configure_fails: false,
+            apt_install_deb_fails: false,
         }
     }
 }
@@ -222,6 +237,21 @@ pub struct MockSystemOps {
     git_clone_calls: Cell<u32>,
     // Schema DB: flippa a true dopo odoo_init_base.
     db_initialized: Cell<bool>,
+    // Stato di dpkg: parte da cfg.dpkg_broken, lo rimettono a posto
+    // apt_fix_broken / dpkg_configure_all / apt_install_deb_file.
+    dpkg_broken: Cell<bool>,
+}
+
+/// L'errore che apt restituisce quando `dpkg` è in stato inconsistente —
+/// verbatim da quello osservato sulla VM di prova.
+fn unmet_dependencies(command: &str) -> StepError {
+    StepError::CommandFailed {
+        command: command.to_string(),
+        status: "100".to_string(),
+        stderr: "E: Unmet dependencies. Try 'apt --fix-broken install' with no packages (or \
+                 specify a solution)."
+            .to_string(),
+    }
 }
 
 impl MockSystemOps {
@@ -236,6 +266,7 @@ impl MockSystemOps {
         let active = Cell::new(cfg.service_active);
         let enabled = Cell::new(cfg.service_enabled);
         let db_initialized = Cell::new(cfg.db_initialized);
+        let dpkg_broken = Cell::new(cfg.dpkg_broken);
         MockSystemOps {
             log,
             cfg,
@@ -243,6 +274,7 @@ impl MockSystemOps {
             enabled,
             git_clone_calls: Cell::new(0),
             db_initialized,
+            dpkg_broken,
         }
     }
 
@@ -344,6 +376,11 @@ impl SystemOps for MockSystemOps {
     }
     fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError> {
         self.record(Op::AptPurge(pkgs.iter().map(|s| s.to_string()).collect()));
+        // Modella A-RT-2: con dpkg rotto apt si rifiuta di operare, finché un
+        // fix-broken (o un `dpkg --configure -a`) non lo rimette a posto.
+        if self.dpkg_broken.get() {
+            return Err(unmet_dependencies("apt-get purge"));
+        }
         Ok(())
     }
     fn apt_autoremove(&self) -> Result<(), StepError> {
@@ -352,10 +389,31 @@ impl SystemOps for MockSystemOps {
     }
     fn apt_fix_broken(&self) -> Result<(), StepError> {
         self.record(Op::AptFixBroken);
+        if self.cfg.fix_broken_fails {
+            return Err(unmet_dependencies("apt-get install -f"));
+        }
+        self.dpkg_broken.set(false);
         Ok(())
     }
-    fn dpkg_install_file(&self, path: &Path) -> Result<(), StepError> {
-        self.record(Op::DpkgInstallFile(path.to_path_buf()));
+    fn dpkg_configure_all(&self) -> Result<(), StepError> {
+        self.record(Op::DpkgConfigureAll);
+        if self.cfg.dpkg_configure_fails {
+            return Err(unmet_dependencies("dpkg --configure -a"));
+        }
+        self.dpkg_broken.set(false);
+        Ok(())
+    }
+    fn apt_install_deb_file(&self, path: &Path) -> Result<(), StepError> {
+        self.record(Op::AptInstallDebFile(path.to_path_buf()));
+        if self.cfg.apt_install_deb_fails {
+            return Err(StepError::CommandFailed {
+                command: "apt-get install -y -- <deb>".to_string(),
+                status: "100".to_string(),
+                stderr: "impossibile installare il .deb (simulato)".to_string(),
+            });
+        }
+        // apt risolve le dipendenze: dpkg resta consistente.
+        self.dpkg_broken.set(false);
         Ok(())
     }
     fn wkhtmltopdf_version(&self) -> Option<String> {

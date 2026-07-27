@@ -74,7 +74,7 @@ fn checksum_mismatch_fails_without_installing() {
         "il download avviene"
     );
     assert!(
-        !ops.iter().any(|op| matches!(op, Op::DpkgInstallFile(_))),
+        !ops.iter().any(|op| matches!(op, Op::AptInstallDebFile(_))),
         "con checksum errato NON si deve installare il .deb"
     );
 }
@@ -82,7 +82,7 @@ fn checksum_mismatch_fails_without_installing() {
 #[test]
 fn checksum_match_installs() {
     // Ramo felice, per **ognuno** dei tre suffissi realmente pubblicati dalla
-    // release 0.12.6.1-3: download → hash combacia col pin → dpkg -i + fix-broken.
+    // release 0.12.6.1-3: download → hash combacia col pin → install via apt.
     for (codename, suffix) in [
         ("jammy", "jammy"),
         ("noble", "jammy"),
@@ -117,15 +117,81 @@ fn checksum_match_installs() {
             "{codename} deve scaricare il .deb {suffix}, trovato: {ops:?}"
         );
         assert!(
-            ops.iter().any(|op| matches!(op, Op::DpkgInstallFile(_))),
+            ops.iter().any(|op| matches!(op, Op::AptInstallDebFile(_))),
             "checksum valido → installa ({codename})"
         );
-        assert!(ops.contains(&Op::AptFixBroken));
         assert_eq!(
             serde_json::from_value::<PreState>(step.snapshot_value()).expect("prestate"),
             PreState::CreatedByUs
         );
     }
+}
+
+/// A-RT-1 (trovato in campo su Multipass, Ubuntu 22.04 minimale): il `.deb` di
+/// wkhtmltopdf dipende da `fontconfig`, `libxrender1`, `xfonts-75dpi`,
+/// `xfonts-base`, assenti su una VM pulita. Con `dpkg -i` lo step falliva
+/// sempre — e per giunta lasciava dpkg rotto. L'installazione deve passare da
+/// un comando che **risolve le dipendenze**.
+#[test]
+fn install_resolves_dependencies_instead_of_bare_dpkg() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = b"contenuto .deb valido".to_vec();
+    let good = sha_of(&bytes, dir.path());
+
+    let (mock, log) = MockSystemOps::new(MockConfig::default());
+    let downloader = MockDownloader::new(bytes, log.clone());
+    let mut step = InstallWkhtmltopdf::with_parts(
+        Box::new(mock),
+        Box::new(downloader),
+        table(&[("jammy", &good)]),
+        dir.path().to_path_buf(),
+    );
+    let c = ctx("jammy");
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c)
+        .expect("su un sistema minimale l'installazione deve riuscire");
+
+    let ops = ops_of(&log);
+    assert!(
+        ops.iter().any(|op| matches!(op, Op::AptInstallDebFile(p)
+            if p.to_string_lossy().ends_with(".deb"))),
+        "il .deb va installato con apt, che risolve le dipendenze: {ops:?}"
+    );
+}
+
+/// Ma un errore vero resta un errore: se l'installazione fallisce davvero (non
+/// per dipendenze risolvibili), lo step deve fallire e innescare il rollback.
+#[test]
+fn a_real_install_failure_still_fails_the_step() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = b"contenuto .deb valido".to_vec();
+    let good = sha_of(&bytes, dir.path());
+
+    let cfg = MockConfig {
+        apt_install_deb_fails: true,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let downloader = MockDownloader::new(bytes, log.clone());
+    let mut step = InstallWkhtmltopdf::with_parts(
+        Box::new(mock),
+        Box::new(downloader),
+        table(&[("jammy", &good)]),
+        dir.path().to_path_buf(),
+    );
+    let c = ctx("jammy");
+
+    step.snapshot(&c).expect("snapshot");
+    assert!(
+        step.run(&c).is_err(),
+        "un fallimento reale dell'installazione non va inghiottito"
+    );
+    assert_eq!(
+        serde_json::from_value::<PreState>(step.snapshot_value()).expect("prestate"),
+        PreState::Untracked,
+        "run fallito → niente da annullare"
+    );
 }
 
 /// Ramo felice con la **tabella di produzione**: i pin non sono più vuoti,
@@ -159,7 +225,7 @@ fn production_pins_reject_a_deb_that_is_not_the_pinned_one() {
         assert!(
             !ops_of(&log)
                 .iter()
-                .any(|op| matches!(op, Op::DpkgInstallFile(_))),
+                .any(|op| matches!(op, Op::AptInstallDebFile(_))),
             "nessuna installazione con checksum non combaciante ({codename})"
         );
     }
@@ -230,7 +296,7 @@ fn missing_checksum_refuses_to_install() {
     assert!(
         !ops_of(&log)
             .iter()
-            .any(|op| matches!(op, Op::DpkgInstallFile(_))),
+            .any(|op| matches!(op, Op::AptInstallDebFile(_))),
         "nessuna installazione senza checksum verificabile"
     );
 }

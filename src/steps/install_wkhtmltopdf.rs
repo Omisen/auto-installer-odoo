@@ -196,9 +196,20 @@ impl InstallWkhtmltopdf {
         }
         info!("checksum wkhtmltopdf verificato");
 
-        self.ops.dpkg_install_file(tmp)?;
-        // dpkg -i può lasciare dipendenze non risolte: apt-get install -f le sistema.
-        self.ops.apt_fix_broken()?;
+        // Installazione via apt sul file locale: risolve le dipendenze di
+        // sistema del `.deb` (fontconfig, libxrender1, xfonts-75dpi,
+        // xfonts-base) che su una VM minimale non ci sono.
+        //
+        // Qui c'era `dpkg -i` seguito da `apt-get install -f`. Non funzionava:
+        // `dpkg -i` non risolve le dipendenze, esce **1** lasciando il
+        // pacchetto `unconfigured`, e il `?` propagava l'errore *prima* di
+        // arrivare al fix-broken — che quindi non veniva mai eseguito. Peggio:
+        // il dpkg restava rotto, e da lì in poi ogni comando apt falliva,
+        // rollback compreso (A-RT-1/A-RT-2, dalla prova reale su Multipass).
+        //
+        // L'integrità resta garantita: apt installa **questo** file, che
+        // abbiamo appena verificato contro il pin TOFU.
+        self.ops.apt_install_deb_file(tmp)?;
         Ok(())
     }
 }
@@ -240,6 +251,16 @@ impl Step for InstallWkhtmltopdf {
         Ok(())
     }
 
+    /// Rimuove **solo** `wkhtmltox`, non le sue dipendenze di sistema.
+    ///
+    /// L'installazione via apt tira dentro `fontconfig`, `libxrender1`,
+    /// `xfonts-75dpi`, `xfonts-base`: librerie e font di sistema, non artefatti
+    /// Odoo. Restano installate, per la stessa ragione per cui il rollback
+    /// lascia `git`/`curl`/`wget` del bootstrap (D3, decisione 1): sono utility
+    /// comuni a bassissimo rischio, e disinstallarle da una macchina cliente
+    /// per un rollback farebbe più danni che bene — qualcos'altro potrebbe
+    /// averle nel frattempo adottate. Tracciarne un delta separato sarebbe
+    /// complessità sproporzionata al rumore che lasciano.
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate != PreState::CreatedByUs {
             info!(prestate = ?self.prestate, "undo NO-OP (wkhtmltopdf non installato da noi)");
@@ -249,9 +270,11 @@ impl Step for InstallWkhtmltopdf {
             info!("undo (dry-run): apt purge {WK_PACKAGE}");
             return Ok(());
         }
-        if let Err(e) = self.ops.apt_purge(&[WK_PACKAGE]) {
-            warn!(error = %e, "undo: purge wkhtmltox fallito, proseguo (best-effort)");
-        }
+        crate::steps::purge_with_dpkg_recovery(
+            self.ops.as_ref(),
+            "install-wkhtmltopdf",
+            &[WK_PACKAGE],
+        );
         Ok(())
     }
 

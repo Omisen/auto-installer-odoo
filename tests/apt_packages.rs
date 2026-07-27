@@ -73,6 +73,117 @@ fn undo_purges_only_the_delta() {
     );
 }
 
+// --- A-RT-2: il purge deve funzionare anche con dpkg rotto ------------------
+//
+// Trovato in campo (Multipass, Ubuntu 22.04): il rollback arriva qui dopo che
+// uno step a valle ha lasciato dpkg in stato inconsistente, apt si rifiuta di
+// operare, il purge fallisce e i 24 pacchetti del delta restano installati.
+
+#[test]
+fn undo_recovers_a_broken_dpkg_before_purging() {
+    let cfg = MockConfig {
+        installed_packages: installed(&["a"]),
+        dpkg_broken: true, // uno step a valle ha rotto dpkg
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::custom(
+        Box::new(mock),
+        "test-delta",
+        strings(&["a", "b", "c"]),
+        UndoPolicy::PurgeDelta,
+    );
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo best-effort");
+
+    let ops = ops_of(&log);
+    let fix = ops
+        .iter()
+        .position(|o| matches!(o, Op::AptFixBroken))
+        .expect("il recovery di dpkg deve precedere il purge");
+    let purge = ops
+        .iter()
+        .position(|o| matches!(o, Op::AptPurge(_)))
+        .expect("il purge deve essere tentato");
+    assert!(
+        fix < purge,
+        "fix-broken prima del purge, altrimenti apt rifiuta: {ops:?}"
+    );
+    // E il purge, dopo il recovery, riesce davvero: il delta se ne va.
+    assert!(
+        ops.contains(&Op::AptPurge(strings(&["b", "c"]))),
+        "il delta deve essere purgato dopo il recovery: {ops:?}"
+    );
+    // La protezione resta: mai il preesistente.
+    assert!(
+        !ops.iter()
+            .any(|op| matches!(op, Op::AptPurge(p) if p.contains(&"a".to_string()))),
+        "il pacchetto preesistente 'a' non va mai purgato"
+    );
+}
+
+#[test]
+fn undo_retries_the_purge_after_dpkg_configure_all() {
+    // `apt-get install -f` non basta (fallisce a sua volta): si passa a
+    // `dpkg --configure -a` e si ritenta il purge.
+    let cfg = MockConfig {
+        dpkg_broken: true,
+        fix_broken_fails: true,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::custom(
+        Box::new(mock),
+        "test-delta",
+        strings(&["b", "c"]),
+        UndoPolicy::PurgeDelta,
+    );
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo best-effort");
+
+    let ops = ops_of(&log);
+    assert!(
+        ops.contains(&Op::DpkgConfigureAll),
+        "se il fix-broken fallisce si tenta dpkg --configure -a: {ops:?}"
+    );
+    assert_eq!(
+        ops.iter().filter(|o| matches!(o, Op::AptPurge(_))).count(),
+        2,
+        "il purge va ritentato dopo il recovery: {ops:?}"
+    );
+}
+
+#[test]
+fn undo_stays_best_effort_when_recovery_fails_completely() {
+    // Nessun recovery funziona: l'undo **non deve fallire** (invariante 3), i
+    // pacchetti restano e l'utente lo scopre dai log.
+    let cfg = MockConfig {
+        dpkg_broken: true,
+        fix_broken_fails: true,
+        dpkg_configure_fails: true,
+        ..Default::default()
+    };
+    let (mock, _log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::custom(
+        Box::new(mock),
+        "test-delta",
+        strings(&["b", "c"]),
+        UndoPolicy::PurgeDelta,
+    );
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c)
+        .expect("undo best-effort: non propaga mai l'errore");
+}
+
 #[test]
 fn empty_delta_is_noop() {
     // Tutti già installati → niente install, niente purge.

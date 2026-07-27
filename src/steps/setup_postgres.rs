@@ -155,9 +155,11 @@ impl Step for SetupPostgres {
                 warn!(
                     "--aggressive-rollback: purge PostgreSQL (nessun altro database nel cluster)"
                 );
-                if let Err(e) = self.ops.apt_purge(PG_PACKAGES) {
-                    warn!(error = %e, "undo: purge postgresql fallito, proseguo (best-effort)");
-                }
+                crate::steps::purge_with_dpkg_recovery(
+                    self.ops.as_ref(),
+                    "setup-postgres",
+                    PG_PACKAGES,
+                );
                 if let Err(e) = self.ops.apt_autoremove() {
                     warn!(error = %e, "undo: autoremove fallito, proseguo (best-effort)");
                 }

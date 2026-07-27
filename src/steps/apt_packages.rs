@@ -16,7 +16,7 @@
 //!   `apt-get autoremove` globale — vedi `purge_delta`, A3.2).
 
 use serde::{Deserialize, Serialize};
-use tracing::{info, warn};
+use tracing::info;
 
 use crate::context::Context;
 use crate::error::StepError;
@@ -147,6 +147,10 @@ impl AptPackagesStep {
     /// tutto il rollback. Il purge del delta è già mirato: le dipendenze tirate
     /// dentro dai *nostri* pacchetti restano installate, il che è rumore innocuo
     /// a fronte del rischio di disinstallare roba altrui.
+    ///
+    /// Il purge passa da [`purge_with_dpkg_recovery`](crate::steps::purge_with_dpkg_recovery),
+    /// che rimette in sesto `dpkg` se uno step a valle l'ha lasciato rotto:
+    /// altrimenti apt rifiuta di operare e il delta resta installato (A-RT-2).
     fn purge_delta(&self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.delta.is_empty() {
             info!(step = self.name, "undo: delta vuoto, niente da purgare");
@@ -157,9 +161,7 @@ impl AptPackagesStep {
             return Ok(());
         }
         let refs: Vec<&str> = self.snap.delta.iter().map(String::as_str).collect();
-        if let Err(e) = self.ops.apt_purge(&refs) {
-            warn!(step = self.name, error = %e, "undo: apt purge fallito, proseguo (best-effort)");
-        }
+        crate::steps::purge_with_dpkg_recovery(self.ops.as_ref(), self.name, &refs);
         Ok(())
     }
 }
