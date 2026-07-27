@@ -31,6 +31,15 @@ pub struct ModelState {
     pub paths: HashSet<PathBuf>,
     pub symlinks: HashSet<PathBuf>,
     pub ufw_rules: HashSet<String>,
+    /// Config Nginx **caricata in memoria** dal processo in esecuzione: i siti
+    /// abilitati al momento dell'ultimo start/reload. `None` = nginx non attivo.
+    ///
+    /// Modella la differenza fra *config su disco* e *config servita*: un
+    /// `nginx` che gira continua a servire ciò che ha caricato, anche se i file
+    /// sono cambiati sotto di lui. Senza questa distinzione un rollback può
+    /// sembrare completo (i file sono a posto) mentre il servizio del cliente
+    /// sta ancora servendo la nostra config.
+    pub nginx_loaded_sites: Option<HashSet<PathBuf>>,
     pub file_contents: HashMap<PathBuf, String>,
     // Ambiente (non muta): non entra nel confronto oltre a ciò che sopra copre.
     pub ufw_available: bool,
@@ -68,6 +77,20 @@ impl SystemModel {
 
 fn under(entry: &Path, dir: &Path) -> bool {
     entry != dir && entry.starts_with(dir)
+}
+
+/// Directory dei siti Nginx abilitati (symlink).
+pub const SITES_ENABLED: &str = "/etc/nginx/sites-enabled";
+
+/// I siti attualmente abilitati **su disco**.
+fn enabled_sites(state: &ModelState) -> HashSet<PathBuf> {
+    let dir = Path::new(SITES_ENABLED);
+    state
+        .symlinks
+        .iter()
+        .filter(|l| under(l, dir))
+        .cloned()
+        .collect()
 }
 
 impl SystemOps for SystemModel {
@@ -336,26 +359,36 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn service_start(&self, service: &str) -> Result<(), StepError> {
-        self.state
-            .lock()
-            .expect("l")
-            .svc_active
-            .insert(service.to_string());
+        let mut s = self.state.lock().expect("l");
+        s.svc_active.insert(service.to_string());
+        if service == "nginx" {
+            s.nginx_loaded_sites = Some(enabled_sites(&s));
+        }
         Ok(())
     }
     fn service_stop(&self, service: &str) -> Result<(), StepError> {
-        self.state.lock().expect("l").svc_active.remove(service);
+        let mut s = self.state.lock().expect("l");
+        s.svc_active.remove(service);
+        if service == "nginx" {
+            s.nginx_loaded_sites = None;
+        }
         Ok(())
     }
     fn service_restart(&self, service: &str) -> Result<(), StepError> {
-        self.state
-            .lock()
-            .expect("l")
-            .svc_active
-            .insert(service.to_string());
+        let mut s = self.state.lock().expect("l");
+        s.svc_active.insert(service.to_string());
+        if service == "nginx" {
+            s.nginx_loaded_sites = Some(enabled_sites(&s));
+        }
         Ok(())
     }
-    fn service_reload(&self, _service: &str) -> Result<(), StepError> {
+    fn service_reload(&self, service: &str) -> Result<(), StepError> {
+        let mut s = self.state.lock().expect("l");
+        // Un reload rilegge il disco: la config servita si riallinea ai file
+        // **presenti in quel momento**. Solo se il servizio è attivo.
+        if service == "nginx" && s.svc_active.contains("nginx") {
+            s.nginx_loaded_sites = Some(enabled_sites(&s));
+        }
         Ok(())
     }
     fn daemon_reload(&self) -> Result<(), StepError> {

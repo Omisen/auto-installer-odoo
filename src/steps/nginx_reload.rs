@@ -3,8 +3,12 @@
 //! `run` esegue `nginx -t` e ricarica **solo se la config è valida** (non si
 //! ricarica una config rotta). Non ha artefatti propri da rimuovere: il "vero"
 //! ripristino avviene tramite gli altri sotto-step (vhost/site rimossi o
-//! ripristinati); qui l'undo ferma Nginx se l'abbiamo avviato noi (D4), oppure
-//! tenta un reload best-effort per riallineare.
+//! ripristinati); qui l'undo ferma Nginx se l'abbiamo avviato noi (D4).
+//!
+//! Se invece Nginx era già del cliente, l'undo lo lascia attivo **senza
+//! ricaricare**: essendo il primo undo della fase (ordine inverso), le config
+//! non sono ancora state ripristinate. Il reload di riallineamento sta in fondo
+//! alla fase, in [`NginxInstall`](crate::steps::nginx_install).
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -103,13 +107,20 @@ impl Step for NginxReload {
                     warn!(error = %e, "undo: stop nginx fallito, proseguo (best-effort)");
                 }
             }
-            // Nginx era già attivo prima di noi: reload best-effort per
-            // riallineare. Il ripristino delle config avviene negli altri
-            // sotto-step (vhost/site rimossi o ripristinati).
+            // Nginx era già attivo prima di noi: va lasciato attivo (D4), ma
+            // **qui non si ricarica**. Gli undo girano in ordine inverso e
+            // questo è il *primo* della fase Nginx: le config non sono ancora
+            // state ripristinate (il vhost c'è ancora, il default site non è
+            // tornato). Un reload adesso ricaricherebbe proprio lo stato che
+            // stiamo per smontare, e nessuno ricaricherebbe più dopo — nginx
+            // resterebbe a servire la nostra config cancellata.
+            //
+            // Il riallineamento avviene alla **fine** della fase, in
+            // `NginxInstall::undo`, l'ultimo sotto-step Nginx a essere annullato.
             PreState::Preexisting => {
-                if let Err(e) = self.ops.service_reload(NGINX_SERVICE) {
-                    warn!(error = %e, "undo: reload nginx fallito, proseguo (best-effort)");
-                }
+                info!(
+                    "undo: nginx era già attivo, lo lascio attivo (reload finale in nginx-install)"
+                );
             }
             // Untracked: fase gated off o nulla fatto → no-op.
             PreState::Untracked => {}

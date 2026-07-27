@@ -200,6 +200,90 @@ fn reload_fails_on_invalid_config() {
     );
 }
 
+/// Trovato dall'e2e in R3: gli undo girano in ordine inverso, quindi
+/// `nginx-reload` è il **primo** della fase e le config non sono ancora
+/// ripristinate. Ricaricare lì lascerebbe nginx a servire la nostra config
+/// dopo che i file sono stati rimossi.
+#[test]
+fn reload_undo_does_not_reload_before_configs_are_restored() {
+    let cfg = MockConfig {
+        service_active: true, // nginx era già attivo: è del cliente
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxReload::with_ops(Box::new(mock));
+    let c = ctx(true, false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    let after_run = ops_of(&log).len();
+    step.undo(&c).expect("undo");
+
+    let undo_ops = &ops_of(&log)[after_run..];
+    assert!(
+        !undo_ops
+            .iter()
+            .any(|o| matches!(o, Op::ServiceReload(_) | Op::ServiceStop(_))),
+        "un nginx preesistente resta attivo e non va ricaricato qui: {undo_ops:?}"
+    );
+}
+
+/// L'altra metà del fix: `nginx-install` è l'ultimo undo della fase, quindi è
+/// lì che il riallineamento deve avvenire — se nginx sopravvive al rollback.
+#[test]
+fn install_undo_reloads_at_the_end_when_nginx_survives() {
+    let cfg = MockConfig {
+        installed_packages: ["nginx".to_string()].into_iter().collect(),
+        service_enabled: true,
+        service_active: true, // nginx del cliente: sopravvive al rollback
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxInstall::with_ops(Box::new(mock));
+    let c = ctx(true, false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    let ops = ops_of(&log);
+    assert!(
+        ops.iter()
+            .any(|o| matches!(o, Op::ServiceReload(s) if s == "nginx")),
+        "nginx sopravvissuto va ricaricato per servire la config ripristinata: {ops:?}"
+    );
+    assert!(
+        !ops.iter().any(|o| matches!(o, Op::ServiceStop(_))),
+        "un nginx preesistente non va fermato"
+    );
+}
+
+/// Ma non si ricarica una config che non passa `nginx -t`, nemmeno nell'undo.
+#[test]
+fn install_undo_does_not_reload_an_invalid_config() {
+    let cfg = MockConfig {
+        installed_packages: ["nginx".to_string()].into_iter().collect(),
+        service_enabled: true,
+        service_active: true,
+        nginx_test_ok: false,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxInstall::with_ops(Box::new(mock));
+    let c = ctx(true, false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|o| matches!(o, Op::ServiceReload(_))),
+        "config non valida → nessun reload (come nel run)"
+    );
+}
+
 #[test]
 fn install_undo_does_not_purge_without_aggressive() {
     let (mock, log) = MockSystemOps::new(MockConfig::default());

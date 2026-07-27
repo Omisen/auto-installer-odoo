@@ -7,6 +7,11 @@
 //!
 //! Coerenza di policy con PostgreSQL (D3): l'undo fa **stop + disable** ma
 //! **NON purga** di default; il purge solo con `--aggressive-rollback`.
+//!
+//! Essendo il **primo** sotto-step della fase, è l'**ultimo** a essere annullato:
+//! il suo undo ospita perciò il reload di riallineamento finale, quando Nginx
+//! sopravvive al rollback perché era del cliente. Vedi
+//! [`NginxReload`](crate::steps::nginx_reload).
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -118,6 +123,28 @@ impl Step for NginxInstall {
                 }
             } else {
                 info!("undo: nginx lasciato installato (stop+disable reversibili; usa --aggressive-rollback per purgare)");
+            }
+        }
+
+        // Riallineamento finale. Questo è l'**ultimo** sotto-step Nginx a essere
+        // annullato (gli undo girano in ordine inverso), quindi qui i file sono
+        // già stati ripristinati: il nostro vhost è rimosso e il default site
+        // del cliente è tornato al suo posto. Se nginx è ancora in piedi — cioè
+        // era suo, non nostro — sta però ancora **servendo** la config che
+        // aveva caricato, la nostra. Senza questo reload i file sarebbero a
+        // posto ma il sito del cliente resterebbe giù fino a un reload manuale.
+        //
+        // Come nel run: non si ricarica una config che non passa `nginx -t`.
+        if self.ops.service_is_active(NGINX_SERVICE) {
+            if !self.ops.nginx_test() {
+                warn!(
+                    "undo: config nginx non valida dopo il ripristino, non ricarico \
+                     (controlla `nginx -t`)"
+                );
+            } else if let Err(e) = self.ops.service_reload(NGINX_SERVICE) {
+                warn!(error = %e, "undo: reload finale nginx fallito, proseguo (best-effort)");
+            } else {
+                info!("undo: nginx ricaricato con la config ripristinata");
             }
         }
         Ok(())
