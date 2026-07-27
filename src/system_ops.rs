@@ -11,6 +11,7 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
@@ -39,6 +40,151 @@ pub enum OdooSourceState {
 
 /// Modalità dei file privati scritti dall'installer: solo il proprietario.
 const PRIVATE_FILE_MODE: u32 = 0o600;
+
+/// Timeout di default delle operazioni di **rete**, in secondi.
+///
+/// 300s = 5 minuti: abbondante per un `clone --depth 5` di Odoo o per il `.deb`
+/// di wkhtmltopdf (~15 MB) anche su una linea lenta, ma abbastanza corto perché
+/// un mirror che non chiude mai la connessione produca un errore invece di far
+/// sembrare l'installer bloccato. Il valore non è sacro: è il compromesso fra
+/// "non troncare un download legittimo" e "non far aspettare venti minuti un
+/// cliente". Chi ha una linea davvero lenta lo alza con
+/// [`NETWORK_TIMEOUT_ENV`].
+pub const DEFAULT_NETWORK_TIMEOUT_SECS: u64 = 300;
+
+/// Variabile d'ambiente che sovrascrive [`DEFAULT_NETWORK_TIMEOUT_SECS`].
+/// Il valore `0` disabilita del tutto il timeout (attesa indefinita, come prima
+/// di R2). Un valore non numerico viene ignorato e si usa il default.
+pub const NETWORK_TIMEOUT_ENV: &str = "ODOO_NETWORK_TIMEOUT_SECS";
+
+/// Intervallo di polling dell'uscita del processo mentre si attende il timeout.
+///
+/// 50 ms: irrilevante rispetto a timeout dell'ordine dei minuti, e sufficiente
+/// a non introdurre ritardi percepibili sui comandi rapidi.
+const POLL_INTERVAL: Duration = Duration::from_millis(50);
+
+/// Timeout corrente per le operazioni di rete; `None` = nessun timeout.
+///
+/// # Perché solo la rete
+///
+/// Un timeout è utile dove l'attesa può essere **infinita e infruttuosa** — una
+/// connessione appesa non progredisce mai. Non lo è dove l'attesa è lunga ma
+/// legittima, e lì sarebbe dannoso:
+/// - `odoo-bin -i base` e `pip install -r requirements.txt` sono locali e
+///   possono durare parecchi minuti su una macchina piccola: un timeout li
+///   ucciderebbe a metà di un'installazione perfettamente valida;
+/// - `apt-get` è il caso più delicato: può attendere legittimamente un lock
+///   `dpkg` tenuto da `unattended-upgrades`, e ucciderlo a metà transazione
+///   lascia il database dpkg in stato semi-configurato — un danno **peggiore**
+///   dell'attesa, e fuori dal perimetro che il nostro rollback sa riparare.
+///   Su un'attesa apt l'utente può sempre interrompere con Ctrl-C; su una
+///   transazione dpkg troncata no.
+///
+/// Restano quindi coperte le tre operazioni che parlano con un host remoto:
+/// `git clone`, il download del tarball di fallback e il download del `.deb` di
+/// wkhtmltopdf.
+pub fn network_timeout() -> Option<Duration> {
+    timeout_from_setting(std::env::var(NETWORK_TIMEOUT_ENV).ok().as_deref())
+}
+
+/// La politica del timeout, **pura**: come un valore testuale (o la sua
+/// assenza) diventa un limite. Separata da [`network_timeout`] così i test la
+/// verificano senza mutare l'ambiente del processo.
+///
+/// - assente o non numerico → [`DEFAULT_NETWORK_TIMEOUT_SECS`];
+/// - `0` → `None`, nessun timeout (attesa indefinita, comportamento pre-R2);
+/// - `n` → `n` secondi.
+pub fn timeout_from_setting(raw: Option<&str>) -> Option<Duration> {
+    let secs = raw
+        .and_then(|s| s.trim().parse::<u64>().ok())
+        .unwrap_or(DEFAULT_NETWORK_TIMEOUT_SECS);
+    (secs > 0).then(|| Duration::from_secs(secs))
+}
+
+/// Legge un pipe fino a EOF in un thread dedicato, restituendo il join handle.
+fn drain_pipe<R: std::io::Read + Send + 'static>(
+    pipe: Option<R>,
+) -> std::thread::JoinHandle<Vec<u8>> {
+    std::thread::spawn(move || {
+        let mut buf = Vec::new();
+        if let Some(mut p) = pipe {
+            let _ = p.read_to_end(&mut buf);
+        }
+        buf
+    })
+}
+
+/// Attende la fine del processo al massimo `limit`; allo scadere lo **uccide**
+/// e ritorna [`StepError::Timeout`].
+///
+/// `std::process::Command` non ha un timeout nativo. Invece di aggiungere una
+/// dipendenza (`wait-timeout` installa un handler SIGCHLD globale di processo)
+/// si fa la cosa più semplice che regga: polling di `try_wait` fino alla
+/// scadenza. Il `Child` non viene mai spostato altrove, quindi `kill()` non ha
+/// la corsa del riuso del pid: il processo non è ancora stato raccolto.
+///
+/// I due pipe sono drenati da thread dedicati. Non è un dettaglio: `git clone`
+/// scrive il progresso su stderr e, senza qualcuno che legga, riempirebbe il
+/// buffer del pipe e si bloccherebbe — un deadlock **nostro** che il timeout
+/// maschererebbe da "rete lenta".
+fn output_with_timeout(
+    mut command: Command,
+    rendered: &str,
+    limit: Duration,
+) -> Result<std::process::Output, StepError> {
+    let mut child = command
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|e| StepError::CommandFailed {
+            command: rendered.to_string(),
+            status: "spawn-failed".to_string(),
+            stderr: e.to_string(),
+        })?;
+
+    let out_reader = drain_pipe(child.stdout.take());
+    let err_reader = drain_pipe(child.stderr.take());
+
+    let deadline = std::time::Instant::now() + limit;
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) => {
+                if std::time::Instant::now() >= deadline {
+                    // Scaduto: uccidi e **raccogli** (niente zombie). Chiusi i
+                    // pipe, i due reader vedono EOF e terminano da soli.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = out_reader.join();
+                    let _ = err_reader.join();
+                    return Err(StepError::Timeout {
+                        command: rendered.to_string(),
+                        secs: limit.as_secs(),
+                    });
+                }
+                std::thread::sleep(POLL_INTERVAL);
+            }
+            Err(e) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                let _ = out_reader.join();
+                let _ = err_reader.join();
+                return Err(StepError::CommandFailed {
+                    command: rendered.to_string(),
+                    status: "wait-failed".to_string(),
+                    stderr: e.to_string(),
+                });
+            }
+        }
+    };
+
+    Ok(std::process::Output {
+        status,
+        stdout: out_reader.join().unwrap_or_default(),
+        stderr: err_reader.join().unwrap_or_default(),
+    })
+}
 
 /// Costruisce il path di un file temporaneo privato **nella stessa directory**
 /// di `dest` (stesso filesystem → il `move_file` finale è un rename atomico).
@@ -353,12 +499,13 @@ impl RealSystemOps {
     }
 }
 
-/// Esegue un comando esterno (con eventuali env) mappando l'esito su
-/// [`StepError::CommandFailed`].
-fn run_command_with_env(
+/// Esegue un comando esterno (con eventuali env e un timeout opzionale)
+/// mappando l'esito su [`StepError::CommandFailed`].
+fn run_command_full(
     program: &str,
     args: &[&str],
     envs: &[(&str, &str)],
+    timeout: Option<Duration>,
 ) -> Result<(), StepError> {
     let rendered = format!("{program} {}", args.join(" "));
     let mut command = Command::new(program);
@@ -366,11 +513,15 @@ fn run_command_with_env(
     for (key, value) in envs {
         command.env(key, value);
     }
-    let output = command.output().map_err(|e| StepError::CommandFailed {
-        command: rendered.clone(),
-        status: "spawn-failed".to_string(),
-        stderr: e.to_string(),
-    })?;
+    let output = match timeout {
+        // Nessun timeout: `output()` è già la via più semplice e drena i pipe.
+        None => command.output().map_err(|e| StepError::CommandFailed {
+            command: rendered.clone(),
+            status: "spawn-failed".to_string(),
+            stderr: e.to_string(),
+        })?,
+        Some(limit) => output_with_timeout(command, &rendered, limit)?,
+    };
     if output.status.success() {
         Ok(())
     } else {
@@ -386,9 +537,37 @@ fn run_command_with_env(
     }
 }
 
-/// Esegue un comando esterno senza env aggiuntivi.
+/// Esegue un comando esterno con env aggiuntivi e **senza** timeout.
+fn run_command_with_env(
+    program: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<(), StepError> {
+    run_command_full(program, args, envs, None)
+}
+
+/// Esegue un comando esterno senza env aggiuntivi e **senza** timeout.
 fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
-    run_command_with_env(program, args, &[])
+    run_command_full(program, args, &[], None)
+}
+
+/// Esegue un comando **di rete** con il timeout corrente ([`network_timeout`]).
+///
+/// Solo per le operazioni che parlano con un host remoto: `git clone`, il
+/// download del tarball, il download del `.deb`. Vedi [`network_timeout`] per
+/// il perché le altre operazioni ne restino fuori.
+fn run_network_command(program: &str, args: &[&str]) -> Result<(), StepError> {
+    run_command_full(program, args, &[], network_timeout())
+}
+
+/// Esegue un comando esterno con un timeout **esplicito**.
+///
+/// È la primitiva su cui poggiano le operazioni di rete, esposta perché il suo
+/// comportamento (uccisione del processo alla scadenza, `stderr` catturato,
+/// nessun deadlock sui pipe) sia verificabile nei test senza toccare la rete né
+/// aspettare minuti.
+pub fn run_with_timeout(program: &str, args: &[&str], limit: Duration) -> Result<(), StepError> {
+    run_command_full(program, args, &[], Some(limit))
 }
 
 /// Adatta gli argomenti costruiti da [`argv`] alla firma di [`run_command`].
@@ -878,7 +1057,10 @@ impl SystemOps for RealSystemOps {
     ) -> Result<(), StepError> {
         let target_str = target.to_string_lossy();
         let depth_str = depth.to_string();
-        run_command(
+        // Operazione di rete → timeout. Un tentativo scaduto è un fallimento
+        // ritentabile: `CloneOdooRepo` lo tratta come gli altri (retry con
+        // backoff, poi fallback tarball).
+        run_network_command(
             "sudo",
             &[
                 "-u",
@@ -908,8 +1090,10 @@ impl SystemOps for RealSystemOps {
         let target_str = target.to_string_lossy().into_owned();
 
         // Scarica; poi crea/estrai come utente (i file risultano owned da lui).
+        // Solo il download ha un timeout: l'estrazione è locale e su una
+        // macchina lenta può durare parecchio in modo del tutto legittimo.
         let outcome = (|| {
-            run_command("wget", &["-qO", &tmp_str, url])?;
+            run_network_command("wget", &["-qO", &tmp_str, url])?;
             run_command("sudo", &["-u", user, "--", "mkdir", "-p", &target_str])?;
             run_command(
                 "sudo",
@@ -1128,7 +1312,10 @@ impl RealDownloader {
 impl Downloader for RealDownloader {
     fn download(&self, url: &str, dest: &Path) -> Result<(), StepError> {
         let rendered = dest.to_string_lossy();
-        run_command("wget", &["-q", "-O", &rendered, url])
+        // Rete → timeout. Un download troncato dal kill non è comunque
+        // installabile: il chiamante verifica il checksum (fail-closed) e
+        // rimuove il file parziale.
+        run_network_command("wget", &["-q", "-O", &rendered, url])
     }
 }
 

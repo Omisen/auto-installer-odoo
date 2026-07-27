@@ -21,6 +21,24 @@ pub enum StepError {
         stderr: String,
     },
 
+    /// Un comando esterno non è terminato entro il timeout ed è stato ucciso.
+    ///
+    /// Riguarda le sole operazioni di **rete** (clone, tarball, download del
+    /// `.deb`): un mirror che non chiude la connessione appenderebbe altrimenti
+    /// l'installer a tempo indefinito. È un errore **ritentabile**: il retry del
+    /// clone lo tratta come un fallimento qualsiasi e passa al tentativo
+    /// successivo, poi al fallback tarball.
+    ///
+    /// Il nome della variabile citato nel messaggio è
+    /// [`crate::system_ops::NETWORK_TIMEOUT_ENV`]; un test verifica che i due
+    /// non divergano.
+    #[error(
+        "comando `{command}` non terminato entro {secs}s: interrotto (timeout di rete). \
+         Se la connessione è lenta alza il limite con ODOO_NETWORK_TIMEOUT_SECS=<secondi> \
+         (0 = nessun timeout)"
+    )]
+    Timeout { command: String, secs: u64 },
+
     /// La fase di snapshot non è riuscita a rilevare lo stato preesistente.
     ///
     /// È un errore grave: senza snapshot affidabile l'undo non ha una fonte di

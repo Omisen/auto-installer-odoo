@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
 use odoo_installer::context::Context;
+use odoo_installer::error::StepError;
 use odoo_installer::step::Step;
 use odoo_installer::steps::clone_odoo_repo::CloneOdooRepo;
 use odoo_installer::system_ops::OdooSourceState;
@@ -154,6 +155,58 @@ fn falls_back_to_tarball_after_all_retries() {
     assert!(ops_of(&log)
         .iter()
         .any(|o| matches!(o, Op::TarballInstall { .. })));
+}
+
+#[test]
+fn clone_timeout_is_retryable_and_falls_back_to_tarball() {
+    // A3.1/R2: un tentativo che *scade* non è diverso da uno che fallisce —
+    // consuma un tentativo, pulisce gli artefatti parziali e alla fine dei
+    // retry attiva il fallback tarball. Senza timeout, il primo tentativo non
+    // sarebbe mai tornato e retry e fallback non sarebbero mai scattati.
+    let cfg = MockConfig {
+        source_state: OdooSourceState::Absent,
+        git_clone_fail_times: 3,
+        network_failures_are_timeouts: true,
+        tarball_fails: false,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = CloneOdooRepo::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("timeout ripetuti → fallback tarball");
+
+    let ops = ops_of(&log);
+    assert_eq!(
+        count(&ops, |o| matches!(o, Op::GitClone { .. })),
+        3,
+        "un timeout consuma un tentativo come ogni altro fallimento"
+    );
+    assert!(ops.iter().any(|o| matches!(o, Op::TarballInstall { .. })));
+}
+
+#[test]
+fn timeout_on_clone_and_tarball_propagates_the_timeout_error() {
+    // Se anche il fallback scade, l'errore che arriva all'utente è il Timeout
+    // (con il comando e i secondi), non un hang e non un errore generico.
+    let cfg = MockConfig {
+        source_state: OdooSourceState::Absent,
+        git_clone_fail_times: 3,
+        tarball_fails: true,
+        network_failures_are_timeouts: true,
+        ..Default::default()
+    };
+    let (mock, _log) = MockSystemOps::new(cfg);
+    let mut step = CloneOdooRepo::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    let err = step.run(&c).expect_err("clone + tarball scaduti → errore");
+    assert!(
+        matches!(err, StepError::Timeout { .. }),
+        "atteso Timeout propagato, ottenuto: {err}"
+    );
 }
 
 #[test]

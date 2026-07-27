@@ -142,6 +142,11 @@ pub struct MockConfig {
     pub git_clone_fail_times: u32,
     /// Se `true`, `tarball_install` fallisce.
     pub tarball_fails: bool,
+    /// Se `true`, i fallimenti simulati delle operazioni di rete
+    /// (`git_clone`, `tarball_install`) sono **timeout** (`StepError::Timeout`)
+    /// invece di un exit code non-zero. Serve a verificare che un timeout sia
+    /// trattato come un fallimento ritentabile come gli altri.
+    pub network_failures_are_timeouts: bool,
     /// Il python del venv esiste già?
     pub venv_exists: bool,
     /// `python3 -m venv` disponibile?
@@ -185,6 +190,7 @@ impl Default for MockConfig {
             source_state: OdooSourceState::Absent,
             git_clone_fail_times: 0,
             tarball_fails: false,
+            network_failures_are_timeouts: false,
             venv_exists: false,
             venv_available: true,
             requirements_content: None,
@@ -243,6 +249,23 @@ impl MockSystemOps {
     fn record(&self, op: Op) {
         if let Ok(mut entries) = self.log.lock() {
             entries.push(op);
+        }
+    }
+
+    /// Il fallimento simulato di un'operazione di rete: timeout o exit code
+    /// non-zero, secondo `network_failures_are_timeouts`.
+    fn simulated_network_failure(&self, command: &str, stderr: &str) -> StepError {
+        if self.cfg.network_failures_are_timeouts {
+            StepError::Timeout {
+                command: command.to_string(),
+                secs: 300,
+            }
+        } else {
+            StepError::CommandFailed {
+                command: command.to_string(),
+                status: "1".to_string(),
+                stderr: stderr.to_string(),
+            }
         }
     }
 }
@@ -492,11 +515,7 @@ impl SystemOps for MockSystemOps {
             depth,
         });
         if n < self.cfg.git_clone_fail_times {
-            Err(StepError::CommandFailed {
-                command: "git clone".to_string(),
-                status: "1".to_string(),
-                stderr: "fallimento clone simulato".to_string(),
-            })
+            Err(self.simulated_network_failure("git clone", "fallimento clone simulato"))
         } else {
             Ok(())
         }
@@ -506,6 +525,9 @@ impl SystemOps for MockSystemOps {
             target: target.to_path_buf(),
         });
         if self.cfg.tarball_fails {
+            if self.cfg.network_failures_are_timeouts {
+                return Err(self.simulated_network_failure("wget tarball", ""));
+            }
             Err(StepError::Precondition(
                 "tarball fallito (simulato)".to_string(),
             ))

@@ -164,6 +164,19 @@ WITH_NGINX=true
 # ODOO_ADMIN_PASSWD=...   # NON usare 'admin' in produzione
 ```
 
+### Variabili d'ambiente (regolazioni di rete)
+
+Non sono parametri di installazione ma manopole per reti difficili, lette dall'ambiente del processo:
+
+| Variabile | Default | Cosa fa |
+|---|---|---|
+| `ODOO_NETWORK_TIMEOUT_SECS` | `300` | Timeout delle operazioni di rete (clone Odoo, tarball di fallback, download del `.deb` wkhtmltopdf). Allo scadere il comando viene interrotto con un errore chiaro invece di restare appeso. `0` disattiva il timeout. |
+| `GIT_CLONE_RETRIES` | `3` | Tentativi di `git clone` prima del fallback tarball (un timeout consuma un tentativo). |
+| `GIT_DEPTH` | `5` | Profondità del clone shallow. |
+
+`apt-get` e le operazioni locali lunghe (init del DB, `pip install`, creazione del venv) **non** hanno
+timeout: interromperle a metà farebbe più danni dell'attesa.
+
 ---
 
 ## Cosa fa, in breve
