@@ -98,6 +98,7 @@ pub enum Op {
     },
     CreateVenv(PathBuf),
     WritePrivateFile(PathBuf),
+    CreatePrivateFile(PathBuf),
     MoveFile {
         src: PathBuf,
         dst: PathBuf,
@@ -541,6 +542,25 @@ impl SystemOps for MockSystemOps {
                 .write(true)
                 .create(true)
                 .truncate(true)
+                .mode(0o600)
+                .open(path)
+                .map_err(|e| StepError::io(path, e))?;
+            f.write_all(content.as_bytes())
+                .map_err(|e| StepError::io(path, e))?;
+        }
+        Ok(())
+    }
+
+    fn create_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
+        self.record(Op::CreatePrivateFile(path.to_path_buf()));
+        if self.cfg.real_fs {
+            use std::io::Write;
+            use std::os::unix::fs::OpenOptionsExt;
+            // Stesse garanzie del reale: O_EXCL | O_NOFOLLOW.
+            let mut f = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .custom_flags(nix::libc::O_NOFOLLOW)
                 .mode(0o600)
                 .open(path)
                 .map_err(|e| StepError::io(path, e))?;

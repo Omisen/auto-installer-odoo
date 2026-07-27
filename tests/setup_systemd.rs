@@ -40,7 +40,7 @@ fn all_absent_installs_then_undo_in_order() {
     let ops = ops_of(&log);
 
     // run: installa + enable + start.
-    assert!(has(&ops, |o| matches!(o, Op::WritePrivateFile(_))));
+    assert!(has(&ops, |o| matches!(o, Op::CreatePrivateFile(_))));
     assert!(has(
         &ops,
         |o| matches!(o, Op::Chmod { mode, .. } if *mode == 0o644)

@@ -70,15 +70,10 @@ impl SetupSystemd {
         ))
     }
 
+    /// Temporaneo privato accanto alla unit (stesso filesystem → rename
+    /// atomico), con nome imprevedibile e creazione `O_EXCL | O_NOFOLLOW`.
     fn temp_path(unit_path: &std::path::Path) -> std::path::PathBuf {
-        let parent = unit_path
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new("/etc/systemd/system"));
-        let name = unit_path
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "odoo.service".to_string());
-        parent.join(format!(".{name}.tmp"))
+        crate::system_ops::private_temp_path(unit_path, "odoo.service")
     }
 
     fn settle(&self) {
@@ -142,8 +137,13 @@ impl Step for SetupSystemd {
 
         // Installa (idempotente: sovrascrive). Il file governa solo l'undo.
         let tmp = Self::temp_path(&unit_path);
-        self.ops.write_private_file(&tmp, &content)?;
-        self.ops.move_file(&tmp, &unit_path)?;
+        self.ops.create_private_file(&tmp, &content)?;
+        // Temp con nome casuale in /etc/systemd/system, che il rollback non
+        // ripulisce: se il move fallisce, lo togliamo di mezzo noi.
+        if let Err(e) = self.ops.move_file(&tmp, &unit_path) {
+            let _ = self.ops.remove_file(&tmp);
+            return Err(e);
+        }
         self.ops.chmod(&unit_path, UNIT_MODE)?;
         self.ops.chown_named(&unit_path, "root", "root")?;
         if self.snap.unit_file == PreState::Untracked {

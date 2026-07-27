@@ -63,8 +63,8 @@ fn created_by_us_generates_640_and_undo_removes() {
 
     let ops = ops_of(&log);
     assert!(
-        ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
-        "scrittura privata (600)"
+        ops.iter().any(|o| matches!(o, Op::CreatePrivateFile(_))),
+        "creazione privata del temp (600, O_EXCL|O_NOFOLLOW)"
     );
     assert!(ops
         .iter()

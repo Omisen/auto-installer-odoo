@@ -38,7 +38,9 @@ pub enum ConfigError {
     InvalidVersion(String),
 
     #[error(
-        "{field} non valido: '{value}'. Usa solo lettere, numeri, punto, trattino o underscore"
+        "{field} non valido: '{value}'. Usa solo lettere, numeri, punto, trattino o underscore, \
+         e comincia con una lettera, una cifra o un underscore (un nome che inizia con '-' \
+         verrebbe scambiato per un'opzione dai comandi di sistema)"
     )]
     InvalidIdentifier { field: &'static str, value: String },
 
@@ -214,12 +216,24 @@ pub fn normalize_version(value: &str) -> Result<(String, String), ConfigError> {
     Ok((full, short))
 }
 
-/// `true` se `value` è un identifier valido (`^[A-Za-z0-9._-]+$`).
+/// `true` se `value` è un identifier valido (`^[A-Za-z0-9_][A-Za-z0-9._-]*$`).
+///
+/// Il **primo** carattere deve essere alfanumerico o `_`. Il vincolo non è
+/// estetico: `db_name`/`db_user`/`odoo_user` finiscono come argomenti
+/// posizionali di `createdb`/`dropdb`/`useradd`, e un nome come `-foo` o
+/// `--help` verrebbe interpretato dal comando come **flag** invece che come
+/// operando (argument injection). Un identifier che inizia con `-` (o con `.`,
+/// che darebbe un file/DB "nascosto") non è mai legittimo qui.
+///
+/// È la porta a monte; la rete a valle è il `--` prima dei posizionali in
+/// [`crate::system_ops::argv`]. Servono entrambe.
 fn is_valid_identifier(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
+    let mut chars = value.chars();
+    match chars.next() {
+        Some(first) if first.is_ascii_alphanumeric() || first == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
 /// Valida un identifier, allegando il nome del campo all'errore.

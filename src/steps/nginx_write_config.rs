@@ -45,15 +45,10 @@ impl NginxWriteConfig {
     fn dest(ctx: &Context) -> std::path::PathBuf {
         std::path::PathBuf::from(format!("{SITES_AVAILABLE}/odoo{}", ctx.odoo_version_short))
     }
+    /// Temporaneo privato accanto alla destinazione (stesso filesystem → rename
+    /// atomico), con nome imprevedibile e creazione `O_EXCL | O_NOFOLLOW`.
     fn temp_path(dest: &std::path::Path) -> std::path::PathBuf {
-        let parent = dest
-            .parent()
-            .unwrap_or_else(|| std::path::Path::new(SITES_AVAILABLE));
-        let name = dest
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "odoo".to_string());
-        parent.join(format!(".{name}.tmp"))
+        crate::system_ops::private_temp_path(dest, "odoo")
     }
 }
 
@@ -105,8 +100,13 @@ impl Step for NginxWriteConfig {
         validate_vhost(&content)?;
 
         let tmp = Self::temp_path(&dest);
-        self.ops.write_private_file(&tmp, &content)?;
-        self.ops.move_file(&tmp, &dest)?;
+        self.ops.create_private_file(&tmp, &content)?;
+        // Temp con nome casuale in una dir di sistema che il rollback non
+        // ripulisce: se il move fallisce, lo togliamo di mezzo noi.
+        if let Err(e) = self.ops.move_file(&tmp, &dest) {
+            let _ = self.ops.remove_file(&tmp);
+            return Err(e);
+        }
         self.ops.chmod(&dest, VHOST_MODE)?;
         self.ops.chown_named(&dest, "root", "root")?;
         if self.snap.prestate == PreState::Untracked {

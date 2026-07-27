@@ -244,6 +244,34 @@ fn empty_db_name_is_typed_error() {
     assert!(matches!(err, ConfigError::InvalidIdentifier { .. }));
 }
 
+#[test]
+fn identifier_rejects_leading_dash_and_dot() {
+    // Un nome che inizia con `-` finirebbe posizionale in createdb/dropdb/useradd
+    // e verrebbe letto come **flag** del comando (argument injection): rifiutato
+    // a monte. Idem `.` iniziale, mai legittimo per un utente o un DB.
+    for bad in ["-foo", "--help", "-", ".bar", ".", "--", ""] {
+        assert!(
+            matches!(
+                config::validate_identifier(bad, "db_name"),
+                Err(ConfigError::InvalidIdentifier { .. })
+            ),
+            "'{bad}' deve essere rifiutato"
+        );
+    }
+}
+
+#[test]
+fn identifier_accepts_internal_dash_and_dot() {
+    // Il vincolo è solo sul **primo** carattere: trattini e punti interni sono
+    // nomi legittimi e restano validi.
+    for good in ["foo", "foo_bar", "foo-bar", "foo.bar", "_foo", "0foo", "F"] {
+        assert_eq!(
+            config::validate_identifier(good, "db_name").expect("deve essere valido"),
+            good
+        );
+    }
+}
+
 // --- Password admin ----------------------------------------------------------
 
 #[test]

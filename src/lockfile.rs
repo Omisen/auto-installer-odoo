@@ -6,6 +6,7 @@
 //! Vive in `main`, non nel trait `Step`.
 
 use std::fs::OpenOptions;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
 use nix::fcntl::{Flock, FlockArg};
@@ -14,6 +15,12 @@ use crate::error::StepError;
 
 /// Percorso di default del lock file (owned root).
 pub const DEFAULT_LOCK_PATH: &str = "/opt/odoo/.installer.lock";
+
+/// Modalità del lock file: `0600`, come gli altri file dell'installer in
+/// `/opt/odoo` (stato, temporanei di config). Il file è vuoto e serve solo al
+/// `flock`, ma non c'è ragione di lasciarlo `0666 & ~umask` mentre tutto il
+/// resto è privato.
+const LOCK_FILE_MODE: u32 = 0o600;
 
 /// Guard del lock: mantiene il `flock`. Il rilascio avviene al `Drop`.
 pub struct LockGuard {
@@ -30,10 +37,15 @@ pub fn acquire(path: &Path) -> Result<LockGuard, StepError> {
             std::fs::create_dir_all(parent).map_err(|e| StepError::io(parent, e))?;
         }
     }
+    // `mode()` vale solo alla **creazione**: un lock file già esistente conserva
+    // i suoi permessi. Non li forziamo — `flock` opera sul descrittore, i
+    // permessi non influenzano il locking, e riscrivere i permessi di un file
+    // altrui non è compito di questa funzione.
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)
         .write(true)
+        .mode(LOCK_FILE_MODE)
         .open(path)
         .map_err(|e| StepError::io(path, e))?;
 

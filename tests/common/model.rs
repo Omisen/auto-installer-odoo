@@ -248,6 +248,20 @@ impl SystemOps for SystemModel {
             .insert(path.to_path_buf(), content.to_string());
         Ok(())
     }
+    fn create_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
+        // Modella `O_EXCL`: creare sopra un path esistente è un errore.
+        let mut s = self.state.lock().expect("l");
+        if s.paths.contains(path) || s.symlinks.contains(path) {
+            return Err(StepError::io(
+                path,
+                std::io::Error::from(std::io::ErrorKind::AlreadyExists),
+            ));
+        }
+        s.paths.insert(path.to_path_buf());
+        s.file_contents
+            .insert(path.to_path_buf(), content.to_string());
+        Ok(())
+    }
     fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
         let content = s.file_contents.remove(src);

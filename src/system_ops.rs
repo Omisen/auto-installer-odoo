@@ -37,6 +37,123 @@ pub enum OdooSourceState {
     InvalidDir,
 }
 
+/// Modalità dei file privati scritti dall'installer: solo il proprietario.
+const PRIVATE_FILE_MODE: u32 = 0o600;
+
+/// Costruisce il path di un file temporaneo privato **nella stessa directory**
+/// di `dest` (stesso filesystem → il `move_file` finale è un rename atomico).
+///
+/// Il nome porta un suffisso casuale: due esecuzioni concorrenti non collidono e
+/// un attaccante locale non può pre-piazzare un symlink al path esatto, perché
+/// non lo conosce in anticipo. La casualità è però solo *difesa in profondità*:
+/// la garanzia vera è [`SystemOps::create_private_file`], che è fail-closed
+/// (`O_EXCL | O_NOFOLLOW`) anche se il nome venisse indovinato.
+pub fn private_temp_path(dest: &Path, fallback_name: &str) -> PathBuf {
+    let name = dest
+        .file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| fallback_name.to_string());
+    let parent = dest.parent().unwrap_or_else(|| Path::new("."));
+    parent.join(format!(".{name}.{}.tmp", random_suffix()))
+}
+
+/// Suffisso esadecimale casuale (8 byte) per i nomi temporanei.
+///
+/// Legge da `/dev/urandom`; se non fosse disponibile degrada su pid + nanosecondi
+/// — sufficiente all'*unicità*, che è tutto ciò che serve alla correttezza
+/// (l'unicità evita le collisioni; la sicurezza sta in `O_EXCL | O_NOFOLLOW`).
+fn random_suffix() -> String {
+    use std::io::Read;
+    let mut buf = [0u8; 8];
+    if std::fs::File::open("/dev/urandom")
+        .and_then(|mut f| f.read_exact(&mut buf))
+        .is_ok()
+    {
+        return buf.iter().map(|b| format!("{b:02x}")).collect();
+    }
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos())
+        .unwrap_or(0);
+    format!("{:x}{:08x}", std::process::id(), nanos)
+}
+
+/// Costruttori puri degli argomenti dei comandi che ricevono un **identifier
+/// come argomento posizionale**.
+///
+/// Ogni nome è preceduto da `--`: anche un valore che iniziasse con `-`
+/// (`-foo`, `--help`) viene trattato come operando e mai come flag del comando.
+/// È la rete a valle dell'argument-injection; la porta a monte è
+/// [`crate::config::validate_identifier`], che vieta il trattino iniziale.
+/// Sono funzioni pure proprio per poter asserire il `--` nei test senza root.
+pub mod argv {
+    use super::UserSpec;
+
+    /// `useradd [opzioni] -- <login>`.
+    pub fn useradd(spec: &UserSpec) -> Vec<String> {
+        let mut args: Vec<String> = Vec::new();
+        if spec.system {
+            args.push("--system".to_string());
+        }
+        if spec.create_home {
+            args.push("--create-home".to_string());
+        }
+        args.push("--home-dir".to_string());
+        args.push(spec.home.to_string_lossy().into_owned());
+        if spec.user_group {
+            args.push("--user-group".to_string());
+        }
+        args.push("--shell".to_string());
+        args.push(spec.shell.clone());
+        args.push("--".to_string());
+        args.push(spec.name.clone());
+        args
+    }
+
+    /// `userdel -- <login>`. **Mai** `-r`: la home è di `PrepareOptRoot`.
+    pub fn userdel(user: &str) -> Vec<String> {
+        vec!["--".to_string(), user.to_string()]
+    }
+
+    /// `groupdel -- <group>`.
+    pub fn groupdel(group: &str) -> Vec<String> {
+        vec!["--".to_string(), group.to_string()]
+    }
+
+    /// `sudo -Hiu postgres -- createdb --owner <owner> -- <db>`.
+    pub fn createdb(owner: &str, db: &str) -> Vec<String> {
+        vec![
+            "-Hiu".to_string(),
+            "postgres".to_string(),
+            "--".to_string(),
+            "createdb".to_string(),
+            "--owner".to_string(),
+            owner.to_string(),
+            "--".to_string(),
+            db.to_string(),
+        ]
+    }
+
+    /// `sudo -Hiu postgres -- dropdb --if-exists --force -- <db>`.
+    pub fn dropdb(db: &str) -> Vec<String> {
+        vec![
+            "-Hiu".to_string(),
+            "postgres".to_string(),
+            "--".to_string(),
+            "dropdb".to_string(),
+            "--if-exists".to_string(),
+            "--force".to_string(),
+            "--".to_string(),
+            db.to_string(),
+        ]
+    }
+
+    /// `getent passwd -- <user>`.
+    pub fn getent_passwd(user: &str) -> Vec<String> {
+        vec!["passwd".to_string(), "--".to_string(), user.to_string()]
+    }
+}
+
 /// Specifica per la creazione di un utente di sistema (argomenti di `useradd`).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserSpec {
@@ -170,9 +287,33 @@ pub trait SystemOps {
     fn read_to_string(&self, path: &Path) -> Result<String, StepError>;
 
     // --- config + init DB (Fase 7) -------------------------------------------
-    /// Scrive `content` in un file **privato** (mode `0600`, owned root): la
+    /// Scrive `content` in un file **privato** (mode `0600` alla creazione): la
     /// master password non è mai leggibile da altri utenti in nessun istante.
+    ///
+    /// **Semantica: riscrittura in-place di un path già "nostro".** Il file
+    /// viene creato se assente e troncato se presente, e un eventuale symlink
+    /// **viene seguito** — comportamento voluto per il `.bashrc` dell'utente
+    /// installatore, che può legittimamente essere un symlink ai suoi dotfile
+    /// (riscriverlo come file regolare distruggerebbe la sua configurazione).
+    ///
+    /// Per **creare** un file nuovo in una directory non-root (i temporanei
+    /// prima del `move_file`) usa invece [`SystemOps::create_private_file`]:
+    /// qui il path prevedibile + il follow del symlink sarebbero un vettore
+    /// TOCTOU (root che scrive attraverso un symlink pre-piazzato).
     fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError>;
+    /// **Crea** un file privato (`0600`) a `path`, fail-closed su ogni sorpresa.
+    ///
+    /// Apre con `O_CREAT | O_EXCL | O_NOFOLLOW`:
+    /// - `O_EXCL` → se il path esiste già (file, dir o symlink) l'apertura
+    ///   fallisce: non si scrive mai su qualcosa che non abbiamo creato noi;
+    /// - `O_NOFOLLOW` → un symlink al path non viene mai seguito.
+    ///
+    /// È il metodo da usare per i file temporanei scritti da **root** in
+    /// directory possedute da altri utenti (es. la install dir, owned `odoo`):
+    /// il peggio che un attaccante locale ottiene è un fallimento dello step,
+    /// mai una scrittura arbitraria come root né un dirottamento del contenuto
+    /// (che include le password). Vedi [`private_temp_path`].
+    fn create_private_file(&self, path: &Path, content: &str) -> Result<(), StepError>;
     /// Sposta `src` su `dst` (rename, con fallback copy+remove cross-device).
     fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError>;
     /// Copia `src` in `dst` (per il backup).
@@ -248,6 +389,11 @@ fn run_command_with_env(
 /// Esegue un comando esterno senza env aggiuntivi.
 fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
     run_command_with_env(program, args, &[])
+}
+
+/// Adatta gli argomenti costruiti da [`argv`] alla firma di [`run_command`].
+fn as_refs(args: &[String]) -> Vec<&str> {
+    args.iter().map(String::as_str).collect()
 }
 
 /// Esegue `apt-get` con l'ambiente non-interattivo (niente prompt tzdata /
@@ -394,34 +540,16 @@ impl SystemOps for RealSystemOps {
     }
 
     fn create_user(&self, spec: &UserSpec) -> Result<(), StepError> {
-        let home = spec.home.to_string_lossy().into_owned();
-        let mut args: Vec<String> = Vec::new();
-        if spec.system {
-            args.push("--system".to_string());
-        }
-        if spec.create_home {
-            args.push("--create-home".to_string());
-        }
-        args.push("--home-dir".to_string());
-        args.push(home);
-        if spec.user_group {
-            args.push("--user-group".to_string());
-        }
-        args.push("--shell".to_string());
-        args.push(spec.shell.clone());
-        args.push(spec.name.clone());
-
-        let refs: Vec<&str> = args.iter().map(String::as_str).collect();
-        run_command("useradd", &refs)
+        run_command("useradd", &as_refs(&argv::useradd(spec)))
     }
 
     fn delete_user(&self, user: &str) -> Result<(), StepError> {
         // MAI `-r`: la home è di competenza di PrepareOptRoot.undo.
-        run_command("userdel", &[user])
+        run_command("userdel", &as_refs(&argv::userdel(user)))
     }
 
     fn delete_group(&self, group: &str) -> Result<(), StepError> {
-        run_command("groupdel", &[group])
+        run_command("groupdel", &as_refs(&argv::groupdel(group)))
     }
 
     fn chown_named(&self, path: &Path, owner: &str, group: &str) -> Result<(), StepError> {
@@ -665,25 +793,11 @@ impl SystemOps for RealSystemOps {
     }
 
     fn createdb(&self, owner: &str, db: &str) -> Result<(), StepError> {
-        run_command(
-            "sudo",
-            &["-Hiu", "postgres", "--", "createdb", "--owner", owner, db],
-        )
+        run_command("sudo", &as_refs(&argv::createdb(owner, db)))
     }
 
     fn dropdb(&self, db: &str) -> Result<(), StepError> {
-        run_command(
-            "sudo",
-            &[
-                "-Hiu",
-                "postgres",
-                "--",
-                "dropdb",
-                "--if-exists",
-                "--force",
-                db,
-            ],
-        )
+        run_command("sudo", &as_refs(&argv::dropdb(db)))
     }
 
     fn pg_list_databases(&self) -> Result<Vec<String>, StepError> {
@@ -858,7 +972,21 @@ impl SystemOps for RealSystemOps {
             .write(true)
             .create(true)
             .truncate(true)
-            .mode(0o600)
+            .mode(PRIVATE_FILE_MODE)
+            .open(path)
+            .map_err(|e| StepError::io(path, e))?;
+        file.write_all(content.as_bytes())
+            .map_err(|e| StepError::io(path, e))
+    }
+
+    fn create_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true) // O_CREAT | O_EXCL
+            .custom_flags(nix::libc::O_NOFOLLOW)
+            .mode(PRIVATE_FILE_MODE)
             .open(path)
             .map_err(|e| StepError::io(path, e))?;
         file.write_all(content.as_bytes())
@@ -931,7 +1059,7 @@ impl SystemOps for RealSystemOps {
 
     fn getent_home(&self, user: &str) -> Result<Option<String>, StepError> {
         let output = Command::new("getent")
-            .args(["passwd", user])
+            .args(argv::getent_passwd(user))
             .output()
             .map_err(|e| StepError::CommandFailed {
                 command: format!("getent passwd {user}"),

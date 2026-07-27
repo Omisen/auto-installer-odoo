@@ -57,13 +57,15 @@ impl GenerateConfig {
 
     /// Path del file temporaneo privato, nella **stessa** directory della
     /// destinazione (stesso filesystem → rename atomico).
+    ///
+    /// Il nome è imprevedibile e il file viene creato con `O_EXCL | O_NOFOLLOW`
+    /// ([`SystemOps::create_private_file`]): la install dir è posseduta
+    /// dall'utente `odoo` mentre `run` gira come **root**, quindi un path
+    /// prevedibile permetterebbe di pre-piazzarci un symlink e farci scrivere
+    /// attraverso — sia un file di sistema arbitrario, sia il contenuto reso,
+    /// che porta le password.
     fn temp_path(dest: &std::path::Path) -> std::path::PathBuf {
-        let name = dest
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "odoo.conf".to_string());
-        let parent = dest.parent().unwrap_or_else(|| std::path::Path::new("."));
-        parent.join(format!(".{name}.tmp"))
+        crate::system_ops::private_temp_path(dest, "odoo.conf")
     }
 }
 
@@ -113,8 +115,14 @@ impl Step for GenerateConfig {
         // Scrittura privata → move → ownership. La password non è mai in un file
         // world-readable in nessun momento.
         let tmp = Self::temp_path(&dest);
-        self.ops.write_private_file(&tmp, &content)?;
-        self.ops.move_file(&tmp, &dest)?;
+        self.ops.create_private_file(&tmp, &content)?;
+        // Il temp ha un nome casuale: se il move fallisce nessuno lo
+        // riconoscerebbe più come nostro, quindi lo rimuoviamo subito (contiene
+        // le password: non va lasciato in giro).
+        if let Err(e) = self.ops.move_file(&tmp, &dest) {
+            let _ = self.ops.remove_file(&tmp);
+            return Err(e);
+        }
         self.ops
             .chown_named(&dest, &ctx.odoo_user, &ctx.odoo_user)?;
         self.ops.chmod(&dest, CONF_MODE)?;
