@@ -60,7 +60,12 @@ fn undo_purges_only_the_delta() {
         ops.contains(&Op::AptPurge(strings(&["b", "c"]))),
         "atteso purge di [b,c], trovato: {ops:?}"
     );
-    assert!(ops.contains(&Op::AptAutoremove));
+    // A3.3/A3.2: nessun `apt-get autoremove` globale nel rollback — rimuoverebbe
+    // orfani estranei a Odoo, fuori dal nostro delta.
+    assert!(
+        !ops.contains(&Op::AptAutoremove),
+        "l'undo non deve lanciare un autoremove globale, trovato: {ops:?}"
+    );
     assert!(
         !ops.iter()
             .any(|op| matches!(op, Op::AptPurge(p) if p.contains(&"a".to_string()))),
@@ -134,6 +139,11 @@ fn bootstrap_purges_only_with_aggressive_rollback() {
     assert!(
         ops.iter().any(|op| matches!(op, Op::AptPurge(_))),
         "con --aggressive-rollback il bootstrap deve purgare il delta"
+    );
+    // Nemmeno in modalità aggressiva: l'autoremove globale è fuori dal delta.
+    assert!(
+        !ops.contains(&Op::AptAutoremove),
+        "nessun autoremove globale nemmeno con --aggressive-rollback, trovato: {ops:?}"
     );
 }
 

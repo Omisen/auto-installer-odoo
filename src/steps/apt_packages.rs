@@ -12,7 +12,8 @@
 //!   da una macchina cliente per un rollback. Purga solo con
 //!   `--aggressive-rollback`.
 //! - [`AptPackagesStep::odoo_dependencies`] — i ~30 pacchetti dev di Odoo. È il
-//!   **delta pesante**: l'undo purga il delta + `autoremove`.
+//!   **delta pesante**: l'undo purga il delta, e **solo** il delta (nessun
+//!   `apt-get autoremove` globale — vedi `purge_delta`, A3.2).
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -62,7 +63,7 @@ pub const ODOO_DEPENDENCIES: &[&str] = &[
 /// Politica di undo per l'insieme di pacchetti.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UndoPolicy {
-    /// Purga sempre il delta + autoremove (delta pesante di Odoo).
+    /// Purga sempre il delta, e solo il delta (delta pesante di Odoo).
     PurgeDelta,
     /// Non purga di default; purga il delta solo con `--aggressive-rollback`
     /// (utility bootstrap comuni).
@@ -102,7 +103,7 @@ impl AptPackagesStep {
         )
     }
 
-    /// Dipendenze di sistema di Odoo (undo purga il delta + autoremove).
+    /// Dipendenze di sistema di Odoo (undo purga il delta, e solo il delta).
     pub fn odoo_dependencies() -> Self {
         Self::odoo_dependencies_with_ops(Box::new(RealSystemOps::new()))
     }
@@ -132,24 +133,32 @@ impl AptPackagesStep {
         }
     }
 
-    /// Purga il delta persistito + autoremove (best-effort). Usa il delta dello
-    /// snapshot, **non** ricalcolato dallo stato corrente (che nel frattempo è
-    /// cambiato: il run ha installato i pacchetti).
+    /// Purga il delta persistito (best-effort). Usa il delta dello snapshot,
+    /// **non** ricalcolato dallo stato corrente (che nel frattempo è cambiato:
+    /// il run ha installato i pacchetti).
+    ///
+    /// # Niente `apt-get autoremove` (A3.2)
+    ///
+    /// Il rollback **non** lancia un `autoremove` globale. `autoremove` agisce
+    /// su tutto il sistema: rimuove qualunque pacchetto auto-installato che apt
+    /// consideri orfano *in quel momento*, anche del tutto estraneo a Odoo e
+    /// tirato dentro da altro software. Sarebbe una rimozione non delimitata dal
+    /// nostro delta, cioè l'esatto contrario del principio chirurgico che regge
+    /// tutto il rollback. Il purge del delta è già mirato: le dipendenze tirate
+    /// dentro dai *nostri* pacchetti restano installate, il che è rumore innocuo
+    /// a fronte del rischio di disinstallare roba altrui.
     fn purge_delta(&self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.delta.is_empty() {
             info!(step = self.name, "undo: delta vuoto, niente da purgare");
             return Ok(());
         }
         if ctx.dry_run {
-            info!(step = self.name, delta = ?self.snap.delta, "undo (dry-run): purgerei il delta + autoremove");
+            info!(step = self.name, delta = ?self.snap.delta, "undo (dry-run): purgerei il delta");
             return Ok(());
         }
         let refs: Vec<&str> = self.snap.delta.iter().map(String::as_str).collect();
         if let Err(e) = self.ops.apt_purge(&refs) {
             warn!(step = self.name, error = %e, "undo: apt purge fallito, proseguo (best-effort)");
-        }
-        if let Err(e) = self.ops.apt_autoremove() {
-            warn!(step = self.name, error = %e, "undo: apt autoremove fallito, proseguo (best-effort)");
         }
         Ok(())
     }

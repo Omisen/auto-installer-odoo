@@ -97,7 +97,8 @@ impl Context {
         }
     }
 
-    /// Override del path del file di stato (usato dai test e dal resume).
+    /// Override del path del file di stato (usato dai test; lo userà il resume
+    /// quando sarà implementato — vedi [`crate::state`]).
     pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.state_path = path.into();
         self

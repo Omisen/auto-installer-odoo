@@ -8,3 +8,4 @@ docs/*.md
 
 # Clone locale della GitHub wiki (repo git separato: *.wiki.git)
 /wiki
+/CLAUDE.md

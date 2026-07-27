@@ -195,6 +195,12 @@ chiave è sulle **risorse preesistenti**, che non vengono mai toccate da un roll
 - **`/opt/odoo`** già presente **resta**;
 - il **`~/.bashrc`** dell'utente torna **byte-per-byte** com'era (solo la nostra riga viene rimossa).
 
+> **Limite attuale, detto chiaramente.** Il rollback è **in-process**: annulla gli step della stessa
+> esecuzione. Lo stato viene sì persistito in `/opt/odoo/.installer-state.json` durante l'installazione
+> (e rimosso a fine successo), ma **non viene ancora riletto**: se il processo viene ucciso brutalmente
+> (`kill -9`, power-loss), gli artefatti a metà restano e vanno ripuliti a mano. Il rollback/resume a
+> partire dallo stato persistito è pianificato, non ancora disponibile.
+
 Usa **`--dry-run`** per vedere il piano prima di eseguire davvero.
 
 ---
@@ -233,23 +239,28 @@ sudo cat /opt/odoo/.installer.log
   non-interattiva con `admin_passwd=admin` l'installer **si ferma** (imposta una password diversa).
   La password non finisce mai nei log né nel riepilogo.
 - **Checksum wkhtmltopdf (TOFU)**: l'installer verifica lo SHA-256 del `.deb` prima di installarlo.
-  Upstream **non** pubblica checksum/firme per i `.deb`, quindi si usa un **pinning manuale TOFU** che va
-  **popolato prima del primo uso reale** (vedi sotto). Finché i pin sono vuoti, la verifica *fail-closed*
-  rifiuta l'installazione — comportamento onesto, mai bypassato.
+  Upstream **non** pubblica checksum/firme per i `.deb`, quindi si usa un **pinning manuale TOFU**:
+  i pin dei tre `.deb` della release `0.12.6.1-3` (`jammy`, `bullseye`, `bookworm`) sono **precaricati**
+  in `default_checksums()`, generati scaricando i `.deb` via HTTPS dalla release ufficiale. Se il
+  download non corrisponde al pin — o se un suffisso non ha pin — la verifica *fail-closed*
+  rifiuta l'installazione: comportamento mai bypassato.
 - **Comando `odoo` non globale**: installato solo per l'utente installatore (`~/.local/bin`), non in
   `/usr/local/bin`, per ridurre l'esposizione.
 
-### Popolare i pin checksum wkhtmltopdf
+### Rigenerare i pin checksum wkhtmltopdf
+
+Serve solo quando si cambia la versione pinnata di wkhtmltopdf: i pin valgono per una sola release.
 
 ```bash
-for cn in jammy focal bookworm bullseye; do
+for cn in jammy bullseye bookworm; do
   url="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.${cn}_amd64.deb"
   echo -n "$cn = "; curl -fsSL "$url" | sha256sum | cut -d' ' -f1
 done
 ```
 
 Inserisci i valori in `default_checksums()` (`src/steps/install_wkhtmltopdf.rs`). Sono pin **TOFU**, non
-checksum upstream: aggiornali quando cambi la versione pinnata.
+checksum upstream. Nota: la release `0.12.6.1-3` pubblica `.deb` amd64 **solo** per questi tre suffissi
+(non esiste un `focal_amd64.deb`).
 
 ---
 

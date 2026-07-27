@@ -4,6 +4,11 @@
 //! `CLAUDE.md`: snapshot prima di run, persistenza dopo ogni run riuscito,
 //! rollback in ordine inverso e best-effort.
 //!
+//! Il rollback è **in-process**: annulla gli step completati nella stessa
+//! esecuzione, tenuti in `completed`. Lo stato persistito da
+//! [`InstallState::save`] non viene riletto da nessuno — il resume/rollback a
+//! partire dal disco non è ancora implementato (fase R4). Vedi [`crate::state`].
+//!
 //! Il progresso è notificato tramite l'astrazione
 //! [`ProgressReporter`](crate::progress::ProgressReporter): il motore **non**
 //! dipende da `indicatif`. Le firme storiche `execute`/`rollback` restano

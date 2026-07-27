@@ -23,7 +23,10 @@ use crate::error::StepError;
 ///    fallisce non blocca la pulizia degli altri step (il motore logga e
 ///    prosegue).
 /// 4. **Stato persistito.** Dopo un `run` riuscito il motore persiste il record
-///    dello step (nome + [`Step::snapshot_value`]) su disco.
+///    dello step (nome + [`Step::snapshot_value`]) su disco. Attenzione: oggi lo
+///    stato è **scritto ma non riletto** — il rollback è solo in-process; il
+///    resume da stato persistito arriverà in R4 (vedi
+///    [`crate::state`]).
 ///
 /// # `dry_run`
 ///

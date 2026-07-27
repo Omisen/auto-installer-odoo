@@ -32,6 +32,14 @@ pub struct CodenameMapping {
 }
 
 /// Mappa codename → suffisso pacchetto (fallback `jammy` per gli sconosciuti).
+///
+/// I suffissi ammessi sono **solo** quelli per cui la release `0.12.6.1-3`
+/// pubblica davvero un `.deb` amd64: `jammy`, `bullseye`, `bookworm`. In
+/// particolare **non** esiste un `focal_amd64.deb` in questa release, e
+/// `focal` (Ubuntu 20.04) è comunque già rifiutato a monte da
+/// [`crate::checks::validate_os`] (richiede Ubuntu ≥ 22.04): non ha quindi un
+/// ramo dedicato e, nel caso teorico arrivasse qui, cade nel fallback `jammy`
+/// come ogni altro codename sconosciuto.
 pub fn map_codename(codename: Option<&str>) -> CodenameMapping {
     let mapped = |s: &str| CodenameMapping {
         suffix: s.to_string(),
@@ -40,7 +48,6 @@ pub fn map_codename(codename: Option<&str>) -> CodenameMapping {
     match codename {
         // Nessun pacchetto native: jammy è compatibile (mapping esplicito).
         Some("noble") | Some("mantic") | Some("lunar") | Some("jammy") => mapped("jammy"),
-        Some("focal") => mapped("focal"),
         Some("bookworm") => mapped("bookworm"),
         Some("bullseye") => mapped("bullseye"),
         _ => CodenameMapping {
@@ -50,7 +57,19 @@ pub fn map_codename(codename: Option<&str>) -> CodenameMapping {
     }
 }
 
-/// Tabella dei checksum SHA-256 attesi, per suffisso di pacchetto.
+/// Pin TOFU: SHA-256 di `wkhtmltox_0.12.6.1-3.jammy_amd64.deb`.
+const PIN_JAMMY: &str = "4f723b2691ad8638a9df960e0421d346d7315083e3583a334f33362280ddba15";
+/// Pin TOFU: SHA-256 di `wkhtmltox_0.12.6.1-3.bullseye_amd64.deb`.
+const PIN_BULLSEYE: &str = "9c687f0c58cf50e01f2a6375d2e34372f8feeec56a84690ea113d298fccadd98";
+/// Pin TOFU: SHA-256 di `wkhtmltox_0.12.6.1-3.bookworm_amd64.deb`.
+const PIN_BOOKWORM: &str = "98ba0d157b50d36f23bd0dedf4c0aa28c7b0c50fcdcdc54aa5b6bbba81a3941d";
+
+/// Tabella dei checksum SHA-256 attesi, **per suffisso di pacchetto**.
+///
+/// La chiave è il suffisso del `.deb` che scarichiamo (`jammy`, `bullseye`,
+/// `bookworm`), **non** il codename dell'OS dell'utente: è [`map_codename`] a
+/// tradurre l'uno nell'altro (es. `noble` → `.deb` `jammy`). La release
+/// `0.12.6.1-3` pubblica `.deb` amd64 solo per questi tre suffissi.
 ///
 /// # Natura della garanzia: pinning TOFU (trust-on-first-use)
 ///
@@ -60,28 +79,34 @@ pub fn map_codename(codename: Option<&str>) -> CodenameMapping {
 /// quindi un checksum *upstream* da inserire.
 ///
 /// Decisione onesta: **pinning manuale TOFU**. Questi non sono checksum
-/// ufficiali, ma pin generati una volta da una fonte fidata (HTTPS, sito
-/// ufficiale). Da lì l'installer verifica ogni download contro il pin:
-/// protegge da mirror compromessi, download corrotti e alterazioni successive
-/// — anche senza una firma upstream a garantire il primo scaricamento.
+/// ufficiali, ma pin generati una volta da una fonte fidata: i `.deb` sono
+/// stati scaricati via HTTPS dalla release ufficiale su GitHub e ne è stato
+/// calcolato lo SHA-256; per `bullseye` e `bookworm` il valore è stato inoltre
+/// riscontrato in modo incrociato con una fonte terza indipendente. Da qui in
+/// avanti l'installer verifica **ogni** download contro il pin: protegge da
+/// mirror compromessi, download corrotti e alterazioni successive — anche senza
+/// una firma upstream a garantire il primo scaricamento.
 ///
 /// ## Procedura per (ri)generare i pin
 /// ```text
-/// for cn in jammy focal bookworm bullseye; do
+/// for cn in jammy bullseye bookworm; do
 ///   url="https://github.com/wkhtmltopdf/packaging/releases/download/0.12.6.1-3/wkhtmltox_0.12.6.1-3.${cn}_amd64.deb"
-///   curl -fsSL "$url" | sha256sum        # inserisci il valore per ${cn} qui sotto
+///   echo -n "$cn = "; curl -fsSL "$url" | sha256sum | cut -d' ' -f1
 /// done
 /// ```
-/// Aggiorna questi valori quando cambi la versione pinnata.
-///
-/// **Stato attuale: tabella vuota** → il meccanismo fail-closed **rifiuta**
-/// l'installazione finché i pin non sono inseriti (comportamento onesto e
-/// testato). I valori reali li fornisce chi installa, scaricando i `.deb`: NON
-/// vanno inventati. La verifica non va mai bypassata né silenziata.
+/// Aggiorna i valori **e** questa procedura quando cambi `WK_VERSION`: i pin
+/// valgono per una sola versione. Non vanno mai inventati, e la verifica non va
+/// mai bypassata né silenziata: un suffisso senza pin fa fallire lo step
+/// (fail-closed).
 pub fn default_checksums() -> BTreeMap<String, String> {
-    // Esempio (PLACEHOLDER da sostituire con pin reali):
-    //   ("jammy".to_string(), "<sha256 del .deb jammy>".to_string()),
-    BTreeMap::new()
+    [
+        ("jammy", PIN_JAMMY),
+        ("bullseye", PIN_BULLSEYE),
+        ("bookworm", PIN_BOOKWORM),
+    ]
+    .into_iter()
+    .map(|(k, v)| (k.to_string(), v.to_string()))
+    .collect()
 }
 
 /// Installa wkhtmltopdf con verifica checksum, in modo reversibile.

@@ -90,13 +90,23 @@ impl Step for InitializeOdooDatabase {
 
         // Schema assente. HARD-STOP se il DB non è nostro: non si scrive lo
         // schema Odoo in un database preesistente del cliente.
+        //
+        // Il messaggio include l'ipotesi diagnostica "residuo di una run
+        // precedente" (A3.3): l'installer non sa distinguere i due casi finché
+        // non rilegge lo stato persistito (fase R4), ma l'utente sì — e senza
+        // questo suggerimento resterebbe bloccato senza capire perché.
         if !ctx.db_created_by_us.load(Ordering::SeqCst) {
             return Err(StepError::Precondition(format!(
                 "Il database '{}' esisteva già prima dell'installazione; \
                  l'inizializzazione dello schema Odoo è rifiutata per non alterare \
                  dati preesistenti. Usa un nome DB diverso o un DB vuoto creato \
-                 dall'installer.",
-                ctx.db_name
+                 dall'installer.\n\
+                 Nota: se questo database è il residuo di un'installazione precedente \
+                 non completata (e non un DB di produzione con dati reali), rimuovilo \
+                 manualmente — `sudo -u postgres dropdb {}` — oppure scegli un nome \
+                 diverso, prima di riprovare. La rimozione automatica dei residui \
+                 arriverà col comando `rollback` (in arrivo).",
+                ctx.db_name, ctx.db_name
             )));
         }
 

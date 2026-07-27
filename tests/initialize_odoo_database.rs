@@ -45,6 +45,17 @@ fn hard_stop_on_preexisting_db_never_inits() {
         result.is_err(),
         "init su DB preesistente deve essere rifiutato (hard-stop)"
     );
+    // A3.3: il messaggio deve suggerire l'ipotesi "residuo di una run fallita",
+    // altrimenti l'utente resta bloccato senza capire perché.
+    let msg = result.expect_err("errore").to_string();
+    assert!(
+        msg.contains("residuo"),
+        "il messaggio deve offrire la diagnosi 'residuo di run precedente': {msg}"
+    );
+    assert!(
+        msg.contains("dropdb odoo"),
+        "il messaggio deve indicare l'azione concreta: {msg}"
+    );
     assert!(
         !ops_of(&log)
             .iter()

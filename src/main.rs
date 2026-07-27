@@ -17,7 +17,7 @@ use odoo_installer::context::Context;
 use odoo_installer::engine::{dry_run_plan, Installer};
 use odoo_installer::progress::{IndicatifReporter, LogReporter, ProgressReporter};
 use odoo_installer::prompt;
-use odoo_installer::state::DEFAULT_STATE_PATH;
+use odoo_installer::state::{InstallState, DEFAULT_STATE_PATH};
 use odoo_installer::step::Step;
 use odoo_installer::steps::apt_packages::AptPackagesStep;
 use odoo_installer::steps::clone_odoo_repo::CloneOdooRepo;
@@ -134,6 +134,19 @@ fn main() -> Result<()> {
             // Il rollback è già stato eseguito dentro `execute`.
             anyhow!(e)
         })?;
+
+    // Installazione riuscita: lo stato descrive un'installazione *in corso*,
+    // quindi va rimosso. Altrimenti resterebbe un file stantìo che il resume
+    // (fase R4) scambierebbe per un'installazione da riprendere. Fallire qui non
+    // annulla un'installazione riuscita: si segnala e si prosegue.
+    // In dry-run non si arriva qui (return anticipato) e nulla è stato scritto.
+    if let Err(e) = InstallState::clear(&ctx.state_path) {
+        tracing::warn!(
+            path = %ctx.state_path.display(),
+            error = %e,
+            "rimozione del file di stato fallita: rimuovilo a mano per evitare confusione"
+        );
+    }
 
     tracing::info!("preparazione completata");
     Ok(())
