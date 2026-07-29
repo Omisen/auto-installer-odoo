@@ -71,9 +71,22 @@ impl Step for CreateVirtualenv {
         }
 
         // python3-venv deve esserci (installato dalle dipendenze di Fase 4).
+        //
+        // La domanda è "il sistema sa creare un virtualenv?", e si risolve in
+        // `import ensurepip` — non nella presenza del modulo `venv`, che è nella
+        // stdlib e c'è sempre. Vedi
+        // [`SystemOps::python_venv_available`](crate::system_ops::SystemOps::python_venv_available):
+        // finché questa precondizione chiedeva del modulo sbagliato non poteva
+        // fallire, e un sistema senza `python3-venv` arrivava fino al
+        // `python3 -m venv`, che si ferma a metà lasciando una `sandbox`
+        // incompleta (senza `bin/python`) e un errore grezzo di Python (A-R6-1).
         if !self.ops.python_venv_available() {
             return Err(StepError::Precondition(
-                "python3-venv non disponibile: installa prima le dipendenze di sistema".to_string(),
+                "impossibile creare un virtualenv: manca il modulo 'ensurepip', che su \
+                 Debian/Ubuntu arriva col pacchetto python3-venv (o la sua variante \
+                 versionata, es. python3.12-venv). Lo step install-system-dependencies \
+                 dovrebbe averlo installato: controlla il suo esito nel log"
+                    .to_string(),
             ));
         }
 

@@ -9,7 +9,8 @@ use odoo_installer::context::Context;
 use odoo_installer::state::{InstallState, StepRecord};
 use odoo_installer::step::Step;
 use odoo_installer::steps::apt_packages::{
-    AptDeltaSnapshot, AptPackagesStep, PackageSpec, UndoPolicy, ODOO_DEPENDENCIES,
+    AptDeltaSnapshot, AptPackagesStep, PackageSpec, UndoPolicy, BOOTSTRAP_PACKAGES,
+    ODOO_DEPENDENCIES, ODOO_OPTIONAL_DEPENDENCIES,
 };
 use odoo_installer::system_ops::{has_installable_candidate, total_package_names};
 
@@ -718,6 +719,198 @@ fn the_canonical_list_declares_the_real_name_for_the_virtual_one() {
         group.contains(&"libfreetype-dev"),
         "il nome reale deve essere fra le alternative, trovato {group:?}"
     );
+}
+
+// --- A-R6-1: il refactor della lista non deve perdere pacchetti -------------
+//
+// Il refactor R6 (nomi secchi → gruppi di alternative) ha riscritto a mano una
+// lista di 30 pacchetti. Un refactor così è esattamente il posto dove un
+// pacchetto si perde in silenzio: i 215 test su mock non creano un venv reale né
+// compilano nulla, quindi la mancanza si manifesterebbe solo in campo, a
+// installazione avviata. Queste guardie stanno a livello di **lista**, dove il
+// refactor avviene, e non hanno bisogno di un sistema vero per fallire.
+
+/// L'insieme obbligatorio **prima** di R6 (`git show c120089`), verbatim.
+///
+/// Congelato di proposito: è il riferimento contro cui misurare ogni futura
+/// riscrittura della lista. Se un pacchetto sparisce, il test qui sotto dice
+/// *quale*, senza aspettare la CI reale.
+const PRE_R6_REQUIRED: &[&str] = &[
+    "git",
+    "curl",
+    "wget",
+    "python3-pip",
+    "python3-dev",
+    "python3-venv",
+    "python3-wheel",
+    "python3-setuptools",
+    "build-essential",
+    "gettext-base",
+    "libfreetype6-dev",
+    "libxml2-dev",
+    "libzip-dev",
+    "libldap2-dev",
+    "libsasl2-dev",
+    "node-less",
+    "libjpeg-dev",
+    "zlib1g-dev",
+    "libpq-dev",
+    "libxslt1-dev",
+    "libtiff5-dev",
+    "libjpeg8-dev",
+    "libopenjp2-7-dev",
+    "liblcms2-dev",
+    "libwebp-dev",
+    "libharfbuzz-dev",
+    "libfribidi-dev",
+    "libxcb1-dev",
+    "libev-dev",
+    "libc-ares-dev",
+];
+
+/// I pacchetti pre-R6 **volutamente** non più obbligatori, con la ragione.
+/// Ogni voce qui è una decisione documentata in R6, non una perdita.
+const INTENTIONALLY_DEMOTED: &[&str] = &[
+    // Rimosso da alcune release Debian; serve solo a compilare asset .less, che
+    // Odoo moderno non usa. Vive in ODOO_OPTIONAL_DEPENDENCIES.
+    "node-less",
+];
+
+/// Tutti i nomi che compaiono nei gruppi obbligatori (bootstrap + deps).
+fn required_names() -> HashSet<String> {
+    BOOTSTRAP_PACKAGES
+        .iter()
+        .chain(ODOO_DEPENDENCIES.iter())
+        .flat_map(|group| group.iter())
+        .map(|name| name.to_string())
+        .collect()
+}
+
+#[test]
+fn the_refactor_did_not_lose_a_single_package() {
+    // La guardia che chiude la classe di bug, non l'istanza: ogni pacchetto che
+    // era obbligatorio prima di R6 deve essere ancora raggiungibile in un gruppo
+    // obbligatorio, oppure comparire fra i declassamenti espliciti.
+    let required = required_names();
+    let optional: HashSet<String> = ODOO_OPTIONAL_DEPENDENCIES
+        .iter()
+        .flat_map(|g| g.iter())
+        .map(|n| n.to_string())
+        .collect();
+
+    let mut lost = Vec::new();
+    for pkg in PRE_R6_REQUIRED {
+        let demoted = INTENTIONALLY_DEMOTED.contains(pkg);
+        if required.contains(*pkg) {
+            assert!(
+                !demoted,
+                "'{pkg}' è marcato come declassato ma è ancora obbligatorio: \
+                 aggiorna INTENTIONALLY_DEMOTED o la lista"
+            );
+            continue;
+        }
+        if demoted {
+            assert!(
+                optional.contains(*pkg),
+                "'{pkg}' è dichiarato declassato ma non è nemmeno fra gli opzionali"
+            );
+            continue;
+        }
+        lost.push(*pkg);
+    }
+
+    assert!(
+        lost.is_empty(),
+        "pacchetti persi rispetto a prima di R6: {lost:?}. \
+         Se la rimozione è voluta, dichiarala in INTENTIONALLY_DEMOTED con la ragione"
+    );
+}
+
+#[test]
+fn the_python3_core_set_is_complete() {
+    // pip/dev/venv/wheel/setuptools sono un insieme coeso: perderne uno rompe il
+    // venv o la compilazione delle wheel, e il sintomo compare step più avanti
+    // (create-virtualenv, o pip che non compila) dove è difficile ricondurlo alla
+    // lista dei pacchetti. `python3-venv` in particolare è quello senza cui
+    // `python3 -m venv` lascia una sandbox senza `bin/python` (A-R6-1).
+    let required = required_names();
+    for pkg in [
+        "python3-pip",
+        "python3-dev",
+        "python3-venv",
+        "python3-wheel",
+        "python3-setuptools",
+    ] {
+        assert!(
+            required.contains(pkg),
+            "'{pkg}' deve stare fra le dipendenze OBBLIGATORIE: {:?}",
+            required
+                .iter()
+                .filter(|p| p.starts_with("python3"))
+                .collect::<Vec<_>>()
+        );
+    }
+}
+
+#[test]
+fn python3_venv_is_never_optional() {
+    // Vincolo esplicito: senza venv non c'è Odoo. Deve essere impossibile
+    // declassarlo per sbaglio nella lista degli opzionali.
+    let optional: Vec<&str> = ODOO_OPTIONAL_DEPENDENCIES
+        .iter()
+        .flat_map(|g| g.iter())
+        .copied()
+        .collect();
+    assert!(
+        !optional.iter().any(|p| p.contains("venv")),
+        "nessun pacchetto venv può stare fra gli opzionali: {optional:?}"
+    );
+}
+
+#[test]
+fn python3_venv_reaches_apt_whether_or_not_it_is_already_installed() {
+    // Il test di lista dice "c'è nella lista". Questo dice "arriva ad apt", che è
+    // la proprietà che conta — e copre l'osservazione che ha fatto sospettare la
+    // perdita: sul runner `python3-venv` NON era nel delta perché era GIÀ
+    // installato, non perché mancasse. Entrambi i rami vanno verificati.
+    for already_present in [false, true] {
+        let cfg = MockConfig {
+            installed_packages: if already_present {
+                installed(&["python3-venv"])
+            } else {
+                HashSet::new()
+            },
+            ..Default::default()
+        };
+        let (mock, log) = MockSystemOps::new(cfg);
+        let mut step = AptPackagesStep::odoo_dependencies_with_ops(Box::new(mock));
+        let c = ctx(false);
+
+        step.snapshot(&c).expect("snapshot");
+        let snap = snapshot_of(&step);
+        let seen = snap.delta.contains(&"python3-venv".to_string())
+            || snap.already_installed.contains(&"python3-venv".to_string());
+        assert!(
+            seen,
+            "python3-venv deve risultare nello snapshot (delta o già installato), \
+             già presente = {already_present}: delta={:?}",
+            snap.delta
+        );
+
+        step.run(&c).expect("run");
+        let installed_line = ops_of(&log)
+            .into_iter()
+            .find_map(|o| match o {
+                Op::AptInstall(pkgs) => Some(pkgs),
+                _ => None,
+            })
+            .expect("il run deve invocare apt-get install");
+        assert!(
+            installed_line.contains(&"python3-venv".to_string()),
+            "python3-venv deve essere nella riga di apt anche quando è già presente \
+             (apt è idempotente), già presente = {already_present}: {installed_line:?}"
+        );
+    }
 }
 
 #[test]

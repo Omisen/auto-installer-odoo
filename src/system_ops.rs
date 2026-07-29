@@ -487,7 +487,12 @@ pub trait SystemOps {
     fn tarball_install(&self, user: &str, url: &str, target: &Path) -> Result<(), StepError>;
     /// `<venv>/bin/python3` esiste ed è eseguibile?
     fn venv_python_exists(&self, venv: &Path) -> bool;
-    /// `python3 -m venv` è disponibile sul sistema?
+    /// Il sistema è in grado di **creare** un virtualenv?
+    ///
+    /// Non è la stessa domanda di "il modulo `venv` esiste": su Debian/Ubuntu il
+    /// modulo sta nella stdlib e c'è sempre, mentre `ensurepip` — senza cui
+    /// `python3 -m venv` si ferma a metà — arriva col pacchetto `python3-venv`.
+    /// L'implementazione chiede di `ensurepip` proprio per questo (A-R6-1).
     fn python_venv_available(&self) -> bool;
     /// `sudo -u <user> -- python3 -m venv <venv>`.
     fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError>;
@@ -1284,8 +1289,18 @@ impl SystemOps for RealSystemOps {
     }
 
     fn python_venv_available(&self) -> bool {
+        // `import ensurepip`, NON `python3 -m venv --help`.
+        //
+        // Il modulo `venv` vive in `libpython3.x-stdlib`, che c'è sempre: il suo
+        // `--help` risponde 0 anche su un sistema dove creare un virtualenv è
+        // impossibile. Il pezzo che il pacchetto `python3-venv` porta davvero è
+        // `ensurepip` (verificato: `dpkg -S .../ensurepip/__init__.py` →
+        // `python3.12-venv`, mentre `.../venv/__init__.py` → `libpython3.12-stdlib`).
+        // Chiedere del modulo sbagliato rendeva questa precondizione un controllo
+        // che non poteva fallire, e il fallimento arrivava più tardi come errore
+        // grezzo di Python con una directory `sandbox` a metà (A-R6-1).
         Command::new("python3")
-            .args(["-m", "venv", "--help"])
+            .args(["-c", "import ensurepip"])
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
