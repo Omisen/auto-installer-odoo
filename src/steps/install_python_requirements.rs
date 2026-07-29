@@ -34,6 +34,37 @@
 //! isolato che ignora il Cython del venv. Soluzione: installare `Cython<3` nel
 //! venv, poi gevent con `--no-build-isolation` (usa il Cython locale), poi il
 //! resto dei requirements **escludendo** gevent (già installato).
+//!
+//! # Quale gevent: lo decide pip, non noi (A-R6-3)
+//!
+//! Il `requirements.txt` di Odoo 18 non pinna **una** versione di gevent: ne
+//! pinna quattro, una per versione di Python, e altrettante di greenlet —
+//! annotate da Odoo stesso con il nome della release Ubuntu:
+//!
+//! ```text
+//! gevent==21.8.0  ; … python_version == '3.10'              # (Jammy)
+//! gevent==24.2.1  ; … python_version >= '3.12' and < '3.13' # (Noble)
+//! greenlet==1.1.2 ; … python_version == '3.10'              # (Jammy)
+//! greenlet==3.0.3 ; … python_version >= '3.12' and < '3.13' # (Noble)
+//! ```
+//!
+//! La prima versione di questo step estraeva **la prima riga** che iniziasse con
+//! `gevent`, buttando via il marker d'ambiente. Su Ubuntu 22.04 è la riga giusta
+//! per coincidenza (Python 3.10 è la prima); su 24.04 sceglieva ancora la riga di
+//! Jammy, e gevent 21.8.0 **non compila** contro Python 3.12 —
+//! `longintrepr.h: No such file` (header reso privato in 3.12) e, per il greenlet
+//! che si tira dietro, `PyThreadState has no member 'recursion_limit'`. Nessun
+//! setuptools poteva salvarlo: era la versione sbagliata.
+//!
+//! Il marker veniva rimosso perché `--no-build-isolation` non lo tollera *su
+//! argv* — vero, ma è un problema che ci si creava da soli. Passando un **file**
+//! di requirements i marker restano, e a valutarli è pip: il pezzo di software
+//! che sa farlo per definizione. Noi smettiamo di scegliere.
+//!
+//! Effetto collaterale gradito: con la versione giusta, su Noble esiste la wheel
+//! precompilata (`gevent-24.2.1-cp312-manylinux…`), quindi non si compila affatto
+//! e `--no-build-isolation` resta inerte. Il workaround Cython<3 serve dove serve
+//! davvero — Jammy, dove per gevent 21.8.0 la wheel non esiste.
 
 use tracing::info;
 
@@ -136,23 +167,37 @@ impl Step for InstallPythonRequirements {
             &["install", "--quiet", "--cache-dir", &cache_dir, "Cython<3"],
         )?;
 
-        // 3) gevent con la spec da requirements, build senza isolamento.
-        let gevent_spec = extract_gevent_spec(&content);
-        self.ops.run_as_user(
-            user,
-            &pip,
-            &[
-                "install",
-                "--quiet",
-                "--cache-dir",
-                &cache_dir,
-                "--no-build-isolation",
-                &gevent_spec,
-            ],
-        )?;
+        // 3) gevent (+ greenlet) dalle righe di requirements **con i marker**,
+        //    build senza isolamento. Il file, non argv: così i marker
+        //    sopravvivono e a scegliere la versione è pip (A-R6-3).
+        let gevent_lines = gevent_stack_lines(&content);
+        if gevent_lines.trim().is_empty() {
+            info!("run: nessuna riga gevent nei requirements, salto il passo dedicato");
+        } else {
+            let tmp_gevent = self.tmp_dir.join("odoo-requirements-gevent.txt");
+            std::fs::write(&tmp_gevent, &gevent_lines)
+                .map_err(|e| StepError::io(&tmp_gevent, e))?;
+            let tmp_gevent_str = tmp_gevent.to_string_lossy().into_owned();
+            let outcome = self.ops.run_as_user(
+                user,
+                &pip,
+                &[
+                    "install",
+                    "--quiet",
+                    "--cache-dir",
+                    &cache_dir,
+                    "--no-build-isolation",
+                    "--requirement",
+                    &tmp_gevent_str,
+                ],
+            );
+            let _ = std::fs::remove_file(&tmp_gevent);
+            outcome?;
+        }
 
-        // 4) resto dei requirements, escludendo gevent (già installato).
-        let filtered = filter_out_gevent(&content);
+        // 4) resto dei requirements, escludendo ciò che il passo 3 ha già
+        //    installato (gevent e greenlet).
+        let filtered = filter_out_gevent_stack(&content);
         let tmp_req = self.tmp_dir.join("odoo-requirements-filtered.txt");
         std::fs::write(&tmp_req, filtered).map_err(|e| StepError::io(&tmp_req, e))?;
         let tmp_str = tmp_req.to_string_lossy().into_owned();
@@ -200,42 +245,59 @@ impl Step for InstallPythonRequirements {
     }
 }
 
-/// Estrae la spec di gevent da `requirements.txt` (es. `"gevent==21.12.0"`),
-/// rimuovendo marker d'ambiente (`;...`) e commenti (`#...`). Default `"gevent"`.
-pub fn extract_gevent_spec(requirements: &str) -> String {
-    for line in requirements.lines() {
-        let line = line.trim();
-        if !starts_with_gevent(line) {
-            continue;
-        }
-        let spec = line.split([';', '#']).next().unwrap_or(line).trim();
-        if !spec.is_empty() {
-            return spec.to_string();
-        }
+/// I pacchetti che il passo 3 installa a parte, senza isolamento del build.
+///
+/// `greenlet` sta qui insieme a `gevent` perché è la sua controparte C: Odoo lo
+/// pinna con gli stessi marker per versione di Python, e installare i due in
+/// momenti diversi significherebbe lasciare che il risolutore di pip scelga un
+/// greenlet qualunque compatibile con la *metadata* di gevent — che è come si è
+/// arrivati a compilare `greenlet 1.1.x` contro Python 3.12 (A-R6-3).
+const BUILD_ISOLATED_PACKAGES: [&str; 2] = ["gevent", "greenlet"];
+
+/// Le righe di `gevent`/`greenlet` **verbatim**, marker d'ambiente inclusi.
+///
+/// Verbatim è il punto: i marker (`; python_version >= '3.12'`) sono l'unica
+/// cosa che distingue la versione giusta da una che non compila, e valutarli non
+/// è compito nostro. Il risultato va scritto in un file e passato a pip con
+/// `--requirement`; pip tiene la riga applicabile e scarta le altre.
+///
+/// Stringa vuota se il `requirements.txt` non nomina nessuno dei due — nel qual
+/// caso il passo dedicato non ha ragione di esistere e viene saltato.
+pub fn gevent_stack_lines(requirements: &str) -> String {
+    let selected: Vec<&str> = requirements
+        .lines()
+        .filter(|line| is_build_isolated_requirement(line))
+        .collect();
+    if selected.is_empty() {
+        return String::new();
     }
-    "gevent".to_string()
+    let mut out = selected.join("\n");
+    out.push('\n');
+    out
 }
 
-/// Filtra via le righe che iniziano con `gevent` (già installato).
-pub fn filter_out_gevent(requirements: &str) -> String {
+/// Il complemento di [`gevent_stack_lines`]: tutto il resto dei requirements.
+pub fn filter_out_gevent_stack(requirements: &str) -> String {
     let mut out: String = requirements
         .lines()
-        .filter(|line| !starts_with_gevent(line))
+        .filter(|line| !is_build_isolated_requirement(line))
         .collect::<Vec<_>>()
         .join("\n");
     out.push('\n');
     out
 }
 
-/// `true` se la riga inizia con `gevent` seguito da un confine (operatore,
-/// marker, spazio o fine), case-insensitive.
-fn starts_with_gevent(line: &str) -> bool {
-    let lower = line.to_ascii_lowercase();
-    let Some(rest) = lower.strip_prefix("gevent") else {
-        return false;
-    };
-    rest.chars()
-        .next()
-        .map(|c| matches!(c, '>' | '=' | '<' | '!' | ';' | ' ' | '\t' | '#'))
-        .unwrap_or(true)
+/// `true` se la riga è un requisito di uno dei [`BUILD_ISOLATED_PACKAGES`]: il
+/// nome all'inizio, seguito da un confine (operatore, marker, spazio o fine),
+/// case-insensitive. Il confine evita di catturare `gevent-websocket`.
+fn is_build_isolated_requirement(line: &str) -> bool {
+    let lower = line.trim().to_ascii_lowercase();
+    BUILD_ISOLATED_PACKAGES.iter().any(|pkg| {
+        lower
+            .strip_prefix(pkg)
+            .and_then(|rest| rest.chars().next())
+            .map(|c| matches!(c, '>' | '=' | '<' | '!' | ';' | ' ' | '\t' | '#'))
+            // `strip_prefix` con `rest` vuoto = la riga è esattamente il nome.
+            .unwrap_or_else(|| lower == *pkg)
+    })
 }
