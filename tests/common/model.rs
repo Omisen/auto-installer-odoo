@@ -56,24 +56,42 @@ pub struct ModelState {
     /// Nomi di pacchetto che su questa "release" non esistono: apt non ha un
     /// candidato installabile (A5.1). Vuoto = tutto installabile.
     pub packages_without_candidate: HashSet<String>,
+    /// Nomi **virtuali**: nessun candidato reale, ma apt li risolve via
+    /// `Provides` (A5.1-bis).
+    pub virtual_packages: HashSet<String>,
+    /// L'indice apt parte **stantìo** (macchina su cui `apt-get update` non è
+    /// mai stato eseguito). Default `false` = macchina normale.
+    ///
+    /// È solo la *condizione iniziale*: lo stato dell'indice vive fuori da
+    /// `ModelState` (vedi [`SystemModel`]) proprio perché `apt_update` lo cambia
+    /// e il confronto inizio/fine non deve accorgersene — un indice aggiornato
+    /// non è un artefatto da annullare, è una cache.
+    pub apt_index_stale: bool,
 }
 
 /// Handle condiviso al modello.
 #[derive(Clone)]
 pub struct SystemModel {
     state: Arc<Mutex<ModelState>>,
+    /// Indice apt: condiviso fra gli handle (l'update di uno step si vede dagli
+    /// altri) ma **fuori** da `ModelState`, quindi invisibile al confronto
+    /// inizio/fine. Aggiornare l'indice non è un artefatto da annullare.
+    apt_index_populated: Arc<Mutex<bool>>,
 }
 
 impl SystemModel {
     pub fn new(state: ModelState) -> Self {
+        let apt_index_populated = Arc::new(Mutex::new(!state.apt_index_stale));
         SystemModel {
             state: Arc::new(Mutex::new(state)),
+            apt_index_populated,
         }
     }
     /// Un altro handle allo stesso stato (per un altro step).
     pub fn handle(&self) -> SystemModel {
         SystemModel {
             state: Arc::clone(&self.state),
+            apt_index_populated: Arc::clone(&self.apt_index_populated),
         }
     }
     /// Snapshot dello stato corrente (per il confronto inizio/fine).
@@ -140,13 +158,22 @@ impl SystemOps for SystemModel {
     fn dpkg_is_installed(&self, pkg: &str) -> bool {
         self.state.lock().expect("l").packages.contains(pkg)
     }
-    fn apt_has_candidate(&self, pkg: &str) -> bool {
-        !self
-            .state
-            .lock()
-            .expect("l")
-            .packages_without_candidate
-            .contains(pkg)
+    fn apt_has_real_candidate(&self, pkg: &str) -> bool {
+        if !self.apt_index_is_populated() {
+            return false;
+        }
+        let s = self.state.lock().expect("l");
+        !s.packages_without_candidate.contains(pkg) && !s.virtual_packages.contains(pkg)
+    }
+    fn apt_can_install(&self, pkg: &str) -> bool {
+        if !self.apt_index_is_populated() {
+            return false;
+        }
+        let s = self.state.lock().expect("l");
+        s.virtual_packages.contains(pkg) || !s.packages_without_candidate.contains(pkg)
+    }
+    fn apt_index_is_populated(&self) -> bool {
+        *self.apt_index_populated.lock().expect("l")
     }
     fn wkhtmltopdf_version(&self) -> Option<String> {
         self.state.lock().expect("l").wk_version.clone()
@@ -349,6 +376,10 @@ impl SystemOps for SystemModel {
         let entry = s.file_contents.entry(path.to_path_buf()).or_default();
         entry.push_str(line);
         entry.push('\n');
+        Ok(())
+    }
+    fn apt_update(&self) -> Result<(), StepError> {
+        *self.apt_index_populated.lock().expect("l") = true;
         Ok(())
     }
     fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {

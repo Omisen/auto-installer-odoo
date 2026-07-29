@@ -11,7 +11,9 @@ use odoo_installer::step::Step;
 use odoo_installer::steps::apt_packages::{
     AptDeltaSnapshot, AptPackagesStep, PackageSpec, UndoPolicy, ODOO_DEPENDENCIES,
 };
-use odoo_installer::system_ops::has_installable_candidate;
+use odoo_installer::system_ops::{has_installable_candidate, total_package_names};
+
+use common::model::{ModelState, SystemModel};
 
 fn ctx(aggressive: bool) -> Context {
     Context {
@@ -424,30 +426,315 @@ fn a_group_with_no_installable_alternative_fails_before_mutating() {
 }
 
 #[test]
-fn an_empty_apt_cache_is_diagnosed_as_such() {
-    // Caso ambiguo che vale la pena distinguere: se NESSUN nome della lista è
-    // disponibile, il problema non sono le rinomine ma le liste apt vuote (un
-    // container appena creato). Mandare l'utente a cercare pacchetti rinominati
-    // sarebbe una diagnosi sbagliata.
+fn an_unusable_apt_index_is_diagnosed_as_such_not_as_a_missing_package() {
+    // A5.1-bis, il cuore della diagnosi. Due condizioni si presentano identiche —
+    // "nessun nome ha un candidato" — ma hanno cause opposte: il pacchetto non
+    // esiste, oppure non possiamo *vedere* se esiste. Con l'indice inservibile la
+    // seconda è l'unica conclusione lecita, e il messaggio deve dirlo: in campo
+    // quello sbagliato ha mandato a cercare la rinomina di `libfreetype6-dev`,
+    // che era al suo posto.
     let cfg = MockConfig {
-        packages_without_candidate: installed(&["a", "b"]),
+        apt_index_populated: false, // apt-get update mai eseguito
         ..Default::default()
     };
     let (mock, _log) = MockSystemOps::new(cfg);
     let mut step = AptPackagesStep::custom(
         Box::new(mock),
-        "test-cache-vuota",
-        strings(&["a", "b"]),
+        "test-indice-inservibile",
+        strings(&["libfreetype6-dev", "libxml2-dev"]),
         UndoPolicy::PurgeDelta,
     );
 
     let message = step
         .snapshot(&ctx(false))
-        .expect_err("nessun pacchetto disponibile → errore")
+        .expect_err("indice inservibile → errore, ma con la diagnosi giusta")
         .to_string();
     assert!(
         message.contains("apt-get update"),
-        "con la cache apt vuota il messaggio deve indicare 'apt-get update': {message}"
+        "con l'indice inservibile il messaggio deve indicare 'apt-get update': {message}"
+    );
+    assert!(
+        !message.contains("non esistono su questa release"),
+        "e NON deve dichiarare assenti pacchetti che non ha potuto verificare: {message}"
+    );
+}
+
+// --- A5.1-bis: il falso positivo trovato in CI ------------------------------
+//
+// Ubuntu 24.04, job `native`: `snapshot fallito ... nessun pacchetto installabile
+// per il gruppo [libfreetype6-dev]`. Due cause concorrenti, entrambe reali:
+//   1. l'indice apt del runner non era aggiornato (nessuno aveva fatto update);
+//   2. su noble `libfreetype6-dev` è un nome puramente VIRTUALE — anche con
+//      l'indice fresco, `apt-cache policy` risponde `Candidate: (none)`, mentre
+//      `apt-get install` lo installa senza battere ciglio.
+// Il fix copre entrambe: `apt-get update` nel run di bootstrap, e un rilevamento
+// che chiede anche "sapresti installarlo?" prima di dichiararlo assente.
+
+#[test]
+fn bootstrap_updates_the_index_so_the_next_step_sees_the_candidates() {
+    // La regressione del bug, nella sua forma esatta. Sul runner le utility
+    // bootstrap erano GIÀ installate → delta vuoto: se l'update stesse dopo
+    // l'uscita anticipata di `run`, l'indice resterebbe stantìo e lo step dei
+    // deps boccerebbe pacchetti che esistono. Serve il modello condiviso: due
+    // step, un solo sistema.
+    let model = SystemModel::new(ModelState {
+        // Il runner GitHub ha già git/curl/wget/gettext-base.
+        packages: strings(&["git", "curl", "wget", "gettext-base"])
+            .into_iter()
+            .collect(),
+        apt_index_stale: true, // e nessuno ha mai fatto apt-get update
+        ..Default::default()
+    });
+    let c = ctx(false);
+
+    let mut bootstrap = AptPackagesStep::bootstrap_with_ops(model.boxed());
+    bootstrap
+        .snapshot(&c)
+        .expect("lo snapshot del bootstrap non deve morire su un indice stantìo");
+    assert!(
+        snapshot_of(&bootstrap).delta.is_empty(),
+        "scenario del bug: le utility bootstrap sono già presenti, delta vuoto"
+    );
+    bootstrap
+        .run(&c)
+        .expect("il run del bootstrap aggiorna l'indice anche con delta vuoto");
+
+    // Da qui in poi l'indice è fresco: lo step dei deps deve risolvere tutto.
+    let mut deps = AptPackagesStep::odoo_dependencies_with_ops(model.boxed());
+    deps.snapshot(&c)
+        .expect("dopo l'update i candidati ci sono: nessun falso positivo");
+    let snap = snapshot_of(&deps);
+    assert!(
+        snap.delta.contains(&"libfreetype6-dev".to_string()),
+        "il pacchetto che in campo veniva bocciato deve essere risolto: {:?}",
+        snap.delta
+    );
+}
+
+#[test]
+fn without_the_update_the_dependencies_step_refuses_instead_of_guessing() {
+    // Controprova del test sopra: è davvero l'update di bootstrap a salvare la
+    // situazione. Senza, lo step dei deps si ferma — e si ferma con la diagnosi
+    // sull'indice, non accusando i pacchetti.
+    let model = SystemModel::new(ModelState {
+        apt_index_stale: true,
+        ..Default::default()
+    });
+    let mut deps = AptPackagesStep::odoo_dependencies_with_ops(model.boxed());
+
+    let message = deps
+        .snapshot(&ctx(false))
+        .expect_err("senza indice lo step dei deps non può decidere")
+        .to_string();
+    assert!(
+        message.contains("apt-get update"),
+        "diagnosi sull'indice, non sui nomi: {message}"
+    );
+}
+
+#[test]
+fn the_index_update_lives_in_run_never_in_snapshot() {
+    // Vincolo C4, il più importante di questo hotfix: `apt-get update` è una
+    // mutazione (scrive in /var/lib/apt/lists) e lo snapshot non muta MAI.
+    let (mock, log) = MockSystemOps::new(MockConfig::default());
+    let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    assert!(
+        !ops_of(&log).contains(&Op::AptUpdate),
+        "lo snapshot deve restare NON mutante: nessun apt-get update. Trovato: {:?}",
+        ops_of(&log)
+    );
+
+    step.run(&c).expect("run");
+    let ops = ops_of(&log);
+    let update = ops
+        .iter()
+        .position(|o| matches!(o, Op::AptUpdate))
+        .expect("il run del bootstrap deve aggiornare l'indice");
+    let install = ops
+        .iter()
+        .position(|o| matches!(o, Op::AptInstall(_)))
+        .expect("e poi installare");
+    assert!(
+        update < install,
+        "l'update va prima dell'install, non dopo: {ops:?}"
+    );
+}
+
+#[test]
+fn only_bootstrap_updates_the_index() {
+    // L'update serve una volta, dal primo step apt. Ripeterlo a ogni step
+    // sarebbe solo tempo perso su un'operazione di rete.
+    let (mock, log) = MockSystemOps::new(MockConfig::default());
+    let mut deps = AptPackagesStep::odoo_dependencies_with_ops(Box::new(mock));
+    let c = ctx(false);
+
+    deps.snapshot(&c).expect("snapshot");
+    deps.run(&c).expect("run");
+    assert!(
+        !ops_of(&log).contains(&Op::AptUpdate),
+        "install-system-dependencies non rifà l'update: {:?}",
+        ops_of(&log)
+    );
+}
+
+#[test]
+fn dry_run_does_not_touch_the_apt_index() {
+    let (mock, log) = MockSystemOps::new(MockConfig::default());
+    let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
+    let c = Context {
+        dry_run: true,
+        ..Default::default()
+    };
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    assert!(
+        ops_of(&log).is_empty(),
+        "dry-run: nessun apt-get update, nessuna install. Trovato: {:?}",
+        ops_of(&log)
+    );
+}
+
+#[test]
+fn a_third_party_repo_that_fails_does_not_block_the_install() {
+    // `apt-get update` esce non-zero anche per UN SOLO repository irraggiungibile,
+    // mentre gli indici ufficiali sono arrivati benissimo. Bloccare lì
+    // renderebbe l'installer ostaggio di un PPA rotto che non ci riguarda.
+    let cfg = MockConfig {
+        apt_update_fails: true,
+        apt_index_populated: true, // ma l'indice è comunque utilizzabile
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c)
+        .expect("un update parziale non deve fermare l'installazione");
+    assert!(
+        ops_of(&log).iter().any(|o| matches!(o, Op::AptInstall(_))),
+        "e l'install deve avvenire comunque: {:?}",
+        ops_of(&log)
+    );
+}
+
+#[test]
+fn an_update_that_leaves_no_index_at_all_is_a_hard_error() {
+    // L'altra faccia: se dopo l'update non c'è NESSUN indice (rete assente),
+    // proseguire significherebbe far decidere gli step a valle alla cieca.
+    let cfg = MockConfig {
+        apt_update_fails: true,
+        apt_index_populated: false,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    let message = step
+        .run(&c)
+        .expect_err("senza indice l'installazione non può procedere")
+        .to_string();
+    assert!(
+        message.contains("apt-get update") && message.contains("indice"),
+        "il messaggio deve spiegare cosa manca: {message}"
+    );
+    assert!(
+        !ops_of(&log).iter().any(|o| matches!(o, Op::AptInstall(_))),
+        "e non si installa nulla dopo l'errore: {:?}",
+        ops_of(&log)
+    );
+}
+
+#[test]
+fn a_real_name_beats_a_virtual_one_because_only_the_real_one_is_purgeable() {
+    // Su noble `libfreetype6-dev` è virtuale: `apt-get install` lo accetta, ma
+    // dpkg non lo conosce e `apt-get purge libfreetype6-dev` esce 0 rimuovendo
+    // ZERO pacchetti. Un delta con quel nome mentirebbe: il rollback direbbe di
+    // aver purgato e `libfreetype-dev` resterebbe installato.
+    let cfg = MockConfig {
+        virtual_packages: installed(&["libfreetype6-dev"]),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = step_with_group(mock, &["libfreetype6-dev", "libfreetype-dev"]);
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    assert_eq!(
+        snapshot_of(&step).delta,
+        strings(&["libfreetype-dev"]),
+        "vince il nome REALE, non quello virtuale"
+    );
+
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+    assert!(
+        ops_of(&log).contains(&Op::AptPurge(strings(&["libfreetype-dev"]))),
+        "e l'undo purga qualcosa che dpkg conosce davvero: {:?}",
+        ops_of(&log)
+    );
+}
+
+#[test]
+fn a_virtual_only_group_is_installed_rather_than_refused() {
+    // Nessun nome reale nel gruppo, ma apt sa installarlo: rifiutare sarebbe il
+    // falso positivo di campo. Si procede (con un warning nei log), perché
+    // un'installazione bloccata è un danno certo e il residuo un rischio.
+    let cfg = MockConfig {
+        virtual_packages: installed(&["libfreetype6-dev"]),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = step_with_group(mock, &["libfreetype6-dev"]);
+    let c = ctx(false);
+
+    step.snapshot(&c)
+        .expect("un nome virtuale installabile non è un pacchetto assente");
+    assert_eq!(snapshot_of(&step).delta, strings(&["libfreetype6-dev"]));
+
+    step.run(&c).expect("run");
+    assert!(
+        ops_of(&log).contains(&Op::AptInstall(strings(&["libfreetype6-dev"]))),
+        "apt riceve il nome virtuale, che sa risolvere: {:?}",
+        ops_of(&log)
+    );
+}
+
+#[test]
+fn the_canonical_list_declares_the_real_name_for_the_virtual_one() {
+    // Guardia sulla lista: `libfreetype6-dev` da solo, su noble, porterebbe un
+    // nome non purgabile nel delta. Serve il nome reale come alternativa.
+    let group = ODOO_DEPENDENCIES
+        .iter()
+        .find(|g| g.contains(&"libfreetype6-dev"))
+        .expect("'libfreetype6-dev' deve restare in lista");
+    assert!(
+        group.contains(&"libfreetype-dev"),
+        "il nome reale deve essere fra le alternative, trovato {group:?}"
+    );
+}
+
+#[test]
+fn apt_cache_stats_output_is_parsed_as_apt_prints_it() {
+    // Output reale di `apt-cache stats` (Ubuntu 24.04) e il caso che conta: un
+    // indice vuoto, che è ciò che distingue "non lo so" da "non esiste".
+    let populated =
+        "Total package names: 163333 (4573 k)\nTotal package structures: 148622 (6539 k)\n";
+    assert_eq!(total_package_names(populated), Some(163333));
+    assert_eq!(
+        total_package_names("Total package names: 0 (0 B)\n"),
+        Some(0)
+    );
+    assert_eq!(
+        total_package_names("E: Impossibile aprire il file di lock\n"),
+        None,
+        "output senza la riga → non lo sappiamo, che NON è zero"
     );
 }
 

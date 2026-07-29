@@ -39,6 +39,7 @@ pub enum Op {
     },
     Mkdir(PathBuf),
     Rmdir(PathBuf),
+    AptUpdate,
     AptInstall(Vec<String>),
     AptPurge(Vec<String>),
     AptAutoremove,
@@ -128,6 +129,15 @@ pub struct MockConfig {
     /// che su questa release non esiste (`libtiff5-dev` su Debian 12, A5.1).
     /// Vuoto per default → ogni nome è installabile.
     pub packages_without_candidate: HashSet<String>,
+    /// Pacchetti **virtuali**: nessun candidato reale (`apt-cache policy` dice
+    /// `(none)`) ma `apt-get install` li sa risolvere via `Provides`. Modella
+    /// `libfreetype6-dev` su Ubuntu 24.04 (A5.1-bis).
+    pub virtual_packages: HashSet<String>,
+    /// L'indice apt è popolato? `false` modella una macchina su cui
+    /// `apt-get update` non è mai stato eseguito: **nessun** nome ha un
+    /// candidato finché l'update non gira. È lo stato che ha prodotto il falso
+    /// positivo A5.1-bis.
+    pub apt_index_populated: bool,
     /// Versione riportata da `wkhtmltopdf_version` (None = non installato).
     pub wk_version: Option<String>,
     /// Stato iniziale del servizio (postgresql/odoo): enabled/active.
@@ -185,6 +195,10 @@ pub struct MockConfig {
     pub dpkg_configure_fails: bool,
     /// `apt-get install -y <deb>` fallisce (errore vero, non deps mancanti).
     pub apt_install_deb_fails: bool,
+    /// `apt-get update` esce non-zero. Da solo modella il repository di terze
+    /// parti irraggiungibile (l'indice resta popolato); insieme a
+    /// `apt_index_populated: false` modella il fallimento vero, senza rete.
+    pub apt_update_fails: bool,
 }
 
 impl Default for MockConfig {
@@ -196,6 +210,8 @@ impl Default for MockConfig {
             dir_empty: true,
             installed_packages: HashSet::new(),
             packages_without_candidate: HashSet::new(),
+            virtual_packages: HashSet::new(),
+            apt_index_populated: true,
             wk_version: None,
             service_enabled: false,
             service_active: false,
@@ -223,6 +239,7 @@ impl Default for MockConfig {
             fix_broken_fails: false,
             dpkg_configure_fails: false,
             apt_install_deb_fails: false,
+            apt_update_fails: false,
         }
     }
 }
@@ -245,6 +262,10 @@ pub struct MockSystemOps {
     // Stato di dpkg: parte da cfg.dpkg_broken, lo rimettono a posto
     // apt_fix_broken / dpkg_configure_all / apt_install_deb_file.
     dpkg_broken: Cell<bool>,
+    // Indice apt: parte da cfg.apt_index_populated e lo accende `apt_update`.
+    // È ciò che rende il mock capace di riprodurre la sequenza reale
+    // "bootstrap aggiorna → i deps trovano i candidati" (A5.1-bis).
+    index_populated: Cell<bool>,
 }
 
 /// L'errore che apt restituisce quando `dpkg` è in stato inconsistente —
@@ -272,6 +293,7 @@ impl MockSystemOps {
         let enabled = Cell::new(cfg.service_enabled);
         let db_initialized = Cell::new(cfg.db_initialized);
         let dpkg_broken = Cell::new(cfg.dpkg_broken);
+        let index_populated = Cell::new(cfg.apt_index_populated);
         MockSystemOps {
             log,
             cfg,
@@ -280,6 +302,7 @@ impl MockSystemOps {
             git_clone_calls: Cell::new(0),
             db_initialized,
             dpkg_broken,
+            index_populated,
         }
     }
 
@@ -375,8 +398,38 @@ impl SystemOps for MockSystemOps {
     fn dpkg_is_installed(&self, pkg: &str) -> bool {
         self.cfg.installed_packages.contains(pkg)
     }
-    fn apt_has_candidate(&self, pkg: &str) -> bool {
+    fn apt_update(&self) -> Result<(), StepError> {
+        self.record(Op::AptUpdate);
+        if self.cfg.apt_update_fails {
+            return Err(StepError::CommandFailed {
+                command: "apt-get update".to_string(),
+                status: "100".to_string(),
+                stderr: "E: Some index files failed to download (simulato)".to_string(),
+            });
+        }
+        // L'update popola l'indice: da qui in poi le interrogazioni rispondono.
+        self.index_populated.set(true);
+        Ok(())
+    }
+    fn apt_has_real_candidate(&self, pkg: &str) -> bool {
+        // Senza indice nessuna interrogazione risponde: è il caso che in campo
+        // ha prodotto il falso positivo su un pacchetto standard.
+        if !self.index_populated.get() {
+            return false;
+        }
         !self.cfg.packages_without_candidate.contains(pkg)
+            && !self.cfg.virtual_packages.contains(pkg)
+    }
+    fn apt_can_install(&self, pkg: &str) -> bool {
+        if !self.index_populated.get() {
+            return false;
+        }
+        // I virtuali sono installabili anche senza candidato reale.
+        self.cfg.virtual_packages.contains(pkg)
+            || !self.cfg.packages_without_candidate.contains(pkg)
+    }
+    fn apt_index_is_populated(&self) -> bool {
+        self.index_populated.get()
     }
     fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {
         self.record(Op::AptInstall(pkgs.iter().map(|s| s.to_string()).collect()));

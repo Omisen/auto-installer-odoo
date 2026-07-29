@@ -83,6 +83,19 @@ jobs:
       # PostgreSQL sono preinstallati), il che rende questo job anche un test
       # dello scenario "macchina cliente non vergine": il delta apt sarà
       # piccolo e le risorse preesistenti dovranno sopravvivere al rollback.
+      # L'indice apt dei runner GitHub è stantìo: l'immagine viene costruita
+      # giorni prima e nessuno esegue `apt-get update` all'avvio. Dalla R6-hotfix
+      # l'installer lo aggiorna da sé (nel run di bootstrap-prerequisites), quindi
+      # questo passo è **ridondante per il prodotto** — resta per due ragioni:
+      # rende esplicito lo stato dell'ambiente di test, e sposta il costo di rete
+      # fuori dal cronometro dell'installazione.
+      #
+      # Nota: NON deve mascherare il fix. La copertura del caso "indice stantìo"
+      # vive nei test su mock (`bootstrap_updates_the_index_so_the_next_step_sees_
+      # the_candidates`), che non dipendono da come è tarato il runner.
+      - name: Indice apt aggiornato (ambiente di test esplicito)
+        run: sudo apt-get update
+
       - name: Stato iniziale della macchina
         run: |
           . /etc/os-release && echo "OS: $PRETTY_NAME"
@@ -183,6 +196,10 @@ jobs:
       # checkout), jq (le asserzioni leggono il file di stato) e il pacchetto
       # systemd, che fornisce il binario `systemctl` richiesto da
       # check_commands. Il binario c'è, l'init no: è il limite dichiarato sopra.
+      # L'`apt-get update` qui c'era già dal primo giorno (il container è nudo,
+      # senza indice non si installa nemmeno `sudo`) — ed è la ragione per cui i
+      # job Debian passavano mentre Ubuntu falliva: A5.1-bis si vedeva solo dove
+      # nessuno aggiornava l'indice prima dell'installer.
       - name: Prerequisiti del container
         run: |
           set -eux

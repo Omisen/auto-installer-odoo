@@ -337,8 +337,16 @@ pub trait SystemOps {
     // --- apt / dpkg (Fase 4) -------------------------------------------------
     /// `true` se il pacchetto risulta `install ok installed` a `dpkg-query`.
     fn dpkg_is_installed(&self, pkg: &str) -> bool;
-    /// `true` se apt ha un **candidato installabile** per questo nome su questo
-    /// sistema (`apt-cache policy` → `Candidate:` diverso da `(none)`).
+    /// `apt-get update`: riscarica gli indici dei repository.
+    ///
+    /// È una mutazione (tocca `/var/lib/apt/lists`), quindi vive **solo** dentro
+    /// un `run` — mai in uno `snapshot`, che non muta per invariante (C4).
+    /// Non ha undo: un indice aggiornato non cambia nulla di ciò che è
+    /// installato, è la cache di ciò che *si potrebbe* installare. Come un
+    /// `git fetch`.
+    fn apt_update(&self) -> Result<(), StepError>;
+    /// `true` se apt ha un candidato **reale** per questo nome
+    /// (`apt-cache policy` → `Candidate:` diverso da `(none)`).
     ///
     /// È una query, non una mutazione: serve a scegliere *quale* nome installare
     /// quando lo stesso pacchetto ne cambia uno tra release
@@ -346,10 +354,34 @@ pub trait SystemOps {
     /// di scoprire che un nome non esiste più è l'`apt-get install` che fallisce
     /// sull'intero gruppo, cioè a mutazione già iniziata.
     ///
+    /// "Reale" è la parola importante: un nome puramente **virtuale** (che
+    /// esiste solo come `Provides` di un altro pacchetto) risponde `false` pur
+    /// essendo installabile. Vedi [`SystemOps::apt_can_install`] per l'altra
+    /// metà della domanda, e la nota sul perché la distinzione conti.
+    ///
     /// Risponde `false` anche quando `apt-cache` non è eseguibile o le liste apt
-    /// sono vuote: chi chiama distingue i due casi solo dal fatto che *nessun*
-    /// nome risulti disponibile, e lo dice nel messaggio d'errore.
-    fn apt_has_candidate(&self, pkg: &str) -> bool;
+    /// sono vuote: quel caso si distingue con
+    /// [`SystemOps::apt_index_is_populated`], non tirando a indovinare.
+    fn apt_has_real_candidate(&self, pkg: &str) -> bool;
+    /// `true` se apt **saprebbe installare** questo nome
+    /// (`apt-get install -s`: simulazione, non muta nulla).
+    ///
+    /// Risponde `true` anche per un nome puramente virtuale con un solo
+    /// fornitore — dove `apt-cache policy` dice `Candidate: (none)` ma
+    /// `apt-get install` funziona benissimo. È la domanda che conta per decidere
+    /// se un gruppo di alternative è soddisfacibile, ma è **più lenta** (fa
+    /// girare il risolutore, ~0.4s per pacchetto): si usa come ripiego quando la
+    /// via veloce ha detto no.
+    fn apt_can_install(&self, pkg: &str) -> bool;
+    /// `true` se l'indice apt contiene almeno un pacchetto
+    /// (`apt-cache stats` → `Total package names`).
+    ///
+    /// Serve a non confondere **cecità** con **assenza**: su una macchina dove
+    /// `apt-get update` non è mai stato eseguito ogni interrogazione risponde
+    /// "non disponibile", e senza questa domanda un indice vuoto diventerebbe la
+    /// diagnosi "questo pacchetto non esiste su questa release" — che è
+    /// esattamente il falso positivo A5.1-bis.
+    fn apt_index_is_populated(&self) -> bool;
     /// `apt-get install -y --no-install-recommends <pkgs>` (idempotente).
     fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError>;
     /// `apt-get purge -y <pkgs>`.
@@ -636,6 +668,22 @@ pub fn has_installable_candidate(policy_output: &str) -> bool {
     })
 }
 
+/// Numero di pacchetti noti ad apt, letto da `apt-cache stats`.
+///
+/// `None` se la riga non c'è o non è un numero — cioè se non lo sappiamo, che è
+/// diverso da "zero". Pura per essere verificabile sull'output reale.
+pub fn total_package_names(stats_output: &str) -> Option<u64> {
+    for line in stats_output.lines() {
+        let Some(value) = line.trim().strip_prefix("Total package names:") else {
+            continue;
+        };
+        // La riga è `Total package names: 163333 (4573 k)`: il primo token è il
+        // conteggio, il resto è la dimensione in memoria.
+        return value.split_whitespace().next()?.parse().ok();
+    }
+    None
+}
+
 /// Esegue un comando catturandone lo stdout (per query psql/systemctl).
 fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
     capture_command_with_env(program, args, &[])
@@ -843,12 +891,33 @@ impl SystemOps for RealSystemOps {
         }
     }
 
-    fn apt_has_candidate(&self, pkg: &str) -> bool {
+    fn apt_update(&self) -> Result<(), StepError> {
+        run_apt(&["update"])
+    }
+
+    fn apt_has_real_candidate(&self, pkg: &str) -> bool {
         match capture_command_with_env("apt-cache", &["policy", "--", pkg], &[("LC_ALL", "C")]) {
             Ok(out) => has_installable_candidate(&out),
             // apt-cache assente o in errore: nessuna informazione → nessun
-            // candidato. Il chiamante fallisce prima di mutare, che è il verso
-            // giusto in cui sbagliare.
+            // candidato reale. Chi chiama non conclude nulla da solo: incrocia
+            // con `apt_can_install` e `apt_index_is_populated`.
+            Err(_) => false,
+        }
+    }
+
+    fn apt_can_install(&self, pkg: &str) -> bool {
+        // `-s` = simulate: apt calcola la soluzione e non tocca il sistema.
+        // Esce 100 con "E: Unable to locate package" se il nome non esiste, 0 se
+        // è installabile — anche quando è virtuale con un solo fornitore.
+        run_apt(&["install", "-s", "-y", "--no-install-recommends", "--", pkg]).is_ok()
+    }
+
+    fn apt_index_is_populated(&self) -> bool {
+        match capture_command_with_env("apt-cache", &["stats"], &[("LC_ALL", "C")]) {
+            Ok(out) => total_package_names(&out).is_some_and(|n| n > 0),
+            // Non riusciamo a chiederlo: trattiamolo come indice non
+            // interrogabile. Porta a un messaggio prudente ("aggiorna
+            // l'indice"), non a un verdetto di assenza.
             Err(_) => false,
         }
     }

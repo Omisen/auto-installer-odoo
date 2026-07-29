@@ -27,16 +27,20 @@
 //! Perciò la lista non è di nomi ma di [`PackageSpec`]: un gruppo di
 //! **alternative in ordine di preferenza**. Lo `snapshot` risolve ogni gruppo a
 //! un nome concreto interrogando apt
-//! ([`SystemOps::apt_has_candidate`](crate::system_ops::SystemOps::apt_has_candidate)),
-//! e da lì in poi tutto il resto della macchina — install, delta, purge,
-//! persistenza — lavora su nomi già risolti e non sa nemmeno che esistessero
-//! alternative.
+//! ([`SystemOps::apt_has_real_candidate`], con il ripiego di
+//! [`SystemOps::apt_can_install`] per i nomi virtuali), e da lì in poi tutto il
+//! resto della macchina — install, delta, purge, persistenza — lavora su nomi
+//! già risolti e non sa nemmeno che esistessero alternative.
 //!
-//! Le due regole della risoluzione, in quest'ordine:
+//! Le tre regole della risoluzione, in quest'ordine (il perché sta sul metodo
+//! `resolve`):
 //! 1. se una delle alternative è **già installata**, vince quella. Un cliente
 //!    che ha `libtiff-dev` non si vede installare anche `libtiff5-dev`, e il
 //!    delta resta onesto (niente da purgare: non l'abbiamo messo noi).
-//! 2. altrimenti vince la prima con un candidato installabile.
+//! 2. altrimenti vince la prima con un candidato **reale**.
+//! 3. altrimenti la prima che apt sa installare comunque, cioè un nome
+//!    **virtuale** — ripiego, perché un nome virtuale non è purgabile
+//!    (A5.1-bis).
 //!
 //! Se nessuna alternativa è disponibile lo step **fallisce nello snapshot**,
 //! prima di mutare, dicendo quale gruppo è vuoto. È l'opposto di degradare in
@@ -74,7 +78,11 @@ pub const ODOO_DEPENDENCIES: &[&[&str]] = &[
     &["python3-setuptools"],
     &["build-essential"],
     &["gettext-base"],
-    &["libfreetype6-dev"],
+    // Su Ubuntu 24.04 `libfreetype6-dev` è diventato un nome puramente virtuale
+    // (`Provides` di `libfreetype-dev`): installabile ma non purgabile. Il nome
+    // reale come alternativa fa sì che il delta contenga qualcosa che l'undo
+    // possa davvero rimuovere (A5.1-bis).
+    &["libfreetype6-dev", "libfreetype-dev"],
     &["libxml2-dev"],
     &["libzip-dev"],
     &["libldap2-dev"],
@@ -195,28 +203,34 @@ pub fn odoo_dependency_specs() -> Vec<PackageSpec> {
 enum ResolvedPackage {
     /// Una delle alternative è già installata: non entra nel delta.
     AlreadyInstalled(String),
-    /// Nessuna installata, ma questa ha un candidato: entra nel delta.
+    /// Nessuna installata, ma questa ha un candidato **reale**: entra nel delta.
     Installable(String),
+    /// Nessuna installata e nessun candidato reale, ma apt sa installare questo
+    /// nome perché è **virtuale** (esiste solo come `Provides` di un altro
+    /// pacchetto). Entra nel delta, con una riserva — vedi
+    /// [`AptPackagesStep::resolve`].
+    Virtual(String),
 }
 
 /// Costruisce l'errore dei gruppi senza alcuna alternativa installabile.
 ///
-/// `nothing_resolved` distingue due diagnosi molto diverse che si presentano
-/// identiche: se *nessun* gruppo si è risolto, il problema non sono i nomi dei
-/// pacchetti ma le liste apt (un container appena creato le ha vuote, e ogni
-/// interrogazione risponde "non disponibile"). Dirlo qui evita di mandare
-/// qualcuno a cercare rinomine di pacchetti che non c'entrano.
-fn unavailable_packages_error(unavailable: &[PackageSpec], nothing_resolved: bool) -> StepError {
+/// Il messaggio dipende da **quanto sappiamo**, non da quanti gruppi sono
+/// caduti. Se l'indice apt non è interrogabile non abbiamo alcuna prova di
+/// assenza, e dire "questo pacchetto non esiste su questa release" sarebbe una
+/// diagnosi inventata: è il falso positivo A5.1-bis, che in campo ha mandato a
+/// cercare la rinomina di un pacchetto che stava benissimo al suo posto.
+fn unavailable_packages_error(unavailable: &[PackageSpec], index_populated: bool) -> StepError {
     let groups: Vec<String> = unavailable
         .iter()
         .map(|spec| format!("[{}]", spec.alternatives().join(" | ")))
         .collect();
-    let cause = if nothing_resolved {
-        "Nessun pacchetto dell'intera lista risulta disponibile: le liste apt sono probabilmente \
-         vuote o irraggiungibili. Esegui 'apt-get update' e riprova"
-    } else {
+    let cause = if index_populated {
         "I nomi elencati non esistono su questa release: aggiungi il nome corretto come \
          alternativa in ODOO_DEPENDENCIES (A5.1)"
+    } else {
+        "L'indice apt non è interrogabile (liste vuote o illeggibili), quindi NON è detto che i \
+         pacchetti manchino davvero: esegui 'apt-get update' e riprova. Se l'update non produce \
+         un indice valido, il problema è la rete o sources.list"
     };
     StepError::Precondition(format!(
         "nessun pacchetto installabile per {} {}. {cause}",
@@ -259,6 +273,11 @@ pub struct AptPackagesStep {
     /// passa ad apt. Vive solo in memoria — un rollback da disco non chiama
     /// `run`, e il purge gli guarda il delta persistito.
     resolved: Vec<String>,
+    /// Se `true`, il `run` fa `apt-get update` prima di installare. Acceso solo
+    /// per `bootstrap-prerequisites`, il primo step apt della sequenza: da lì
+    /// l'indice fresco vale per tutti gli step a valle, e ripeterlo sarebbe solo
+    /// tempo perso.
+    refresh_index: bool,
 }
 
 impl AptPackagesStep {
@@ -268,12 +287,15 @@ impl AptPackagesStep {
     }
 
     pub fn bootstrap_with_ops(ops: Box<dyn SystemOps>) -> Self {
-        Self::with_specs(
+        let mut step = Self::with_specs(
             ops,
             "bootstrap-prerequisites",
             specs(BOOTSTRAP_PACKAGES),
             UndoPolicy::KeepUnlessAggressive,
-        )
+        );
+        // È il primo step apt: è qui che l'indice va aggiornato, per tutti.
+        step.refresh_index = true;
+        step
     }
 
     /// Dipendenze di sistema di Odoo (undo purga il delta, e solo il delta).
@@ -316,16 +338,39 @@ impl AptPackagesStep {
             policy,
             snap: AptDeltaSnapshot::default(),
             resolved: Vec::new(),
+            refresh_index: false,
         }
     }
 
     /// Sceglie, dentro un gruppo, il nome da usare su **questo** sistema.
     ///
-    /// L'ordine delle due domande non è casuale: prima "ne hai già uno?", poi
-    /// "quale posso installare?". Invertirle installerebbe `libtiff5-dev` a un
-    /// cliente che ha già `libtiff-dev`, gonfiando il delta con un pacchetto
-    /// che il rollback poi purgherebbe — corretto ma inutile, e sul sistema di
-    /// qualcun altro l'inutile è un costo.
+    /// Tre domande, in quest'ordine preciso.
+    ///
+    /// 1. **"Ne hai già uno?"** Se sì vince quello. Chiederlo per primo evita di
+    ///    installare `libtiff5-dev` a un cliente che ha già `libtiff-dev`,
+    ///    gonfiando il delta con un pacchetto che il rollback poi purgherebbe —
+    ///    corretto ma inutile, e sul sistema di qualcun altro l'inutile è un
+    ///    costo.
+    /// 2. **"Quale ha un candidato reale?"** La via veloce (`apt-cache policy`),
+    ///    che copre tutti i casi normali.
+    /// 3. **"Quale sapresti installare comunque?"** La via lenta
+    ///    (`apt-get install -s`), che copre i nomi **virtuali**.
+    ///
+    /// # Perché un nome reale batte un nome virtuale (A5.1-bis)
+    ///
+    /// Un nome puramente virtuale è installabile ma **non è purgabile**, e
+    /// questo rompe il pattern delta in silenzio. Su Ubuntu 24.04
+    /// `libfreetype6-dev` esiste solo come `Provides` di `libfreetype-dev`:
+    /// `apt-get install libfreetype6-dev` funziona, ma dopo
+    /// `dpkg-query` non conosce quel nome (`not-installed`) e
+    /// `apt-get purge libfreetype6-dev` esce **0 rimuovendo zero pacchetti**.
+    /// Il delta conterrebbe un nome che l'undo non può reclamare: il rollback
+    /// direbbe di aver purgato e `libfreetype-dev` resterebbe installato. Un
+    /// residuo invisibile, cioè la cosa peggiore.
+    ///
+    /// Perciò il livello 3 è un **ripiego**, non una scorciatoia: si prende un
+    /// nome virtuale solo se nessuna alternativa del gruppo ne ha uno reale, e
+    /// lo si dice nei log.
     fn resolve(&self, spec: &PackageSpec) -> Option<ResolvedPackage> {
         if let Some(installed) = spec
             .alternatives()
@@ -334,10 +379,60 @@ impl AptPackagesStep {
         {
             return Some(ResolvedPackage::AlreadyInstalled(installed.clone()));
         }
+        if let Some(real) = spec
+            .alternatives()
+            .iter()
+            .find(|name| self.ops.apt_has_real_candidate(name))
+        {
+            return Some(ResolvedPackage::Installable(real.clone()));
+        }
         spec.alternatives()
             .iter()
-            .find(|name| self.ops.apt_has_candidate(name))
-            .map(|name| ResolvedPackage::Installable(name.clone()))
+            .find(|name| self.ops.apt_can_install(name))
+            .map(|name| ResolvedPackage::Virtual(name.clone()))
+    }
+
+    /// Aggiorna l'indice apt prima di installare (A5.1-bis).
+    ///
+    /// Vive nel `run` di `bootstrap-prerequisites`, che è il primo step apt della
+    /// sequenza: quando `install-system-dependencies` fa il proprio `snapshot` e
+    /// interroga i candidati, l'indice è già fresco. Metterlo nello `snapshot`
+    /// sarebbe più comodo e sarebbe **sbagliato**: uno snapshot non muta, mai
+    /// (C4). `apt-get update` scrive in `/var/lib/apt/lists`.
+    ///
+    /// # Tolleranza ai repository irraggiungibili
+    ///
+    /// `apt-get update` esce non-zero anche quando **un solo** repository di
+    /// terze parti non risponde, mentre gli indici ufficiali sono stati
+    /// scaricati benissimo. Bloccare lì significherebbe rendere l'installer
+    /// ostaggio di un PPA rotto che non ci riguarda. Quindi: se l'update
+    /// fallisce ma l'indice risulta comunque popolato, si prosegue con un
+    /// `warn!`; si fallisce solo se dopo il tentativo non c'è **nessun** indice
+    /// da interrogare, che è la condizione in cui gli step successivi non
+    /// potrebbero decidere nulla.
+    fn refresh_apt_index(&self, ctx: &Context) -> Result<(), StepError> {
+        if ctx.dry_run {
+            info!(step = self.name, "run (dry-run): apt-get update");
+            return Ok(());
+        }
+        let Err(e) = self.ops.apt_update() else {
+            info!(step = self.name, "run: indice apt aggiornato");
+            return Ok(());
+        };
+        if self.ops.apt_index_is_populated() {
+            warn!(
+                step = self.name,
+                error = %e,
+                "run: apt-get update ha segnalato errori (repository irraggiungibile?), \
+                 ma l'indice apt è popolato: proseguo"
+            );
+            return Ok(());
+        }
+        Err(StepError::Precondition(format!(
+            "apt-get update è fallito e l'indice apt resta vuoto: senza indice non è possibile \
+             stabilire quali pacchetti siano installabili. Verifica rete e sources.list. \
+             Errore originale: {e}"
+        )))
     }
 
     /// Purga il delta persistito (best-effort). Usa il delta dello snapshot,
@@ -398,6 +493,18 @@ impl Step for AptPackagesStep {
                     resolved.push(name.clone());
                     delta.push(name);
                 }
+                Some(ResolvedPackage::Virtual(name)) => {
+                    warn!(
+                        step = self.name,
+                        pacchetto = %name,
+                        gruppo = ?spec.alternatives(),
+                        "snapshot: nessun candidato reale nel gruppo, uso un nome VIRTUALE. \
+                         È installabile, ma il purge dell'undo potrebbe non reclamarlo: \
+                         considera di aggiungere il nome reale come alternativa"
+                    );
+                    resolved.push(name.clone());
+                    delta.push(name);
+                }
                 None if spec.is_required() => unavailable.push(spec.clone()),
                 None => warn!(
                     step = self.name,
@@ -407,11 +514,48 @@ impl Step for AptPackagesStep {
             }
         }
 
+        // Prima di dichiarare assente un gruppo: sappiamo abbastanza per dirlo?
+        // Con un indice apt non interrogabile la risposta è no — ogni nome
+        // risulta "non disponibile" e il verdetto sarebbe cecità travestita da
+        // diagnosi. È il falso positivo A5.1-bis.
+        //
+        // Chi è questo step decide cosa fare di quella cecità:
+        // - `bootstrap-prerequisites` (`refresh_index`) è lo step che **sistemerà
+        //   l'indice lui stesso**, nel proprio `run`, e il suo snapshot gira per
+        //   forza prima. Fermarlo qui renderebbe impossibile installare su una
+        //   macchina appena creata — cioè proprio il caso che l'update esiste per
+        //   risolvere. Si prosegue coi nomi preferiti (che nella lista bootstrap
+        //   non hanno alternative: non c'è nulla da scegliere) e si lascia
+        //   parlare apt nel `run`.
+        // - ogni altro step gira **dopo** l'update: se lì l'indice è ancora
+        //   inservibile è un problema vero, e va detto con il messaggio giusto.
         if !unavailable.is_empty() {
-            return Err(unavailable_packages_error(
-                &unavailable,
-                resolved.is_empty(),
-            ));
+            let index_populated = self.ops.apt_index_is_populated();
+            if index_populated || !self.refresh_index {
+                return Err(unavailable_packages_error(&unavailable, index_populated));
+            }
+            for spec in unavailable.drain(..) {
+                if spec.is_required() {
+                    warn!(
+                        step = self.name,
+                        gruppo = ?spec.alternatives(),
+                        "snapshot: indice apt non interrogabile, non posso verificare questo gruppo. \
+                         Uso il nome preferito e lascio decidere ad apt nel run (dopo apt-get update)"
+                    );
+                    let preferred = spec.preferred().to_string();
+                    resolved.push(preferred.clone());
+                    delta.push(preferred);
+                } else {
+                    // Un opzionale non verificabile si salta: aggiungerlo alla
+                    // riga di apt farebbe fallire l'install dell'INTERO gruppo
+                    // se poi non esistesse, che è il contrario di "opzionale".
+                    warn!(
+                        step = self.name,
+                        gruppo = ?spec.alternatives(),
+                        "snapshot: indice apt non interrogabile e gruppo OPZIONALE, proseguo senza"
+                    );
+                }
+            }
         }
 
         info!(
@@ -430,6 +574,15 @@ impl Step for AptPackagesStep {
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
+        // PRIMA di ogni uscita anticipata: l'indice apt serve agli step a valle,
+        // non a noi. Su un runner GitHub le utility bootstrap sono già installate
+        // → delta vuoto → con il `return` prima dell'update,
+        // `install-system-dependencies` interrogherebbe un indice stantìo e
+        // boccerebbe pacchetti che esistono (A5.1-bis, il bug di campo).
+        if self.refresh_index {
+            self.refresh_apt_index(ctx)?;
+        }
+
         if self.snap.delta.is_empty() {
             info!(
                 step = self.name,
