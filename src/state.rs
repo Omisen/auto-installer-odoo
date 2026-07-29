@@ -180,6 +180,18 @@ pub struct InstallState {
     /// rischiare di droppare il database sbagliato.
     #[serde(default)]
     pub config: Option<InstallConfig>,
+    /// `true` quando l'installazione è arrivata in fondo.
+    ///
+    /// Distingue le due cose che il file di stato può descrivere, e che
+    /// richiedono messaggi (non comportamenti) diversi: **un'installazione
+    /// funzionante da disinstallare** oppure **i residui di una run
+    /// interrotta**. Vedi [`crate::rollback::install_status`].
+    ///
+    /// Dedurlo dal numero di step non basta: la sequenza canonica cambia fra
+    /// versioni, e uno stato completo scritto da una versione con meno step
+    /// verrebbe riletto come "interrotto". Il flag lo dice e basta.
+    #[serde(default)]
+    pub finished: bool,
 }
 
 impl InstallState {
@@ -238,10 +250,25 @@ impl InstallState {
 
     /// Rimuove il file di stato. Idempotente: un file già assente non è errore.
     ///
-    /// Chiamata da `main` a fine installazione riuscita e dal comando
-    /// `rollback` a pulizia completata: in entrambi i casi lo stato ha esaurito
-    /// il suo scopo, e lasciarlo sul disco farebbe credere al `rollback`
-    /// successivo che ci sia ancora qualcosa da annullare.
+    /// Chiamata **solo** dal comando `rollback` a pulizia completata: lì lo
+    /// stato ha davvero esaurito il suo scopo, perché ciò che descriveva non
+    /// esiste più.
+    ///
+    /// # Perché NON a fine installazione riuscita (A-R5-1)
+    ///
+    /// Fino a R4 `main` chiamava `clear` a successo avvenuto, per non lasciare
+    /// un file "stantìo". Il ragionamento veniva da quando l'unico consumatore
+    /// ipotizzato era un *resume*, per il quale uno stato completo sarebbe
+    /// stato effettivamente spazzatura. Ma il consumatore che è stato
+    /// implementato è il *rollback*, e per lui uno stato completo non è
+    /// spazzatura: è il **manifesto di disinstallazione**, l'unica traccia di
+    /// quali artefatti quell'installazione ha creato e quali ha trovato già lì.
+    /// Cancellandolo si rendeva impossibile proprio il caso d'uso principale del
+    /// comando — `odoo-installer rollback` su un'istanza funzionante rispondeva
+    /// "nessuna installazione da annullare".
+    ///
+    /// Ora a fine successo lo stato viene **marcato** ([`InstallState::finished`])
+    /// e conservato.
     pub fn clear(path: &Path) -> Result<(), StepError> {
         match fs::remove_file(path) {
             Ok(()) => Ok(()),

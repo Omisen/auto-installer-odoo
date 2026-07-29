@@ -103,10 +103,10 @@ fn chain_from_factory(model: &SystemModel, names: &[&str]) -> Vec<Box<dyn Step>>
 
 /// Esegue un'installazione che **riesce** e lascia il file di stato sul disco.
 ///
-/// Il motore persiste dopo ogni step; è `main` a rimuovere lo stato a successo
-/// avvenuto. Non chiamandolo, il file resta esattamente come lo troverebbe un
-/// `odoo-installer rollback` — che sia dopo un'installazione completata o dopo
-/// un'interruzione.
+/// Non chiama `mark_finished`: il file resta quindi come lo troverebbe un
+/// `odoo-installer rollback` dopo un'**interruzione**. Il caso "installazione
+/// conclusa e poi disinstallata" ha il suo test dedicato
+/// (`a_successful_installation_leaves_a_state_that_can_still_be_rolled_back`).
 fn install(model: &SystemModel, names: &[&str], ctx: &Context) {
     let mut steps = chain_from_factory(model, names);
     Installer::new()
@@ -389,6 +389,7 @@ fn an_unknown_step_name_is_reported_instead_of_aborting_the_rollback() {
             },
         ],
         config: Some(config_fixture()),
+        finished: false,
     };
 
     let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
@@ -424,6 +425,7 @@ fn a_corrupt_snapshot_skips_the_undo_and_is_reported() {
             snapshot: serde_json::json!({ "non": "un PreState" }),
         }],
         config: Some(config_fixture()),
+        finished: false,
     };
     let c = config_fixture().to_context(false, false, PathBuf::from("/dev/null"));
     let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
@@ -468,6 +470,7 @@ fn a_preexisting_database_is_not_dropped_by_a_rollback_from_disk() {
             },
         ],
         config: Some(config_fixture()),
+        finished: false,
     };
     let c = config_fixture().to_context(false, true, PathBuf::from("/dev/null"));
     let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
@@ -572,12 +575,77 @@ fn install_status_recognises_a_complete_installation() {
             })
             .collect(),
         config: Some(config_fixture()),
+        // Deliberatamente `false`: qui si prova il **ripiego** sul conteggio,
+        // che copre gli stati scritti prima che il flag esistesse.
+        finished: false,
     };
     assert_eq!(
         rollback::install_status(&state),
         InstallStatus::Complete { steps: names.len() },
         "tutti gli step canonici presenti = installazione da disinstallare, \
          non residui da ripulire"
+    );
+}
+
+// --- A-R5-1: il manifesto di disinstallazione sopravvive al successo --------
+
+#[test]
+fn a_successful_installation_leaves_a_state_that_can_still_be_rolled_back() {
+    // Il caso d'uso principale del comando: disinstallare un'istanza
+    // **funzionante**. Fino a R5 era impossibile — `main` cancellava lo stato a
+    // successo avvenuto, e `odoo-installer rollback` rispondeva "nessuna
+    // installazione da annullare" su un sistema pieno di artefatti nostri.
+    //
+    // Qui l'installazione arriva in fondo, viene marcata conclusa, e il rollback
+    // riparte da quel file: il sistema deve tornare vergine.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state_path = dir.path().join("state.json");
+    let model = SystemModel::new(fresh_state());
+    let initial = model.snapshot();
+
+    let c = ctx(state_path.clone());
+    let mut steps_vec = chain_from_factory(&model, CHAIN);
+    let mut installer = Installer::new();
+    installer
+        .execute(&mut steps_vec, &c)
+        .expect("la catena deve arrivare in fondo");
+    installer
+        .mark_finished(&c)
+        .expect("marcatura di fine installazione");
+
+    // Lo stato è ancora lì, e si dichiara completo.
+    let state = InstallState::load(&state_path).expect("lo stato deve sopravvivere al successo");
+    assert!(state.finished, "l'installazione riuscita marca lo stato");
+    assert_eq!(
+        rollback::install_status(&state),
+        InstallStatus::Complete { steps: CHAIN.len() },
+        "il flag ha la precedenza sul conteggio: questa catena è più corta di \
+         quella canonica ma l'installazione è comunque completa"
+    );
+
+    // E il rollback lo consuma: disinstallazione di un'istanza funzionante.
+    let rollback_model = SystemModel::new(model.snapshot());
+    let (_, report) = rollback_from_disk(&rollback_model, &state_path, false, true);
+    assert!(report.is_clean(), "residui: {:?}", report.residue());
+    assert_eq!(
+        rollback_model.snapshot(),
+        initial,
+        "un'installazione completata deve poter essere disinstallata per intero"
+    );
+}
+
+#[test]
+fn marking_finished_writes_nothing_in_dry_run() {
+    // Una preview non lascia artefatti, nemmeno il manifesto.
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state_path = dir.path().join("state.json");
+    let mut c = ctx(state_path.clone());
+    c.dry_run = true;
+
+    Installer::new().mark_finished(&c).expect("mark_finished");
+    assert!(
+        !state_path.exists(),
+        "in dry-run non deve essere scritto alcun file di stato"
     );
 }
 

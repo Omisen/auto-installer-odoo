@@ -112,6 +112,23 @@ impl Installer {
         Ok(())
     }
 
+    /// Marca l'installazione come conclusa e persiste lo stato.
+    ///
+    /// Da chiamare a esecuzione riuscita. Il file che resta sul disco è il
+    /// **manifesto di disinstallazione**: dice quali artefatti abbiamo creato e
+    /// quali abbiamo trovato già presenti, ed è ciò che permette a
+    /// `odoo-installer rollback` di rimuovere l'istanza in un secondo momento
+    /// senza toccare nulla del cliente (A-R5-1).
+    ///
+    /// In `dry_run` non scrive nulla: una preview non lascia artefatti.
+    pub fn mark_finished(&mut self, ctx: &Context) -> Result<(), StepError> {
+        self.state.finished = true;
+        if ctx.dry_run {
+            return Ok(());
+        }
+        self.state.save(&ctx.state_path)
+    }
+
     /// Rollback senza progresso (delega a [`NoopReporter`]).
     pub fn rollback(&self, steps: &[Box<dyn Step>], completed: &[usize], ctx: &Context) {
         self.rollback_with_reporter(steps, completed, ctx, &NoopReporter);

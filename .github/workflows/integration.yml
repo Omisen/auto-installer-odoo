@@ -1,0 +1,228 @@
+# =============================================================================
+# .github/workflows/integration.yml
+# Test di INTEGRAZIONE REALE: l'installer viene eseguito davvero (R5, audit B4).
+#
+# Perché esiste, in una riga: i mock provano la *logica*, non l'*integrazione
+# col sistema*. La prima prova reale su Multipass ha trovato due bug ALTA in un
+# solo giro — A-RT-1 (`dpkg -i` non risolve le dipendenze: l'installazione
+# falliva su OGNI sistema minimale) e A-RT-2 (il purge del rollback falliva su
+# dpkg rotto, lasciando 24 pacchetti) — con 148 test mock verdi. Questo workflow
+# automatizza quella prova.
+#
+# Rapporto con gli altri workflow:
+#   test.yml     → CI di qualità (fmt/clippy/test/build su mock, senza root),
+#                  su OGNI push/PR. È il gate rapido e resta INVARIATO: il test
+#                  reale non deve rallentare il ciclo di sviluppo.
+#   release.yml  → binari su tag. Invariato.
+#   questo       → lento (decine di minuti) e privilegiato. Su richiesta e sui
+#                  soli rami principali.
+#
+# DISTRUTTIVO: crea utenti, installa pacchetti, tocca PostgreSQL e systemd.
+# Gira solo su runner e container effimeri, che GitHub distrugge a fine job.
+# =============================================================================
+
+name: Integration (real install)
+
+on:
+  # Lancio manuale dalla UI: la via normale per validare un cambiamento prima
+  # di taggare una release.
+  workflow_dispatch:
+  # Solo i rami principali. NON su ogni feature branch: sono 4 job da decine di
+  # minuti ciascuno, e il feedback rapido è compito di test.yml.
+  push:
+    branches: [main, dev]
+
+permissions:
+  contents: read
+
+# Un'integrazione alla volta per ref: sono job lunghi e i runner sono effimeri,
+# quindi conviene cancellare quella superata invece di accodarla.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Il test completo: installazione reale, verifica che Odoo risponda, poi
+  # `odoo-installer rollback` e verifica che il sistema sia tornato pulito.
+  #
+  # Gira sui runner GitHub **nativi**, non in container, per una ragione
+  # precisa: sono VM vere con systemd come PID 1. In un container Docker
+  # standard `systemctl` non funziona, e senza systemd non si può provare né
+  # l'avvio del servizio né che il rollback lo rimuova — cioè metà del ciclo di
+  # vita. I runner sono effimeri: sporcarli è esattamente ciò che vogliamo.
+  # ---------------------------------------------------------------------------
+  native:
+    name: install + rollback (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60 # `pip install` compila gevent: è la parte lenta
+    strategy:
+      fail-fast: false # un OS che fallisce non deve nascondere gli altri
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      # Contesto utile a leggere un fallimento: cosa c'era già sulla macchina.
+      # I runner GitHub NON sono minimali (git, curl, build-essential e
+      # PostgreSQL sono preinstallati), il che rende questo job anche un test
+      # dello scenario "macchina cliente non vergine": il delta apt sarà
+      # piccolo e le risorse preesistenti dovranno sopravvivere al rollback.
+      - name: Stato iniziale della macchina
+        run: |
+          . /etc/os-release && echo "OS: $PRETTY_NAME"
+          echo "PostgreSQL preinstallato: $(dpkg -s postgresql >/dev/null 2>&1 && echo sì || echo no)"
+          echo "Servizio postgresql: $(systemctl is-active postgresql || true)"
+          echo "Porta 8069: $(ss -lnt 'sport = :8069' | tail -n +2 | wc -l) listener"
+
+      - name: Installazione reale + rollback verificato
+        env:
+          MODE: full
+        run: bash scripts/ci/integration-test.sh
+
+      # Il log su file, se c'è. Attenzione: alla **prima** installazione su una
+      # macchina pulita non c'è — `logging::init` apre /opt/odoo/.installer.log
+      # prima che PrepareOptRoot crei /opt/odoo, quindi degrada al solo stderr
+      # (A-R5-2, vedi audit). Lo stderr finisce comunque nel log del job, che
+      # resta la fonte completa; questo artefatto è un di più.
+      - name: Log dell'installer, se presente
+        if: always()
+        run: sudo cp /opt/odoo/.installer.log "installer-${{ matrix.os }}.log" || true
+
+      - name: Carica il log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-${{ matrix.os }}
+          path: installer-*.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Binario statico per i job in container: musl gira su qualunque distro,
+  # quindi lo stesso eseguibile va bene su Debian 11 e 12 senza compilare Rust
+  # dentro ogni container. È anche il binario che release.yml consiglia ai
+  # clienti: provarlo qui significa provare l'artefatto che spediamo davvero.
+  # ---------------------------------------------------------------------------
+  build-musl:
+    name: build statico (musl)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - uses: Swatinem/rust-cache@v2
+      - name: Build release (musl, statico)
+        run: cargo build --release --target x86_64-unknown-linux-musl --locked
+      - uses: actions/upload-artifact@v4
+        with:
+          name: odoo-installer-musl
+          path: target/x86_64-unknown-linux-musl/release/odoo-installer
+          if-no-files-found: error
+
+  # ---------------------------------------------------------------------------
+  # Sonda di portabilità su Debian, in container.
+  #
+  # Limite dichiarato: in un container Docker standard systemd non è PID 1,
+  # quindi `systemctl` esiste come binario ma non opera. L'installazione si
+  # ferma per costruzione a `setup-postgres`, che è il primo step a chiedere un
+  # servizio. Non è un test del ciclo di vita completo — quello è il job
+  # `native` — ma copre esattamente la superficie che i runner Ubuntu non
+  # possono coprire e che l'audit segnala come fragile:
+  #
+  #   A5.1  nomi dei pacchetti apt su una distro diversa (`libtiff5-dev`,
+  #         `node-less` e compagnia cambiano fra release);
+  #   A5.2  mappatura codename → pin wkhtmltopdf, con `bookworm` e `bullseye`
+  #         che hanno pin diretti (i runner Ubuntu esercitano solo `jammy` e il
+  #         fallback `noble → jammy`);
+  #   A-RT-1/2  su immagini davvero minimali, dove le dipendenze di sistema del
+  #         `.deb` non ci sono e dpkg può restare rotto.
+  #
+  # E la parte che conta di più: comunque vada, il sistema deve restare pulito.
+  # ---------------------------------------------------------------------------
+  container:
+    name: sonda portabilità (${{ matrix.image }})
+    needs: build-musl
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["debian:12", "debian:11"]
+    container:
+      image: ${{ matrix.image }}
+      # L'installer va lanciato via sudo da un utente normale (check_sudo_user):
+      # gli step girano da root e creano l'utente `tester` più sotto.
+      options: --user root
+
+    steps:
+      # Il container è nudo: servono sudo (l'installer lo esige), git (per
+      # checkout), jq (le asserzioni leggono il file di stato) e il pacchetto
+      # systemd, che fornisce il binario `systemctl` richiesto da
+      # check_commands. Il binario c'è, l'init no: è il limite dichiarato sopra.
+      - name: Prerequisiti del container
+        run: |
+          set -eux
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            sudo git ca-certificates curl jq systemd procps
+
+      - name: Utente non-root con sudo (come su una macchina vera)
+        run: |
+          set -eux
+          useradd -m -s /bin/bash tester
+          echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester
+          chmod 440 /etc/sudoers.d/tester
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: odoo-installer-musl
+          path: bin
+
+      - name: Prepara il binario e i permessi
+        run: |
+          set -eux
+          chmod +x bin/odoo-installer
+          bin/odoo-installer --help >/dev/null
+          # Il workspace è di root: l'installer gira come `tester` via sudo e
+          # deve poter leggere config e script.
+          chown -R tester:tester "$GITHUB_WORKSPACE"
+
+      - name: Sonda di portabilità (installazione reale + pulizia)
+        run: |
+          su tester -c "cd '$GITHUB_WORKSPACE' && MODE=probe BIN=./bin/odoo-installer bash scripts/ci/integration-test.sh"
+
+      - name: Log dell'installer, se presente
+        if: always()
+        run: |
+          tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
+          cp /opt/odoo/.installer.log "installer-$tag.log" 2>/dev/null || true
+
+      - name: Carica il log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-${{ strategy.job-index }}
+          path: installer-*.log
+          if-no-files-found: ignore

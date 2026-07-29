@@ -1,5 +1,9 @@
 # Environment / secrets
 configs/*.env
+# Eccezione: la config della CI di integrazione non è un segreto — è un preset
+# usa-e-getta per container effimeri, e deve stare nel repo perché il workflow
+# possa usarlo (vedi .github/workflows/integration.yml).
+!configs/ci.env
 temp/*.txt
 docs/*.md
 

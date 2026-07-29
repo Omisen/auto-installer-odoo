@@ -115,11 +115,17 @@ pub enum InstallStatus {
     Interrupted { done: usize, total: usize },
 }
 
-/// Classifica lo stato persistito confrontandolo con la sequenza canonica.
+/// Classifica lo stato persistito.
+///
+/// La fonte primaria è il flag [`InstallState::finished`], scritto
+/// dall'installazione quando arriva in fondo. Il confronto con la sequenza
+/// canonica resta come ripiego per gli stati scritti prima che il flag
+/// esistesse: è un'euristica (la sequenza cambia fra versioni), quindi non ha
+/// la precedenza.
 pub fn install_status(state: &InstallState) -> InstallStatus {
     let total = steps::canonical_step_names().len();
     let done = state.completed.len();
-    if done >= total {
+    if state.finished || done >= total {
         InstallStatus::Complete { steps: done }
     } else {
         InstallStatus::Interrupted { done, total }

@@ -254,8 +254,13 @@ best-effort, e non fa finta del contrario.
 | `--aggressive-rollback` | purga anche PostgreSQL/Nginx installati da noi e le utility comuni | disattivo |
 | `--yes` / `-y` | salta la conferma (obbligatorio senza terminale) | disattivo |
 
-Lo stato viene rimosso solo a rollback completo: se qualcosa non è stato ripulito il file resta, e il
-comando può essere rieseguito (gli `undo` sono idempotenti).
+A installazione riuscita il file di stato **resta sul disco**: è il *manifesto di disinstallazione*,
+l'unica traccia di quali artefatti quella installazione ha creato e quali ha trovato già presenti.
+Senza, `odoo-installer rollback` non avrebbe modo di distinguere le due cose e non potrebbe rimuovere
+l'istanza. Non va cancellato a mano.
+
+Viene rimosso solo a rollback completo: se qualcosa non è stato ripulito il file resta, e il comando
+può essere rieseguito (gli `undo` sono idempotenti).
 
 > **Nota sui file di stato precedenti a questa versione.** Lo stato ora porta con sé anche la
 > configurazione dell'installazione (utente, database, directory — mai le password), perché è ciò che
@@ -372,6 +377,30 @@ cargo fmt --all -- --check
 I test coprono ogni step (round-trip snapshot→run→undo), i coordinamenti fra step, e il **rollback
 end-to-end** (fallimento iniettato → stato finale == iniziale; risorse preesistenti intatte). La CI
 (`.github/workflows/test.yml`) esegue gli stessi controlli ad ogni push/PR.
+
+### Test di integrazione reale
+
+I test qui sopra girano su un **mock** del sistema: provano la logica, non l'integrazione con apt,
+PostgreSQL e systemd veri. Quella la copre `.github/workflows/integration.yml`, che installa Odoo
+davvero su runner e container effimeri e poi verifica che `odoo-installer rollback` riporti il sistema
+pulito — pacchetto per pacchetto, confrontando il delta apt registrato nel file di stato.
+
+Gira su richiesta (`workflow_dispatch`) e sui rami `main`/`dev`, non su ogni push: sono decine di
+minuti per job. Copertura e limiti:
+
+| Ambiente | Come | Cosa copre |
+|---|---|---|
+| Ubuntu 22.04 / 24.04 | runner nativi (VM con systemd) | ciclo di vita completo: installazione, servizio attivo, Odoo che risponde, disinstallazione, sistema pulito |
+| Debian 12 / 11 | container | portabilità: nomi dei pacchetti apt, pin wkhtmltopdf per codename, e la pulizia. **Non** l'avvio del servizio: in un container systemd non è PID 1 |
+
+Lo script (`scripts/ci/integration-test.sh`) è eseguibile anche a mano su una VM usa-e-getta:
+
+```bash
+MODE=full bash scripts/ci/integration-test.sh
+```
+
+> **È distruttivo**: crea utenti, installa pacchetti, tocca PostgreSQL e systemd. Solo su macchine
+> sacrificabili.
 
 ---
 

@@ -130,19 +130,23 @@ fn run_install(cli: &Cli) -> Result<()> {
             anyhow!(e)
         })?;
 
-    // Installazione riuscita: lo stato descrive un'installazione *in corso*,
-    // quindi va rimosso. Altrimenti resterebbe un file stantìo che il comando
-    // `rollback` scambierebbe per un'installazione da annullare. Fallire qui non
-    // annulla un'installazione riuscita: si segnala e si prosegue.
+    // Installazione riuscita: lo stato viene marcato come concluso e **resta sul
+    // disco**. Non è un file stantìo — è il manifesto di disinstallazione: dice
+    // cosa abbiamo creato e cosa abbiamo trovato già presente, e senza di esso
+    // `odoo-installer rollback` non avrebbe modo di rimuovere questa istanza in
+    // un secondo momento (A-R5-1). Fallire qui non annulla un'installazione
+    // riuscita: si segnala e si prosegue, con il costo dichiarato.
     // In dry-run non si arriva qui (return anticipato) e nulla è stato scritto.
-    if let Err(e) = InstallState::clear(&ctx.state_path) {
+    if let Err(e) = installer.mark_finished(&ctx) {
         tracing::warn!(
             path = %ctx.state_path.display(),
             error = %e,
-            "rimozione del file di stato fallita: rimuovilo a mano per evitare confusione"
+            "impossibile marcare lo stato come concluso: l'installazione è comunque \
+             riuscita, ma `odoo-installer rollback` potrebbe non poterla disinstallare"
         );
     }
 
+    print_install_summary(&ctx);
     tracing::info!("preparazione completata");
     Ok(())
 }
@@ -192,6 +196,51 @@ fn print_configuration(ctx: &Context) {
     if ctx.dry_run {
         println!("  Modalità      : dry-run (nessuna mutazione)");
     }
+    println!("================================================================");
+    println!();
+}
+
+/// Riepilogo di fine installazione: cosa è stato creato e come toccarlo (B2).
+///
+/// Chiude la metà mancante di B2: il rollback aveva già il suo report da R4,
+/// l'installazione riuscita finiva invece con una riga di log. Qui l'utente
+/// trova, in un posto solo, dove sono le cose e i due comandi che gli servono.
+fn print_install_summary(ctx: &Context) {
+    let unit = format!("odoo{}", ctx.odoo_version_short);
+    println!();
+    println!("================================================================");
+    println!("Installazione completata.");
+    println!();
+    println!(
+        "  Odoo {}          http://localhost:{}",
+        ctx.odoo_version, ctx.port
+    );
+    println!("  Servizio         {unit} (systemd)");
+    println!("  Utente di sistema {}", ctx.odoo_user);
+    println!("  Database         {} (ruolo {})", ctx.db_name, ctx.db_user);
+    println!("  Sorgenti         {}", ctx.install_dir.display());
+    println!(
+        "  Config           {}/odoo{}.conf",
+        ctx.install_dir.display(),
+        ctx.odoo_version_short
+    );
+    if let Some(logfile) = &ctx.odoo_logfile {
+        println!("  Log Odoo         {}", logfile.display());
+    } else {
+        println!("  Log Odoo         journal (journalctl -u {unit})");
+    }
+    if ctx.with_nginx {
+        println!("  Nginx            reverse proxy attivo su :80");
+    }
+    println!();
+    println!("  Gestione         odoo start|stop|restart|status   (riapri la shell)");
+    println!("  Disinstallazione sudo odoo-installer rollback");
+    println!();
+    println!(
+        "Lo stato in {} è il manifesto di disinstallazione: dice cosa\n\
+         è stato creato e cosa era già presente. Non rimuoverlo, serve al rollback.",
+        ctx.state_path.display()
+    );
     println!("================================================================");
     println!();
 }
