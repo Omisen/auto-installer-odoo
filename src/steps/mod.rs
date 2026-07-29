@@ -71,6 +71,74 @@ pub fn purge_with_dpkg_recovery(ops: &dyn SystemOps, step: &str, pkgs: &[&str]) 
     }
 }
 
+/// Il primo livello **inesistente** scendendo da `home` verso `target`: la
+/// radice di ciò che un `mkdir -p` creerà, e quindi l'unica cosa che un undo può
+/// rimuovere senza toccare roba di altri.
+///
+/// `None` se `target` non è sotto `home` o se esiste già tutto.
+///
+/// Vive qui perché la usano due step — il filestore
+/// ([`setup_data_dir`]) e la cache ([`setup_cache_dir`]) — e sono entrambi casi
+/// dello stesso problema: creare una sottodirectory dentro la home dell'utente
+/// `odoo`, che è `Preexisting` e non va svuotata, sapendo *esattamente* quanto
+/// di quell'albero abbiamo aggiunto noi.
+pub fn highest_missing_level(
+    ops: &dyn SystemOps,
+    home: &std::path::Path,
+    target: &std::path::Path,
+) -> Option<std::path::PathBuf> {
+    let relative = target.strip_prefix(home).ok()?;
+    let mut current = home.to_path_buf();
+    for component in relative.components() {
+        current = current.join(component);
+        if !ops.path_exists(&current) {
+            return Some(current);
+        }
+    }
+    None
+}
+
+/// Rimuove ricorsivamente `created_root`, con la **rete sul perimetro**.
+///
+/// L'undo di questi step cancella un albero a partire da un path che arriva
+/// **dal disco** (lo snapshot persistito). Uno stato corrotto — o scritto da
+/// un'altra installazione — non deve poter diventare un `rm -rf` altrove:
+/// il target dev'essere un discendente *stretto* di `home`, altrimenti si logga
+/// e non si tocca nulla. Meglio un residuo da rimuovere a mano.
+///
+/// Best-effort come ogni undo (invariante 3): un fallimento è un `warn!`, non un
+/// errore che ferma la pulizia degli altri step.
+pub fn remove_created_root(
+    ops: &dyn SystemOps,
+    step: &str,
+    home: &std::path::Path,
+    target: &std::path::Path,
+    dry_run: bool,
+) {
+    if !target.starts_with(home) || target == home {
+        warn!(
+            step,
+            target = %target.display(),
+            home = %home.display(),
+            "undo: path fuori dal perimetro della home, non rimuovo nulla"
+        );
+        return;
+    }
+    if dry_run {
+        info!(step, target = %target.display(), "undo (dry-run): rm -rf");
+        return;
+    }
+    match ops.remove_dir_all(target) {
+        Ok(()) => info!(step, target = %target.display(), "undo: rimosso"),
+        Err(e) => warn!(
+            step,
+            target = %target.display(),
+            error = %e,
+            "undo: rm -rf fallito, proseguo (best-effort)"
+        ),
+    }
+}
+
 /// Fabbrica di [`SystemOps`]: ogni step ne riceve una propria istanza.
 ///
 /// È un `Fn` e non un singolo `Box<dyn SystemOps>` perché gli step possiedono le
@@ -92,6 +160,11 @@ pub fn build_steps() -> Vec<Box<dyn Step>> {
         Box::new(prepare_opt_root::PrepareOptRoot::new()),
         Box::new(create_odoo_user::CreateOdooUser::new()),
         Box::new(setup_log_dir::SetupLogDir::new()),
+        // Presto di proposito: lo snapshot deve vedere la home PRIMA che
+        // qualunque programma lanciato come `odoo` ci scriva una cache. Essere
+        // presto qui significa essere tardi nell'undo, che è dove serve
+        // (A-R5-3).
+        Box::new(setup_cache_dir::SetupCacheDir::new()),
         Box::new(apt_packages::AptPackagesStep::bootstrap()),
         Box::new(apt_packages::AptPackagesStep::odoo_dependencies()),
         Box::new(install_wkhtmltopdf::InstallWkhtmltopdf::new()),
@@ -143,6 +216,7 @@ pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step
         "prepare-opt-root" => Box::new(prepare_opt_root::PrepareOptRoot::new()),
         "create-odoo-user" => Box::new(create_odoo_user::CreateOdooUser::with_ops(make_ops())),
         "setup-log-dir" => Box::new(setup_log_dir::SetupLogDir::with_ops(make_ops())),
+        "setup-cache-dir" => Box::new(setup_cache_dir::SetupCacheDir::with_ops(make_ops())),
         "bootstrap-prerequisites" => {
             Box::new(apt_packages::AptPackagesStep::bootstrap_with_ops(make_ops()))
         }
@@ -220,6 +294,7 @@ pub mod nginx_write_config;
 pub mod noop;
 pub mod patch_bashrc;
 pub mod prepare_opt_root;
+pub mod setup_cache_dir;
 pub mod setup_data_dir;
 pub mod setup_log_dir;
 pub mod setup_postgres;

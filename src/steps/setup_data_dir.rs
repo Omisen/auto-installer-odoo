@@ -84,22 +84,14 @@ impl SetupDataDir {
         }
     }
 
-    /// Il primo livello **inesistente** scendendo da `odoo_home` verso
-    /// `data_dir`: la radice di ciò che un `mkdir -p` creerà, e quindi l'unica
-    /// cosa che l'undo può rimuovere senza toccare roba di altri.
-    ///
-    /// `None` se `data_dir` non è sotto `odoo_home` o se esiste già tutto.
+    /// La radice di ciò che il nostro `mkdir -p` creerà (helper condiviso con
+    /// [`setup_cache_dir`](crate::steps::setup_cache_dir)).
     fn highest_missing_level(&self, ctx: &Context) -> Option<std::path::PathBuf> {
-        let data_dir = generate_config::data_dir(ctx);
-        let relative = data_dir.strip_prefix(&ctx.odoo_home).ok()?;
-        let mut current = ctx.odoo_home.clone();
-        for component in relative.components() {
-            current = current.join(component);
-            if !self.ops.path_exists(&current) {
-                return Some(current);
-            }
-        }
-        None
+        crate::steps::highest_missing_level(
+            self.ops.as_ref(),
+            &ctx.odoo_home,
+            &generate_config::data_dir(ctx),
+        )
     }
 }
 
@@ -197,34 +189,16 @@ impl Step for SetupDataDir {
             .clone()
             .unwrap_or_else(|| generate_config::data_dir(ctx));
 
-        // Rete di sicurezza sul path reidratato: un `created_root` fuori da
-        // odoo_home (stato corrotto, o scritto da un'altra installazione) non
-        // deve diventare un `rm -rf` altrove. Meglio un residuo che un disastro.
-        if !target.starts_with(&ctx.odoo_home) || target == ctx.odoo_home {
-            warn!(
-                target = %target.display(),
-                odoo_home = %ctx.odoo_home.display(),
-                "undo: path del filestore fuori dal perimetro, non rimuovo nulla"
-            );
-            return Ok(());
-        }
-
-        if ctx.dry_run {
-            info!(target = %target.display(), "undo (dry-run): rm -rf del filestore");
-            return Ok(());
-        }
-
         // rm -rf del nostro perimetro: la directory è nostra e i dati dentro
-        // appartengono a un database che stiamo droppando.
-        if let Err(e) = self.ops.remove_dir_all(&target) {
-            warn!(
-                target = %target.display(),
-                error = %e,
-                "undo: rm -rf del filestore fallito, proseguo (best-effort)"
-            );
-        } else {
-            info!(target = %target.display(), "undo: filestore rimosso");
-        }
+        // appartengono a un database che stiamo droppando. La rete sul path
+        // reidratato (dev'essere sotto odoo_home) è dentro l'helper.
+        crate::steps::remove_created_root(
+            self.ops.as_ref(),
+            self.name(),
+            &ctx.odoo_home,
+            &target,
+            ctx.dry_run,
+        );
         Ok(())
     }
 

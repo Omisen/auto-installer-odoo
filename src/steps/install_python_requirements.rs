@@ -105,7 +105,15 @@ impl Step for InstallPythonRequirements {
         // requirements.txt deve esistere (read_to_string fallisce se assente).
         let content = self.ops.read_to_string(&requirements)?;
 
-        // 1) pip + wheel aggiornati.
+        // 1) pip + wheel + setuptools aggiornati.
+        //
+        // `setuptools` non è decorativo ed è la ragione per cui questo step
+        // falliva su Ubuntu 24.04 (A-R6-2): da Python 3.12 `venv` **non semina
+        // più setuptools**, ma il passo 3 usa `--no-build-isolation`, cioè
+        // chiede a pip di costruire gevent con gli strumenti presenti nel venv.
+        // Senza setuptools lì dentro, il backend di build non esiste e pip
+        // muore con `BackendUnavailable: Cannot import 'setuptools.build_meta'`.
+        // Il `python3-setuptools` di sistema non c'entra: il venv è isolato.
         self.ops.run_as_user(
             user,
             &pip,
@@ -117,6 +125,7 @@ impl Step for InstallPythonRequirements {
                 "--upgrade",
                 "pip",
                 "wheel",
+                "setuptools",
             ],
         )?;
 

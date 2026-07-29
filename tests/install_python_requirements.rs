@@ -74,7 +74,7 @@ fn gevent_cython_workaround_sequence() {
     let calls = pip_calls(&ops_of(&log));
     assert_eq!(calls.len(), 4, "quattro passaggi pip attesi");
 
-    // 1) upgrade pip wheel
+    // 1) upgrade pip wheel setuptools
     assert!(calls[0].contains(&"--upgrade".to_string()) && calls[0].contains(&"pip".to_string()));
     // 2) Cython<3
     assert!(calls[1].contains(&"Cython<3".to_string()));
@@ -85,6 +85,44 @@ fn gevent_cython_workaround_sequence() {
     assert!(calls[3].contains(&"--prefer-binary".to_string()));
     assert!(calls[3].contains(&"--requirement".to_string()));
     assert!(!calls[3].iter().any(|a| a.contains("gevent")));
+}
+
+#[test]
+fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
+    // A-R6-2, il blocco di Ubuntu 24.04. Da Python 3.12 `venv` semina solo pip:
+    // niente setuptools. Il passo 3 usa `--no-build-isolation`, cioè costruisce
+    // gevent con quello che trova NEL VENV — e senza setuptools pip muore con
+    // `BackendUnavailable: Cannot import 'setuptools.build_meta'`. Il
+    // `python3-setuptools` di sistema non serve: il venv è isolato.
+    let cfg = MockConfig {
+        requirements_content: Some(REQUIREMENTS.to_string()),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let calls = pip_calls(&ops_of(&log));
+    assert!(
+        calls[0].contains(&"setuptools".to_string()),
+        "il bootstrap del venv deve installare setuptools: {:?}",
+        calls[0]
+    );
+
+    // E deve avvenire PRIMA del passo con --no-build-isolation, altrimenti non
+    // serve a nulla.
+    let no_isolation = calls
+        .iter()
+        .position(|c| c.contains(&"--no-build-isolation".to_string()))
+        .expect("il passo gevent senza isolamento deve esistere");
+    assert!(
+        no_isolation > 0,
+        "setuptools va seminato prima del build senza isolamento: {calls:?}"
+    );
 }
 
 #[test]

@@ -44,6 +44,7 @@ const BASHRC_ORIG: &str = "alias ll='ls -la'\nexport EDITOR=vim\n";
 const CHAIN: &[&str] = &[
     "create-odoo-user",
     "setup-log-dir",
+    "setup-cache-dir",
     "bootstrap-prerequisites",
     "install-system-dependencies",
     "setup-postgres",
