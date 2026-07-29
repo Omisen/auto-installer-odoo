@@ -19,6 +19,7 @@ pub mod lockfile;
 pub mod logging;
 pub mod progress;
 pub mod prompt;
+pub mod rollback;
 pub mod secret;
 pub mod state;
 pub mod step;

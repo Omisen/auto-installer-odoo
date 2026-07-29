@@ -4,10 +4,12 @@
 //! `CLAUDE.md`: snapshot prima di run, persistenza dopo ogni run riuscito,
 //! rollback in ordine inverso e best-effort.
 //!
-//! Il rollback è **in-process**: annulla gli step completati nella stessa
-//! esecuzione, tenuti in `completed`. Lo stato persistito da
-//! [`InstallState::save`] non viene riletto da nessuno — il resume/rollback a
-//! partire dal disco non è ancora implementato (fase R4). Vedi [`crate::state`].
+//! Il rollback di questo modulo è **in-process**: annulla gli step completati
+//! nella stessa esecuzione, tenuti in `completed`. Il rollback a partire dallo
+//! stato persistito da [`InstallState::save`] — per un Ctrl-C, un crash o una
+//! disinstallazione a posteriori — vive in [`crate::rollback`] e usa lo stesso
+//! contratto: `undo` in ordine inverso, best-effort, `PreState` come sola fonte
+//! di verità.
 //!
 //! Il progresso è notificato tramite l'astrazione
 //! [`ProgressReporter`](crate::progress::ProgressReporter): il motore **non**
@@ -20,7 +22,7 @@ use tracing::{error, info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::progress::{NoopReporter, ProgressReporter};
-use crate::state::{InstallState, StepRecord};
+use crate::state::{InstallConfig, InstallState, StepRecord};
 use crate::step::Step;
 
 /// Esegue gli step e, in caso di fallimento, ripristina lo stato precedente.
@@ -58,6 +60,12 @@ impl Installer {
     ) -> Result<(), StepError> {
         let total = steps.len();
         let mut completed: Vec<usize> = Vec::new();
+
+        // La configurazione va nello stato *prima* del primo step: è ciò che
+        // permette a `odoo-installer rollback` di sapere quali artefatti
+        // annullare se questo processo non arriva mai alla fine (vedi
+        // `crate::state::InstallConfig`). Nessuna password vi entra.
+        self.state.set_config(InstallConfig::from_context(ctx));
 
         for idx in 0..steps.len() {
             let name = steps[idx].name().to_string();

@@ -5,10 +5,17 @@
 //! sostituisce i booleani `CLI_*_SET` del Bash originale portando la stessa
 //! informazione in modo tipizzato, ed è ciò che permette la cascata di priorità
 //! CLI → `.env` → interattivo → default (vedi [`crate::config`]).
+//!
+//! # Sottocomandi (R4)
+//!
+//! `odoo-installer` **senza** sottocomando installa, esattamente come prima:
+//! è l'uso documentato e non cambia. `odoo-installer rollback` (alias
+//! `uninstall`) annulla un'installazione a partire dallo stato persistito.
+//! Il sottocomando è `Option`, quindi la forma senza resta valida.
 
 use std::path::PathBuf;
 
-use clap::Parser;
+use clap::{Args, Parser, Subcommand};
 
 /// Installer Odoo con rollback chirurgico.
 #[derive(Parser, Debug)]
@@ -19,6 +26,10 @@ use clap::Parser;
     disable_version_flag = true
 )]
 pub struct Cli {
+    /// Sottocomando. Assente = installazione (comportamento storico).
+    #[command(subcommand)]
+    pub command: Option<Command>,
+
     /// Versione Odoo da installare (16|17|18|19 oppure 16.0..19.0).
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
@@ -80,4 +91,39 @@ pub struct Cli {
     /// pacchetti pesanti. Di default il rollback le lascia installate.
     #[arg(long)]
     pub aggressive_rollback: bool,
+}
+
+/// I sottocomandi disponibili.
+#[derive(Subcommand, Debug)]
+pub enum Command {
+    /// Annulla un'installazione leggendo lo stato persistito: rimuove ciò che
+    /// l'installer ha creato, lasciando intatto ciò che era già sulla macchina.
+    ///
+    /// Serve sia a disinstallare un'istanza funzionante, sia a ripulire i resti
+    /// di un'installazione interrotta (Ctrl-C, crash, spegnimento).
+    #[command(alias = "uninstall")]
+    Rollback(RollbackArgs),
+}
+
+/// Opzioni di `odoo-installer rollback`.
+#[derive(Args, Debug)]
+pub struct RollbackArgs {
+    /// File di stato da consumare (default: /opt/odoo/.installer-state.json).
+    #[arg(long, value_name = "FILE")]
+    pub state: Option<PathBuf>,
+
+    /// Mostra cosa verrebbe annullato senza toccare il sistema.
+    #[arg(long)]
+    pub dry_run: bool,
+
+    /// Rollback aggressivo: purga anche PostgreSQL/Nginx installati da noi e le
+    /// utility comuni. Di default restano installati (stop + disable bastano).
+    #[arg(long)]
+    pub aggressive_rollback: bool,
+
+    /// Non chiedere conferma. Necessario in esecuzioni non interattive: senza
+    /// TTY e senza questo flag il comando si ferma invece di procedere alla
+    /// cieca su un'operazione distruttiva.
+    #[arg(short = 'y', long)]
+    pub yes: bool,
 }

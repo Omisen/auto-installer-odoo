@@ -3,21 +3,41 @@
 //! Implementa l'invariante 4 di `CLAUDE.md`: `completed` + snapshot vanno
 //! scritti su `/opt/odoo/.installer-state.json` (owned root, `0600`).
 //!
-//! # Stato di fatto: la persistenza non ha ancora un consumatore
+//! # Il consumatore dello stato: il comando `rollback` (R4)
 //!
 //! Il file di stato viene **scritto** dopo ogni step riuscito ([`InstallState::save`],
-//! chiamata da [`crate::engine::Installer::execute_with_reporter`]) e
-//! **rimosso** a fine installazione riuscita ([`InstallState::clear`], chiamata
-//! da `main`). Ma **nessuno lo rilegge**: `main` costruisce sempre un
-//! [`crate::engine::Installer`] con stato vuoto e non chiama mai
-//! [`InstallState::load`].
+//! chiamata da [`crate::engine::Installer::execute_with_reporter`]),
+//! **riletto** da `odoo-installer rollback` ([`InstallState::load`], vedi
+//! [`crate::rollback`]) e **rimosso** a fine installazione riuscita
+//! ([`InstallState::clear`], chiamata da `main`) o a rollback completato.
 //!
-//! Concretamente: il rollback dell'installer è **solo in-process** — annulla gli
-//! step completati nella *stessa* esecuzione. Il resume (o il rollback) a
-//! partire dallo stato persistito **non è implementato**; è pianificato (fase
-//! R4 / proposta B1 dell'audit). Finché non lo è, un processo ucciso
-//! brutalmente (SIGKILL, power-loss) lascia gli artefatti a metà: lo stato su
-//! disco li descrive, ma nessun codice li usa per ripulirli.
+//! Il rollback esiste quindi in due forme, con la stessa semantica:
+//! - **in-process** — [`crate::engine::Installer`] annulla gli step completati
+//!   nella *stessa* esecuzione quando uno step fallisce;
+//! - **da disco** — [`crate::rollback::rollback_from_state`] ricostruisce gli
+//!   step dai record persistiti e ne esegue gli `undo` in ordine inverso. È la
+//!   via per ripulire dopo un Ctrl-C, un `kill -9` o un power-loss, e per
+//!   disinstallare un'installazione riuscita.
+//!
+//! # Perché lo stato porta anche la configurazione
+//!
+//! Uno `StepRecord` dice *in che stato era* l'artefatto (il `PreState`), non
+//! *quale* artefatto fosse: `CreateDatabase` serializza `CreatedByUs`, ma il
+//! nome del database vive nel [`Context`]. Per il rollback in-process non è un
+//! problema (il `Context` è lì); per il rollback da disco lo sarebbe.
+//!
+//! Ricavare la configurazione una seconda volta dalla cascata CLI/`.env`/default
+//! **non è un'opzione sicura**: un utente che ha installato con
+//! `--db-name fatturazione` e lancia `odoo-installer rollback` senza flag
+//! ricadrebbe sul default `odoo` e il rollback droppererebbe un database che non
+//! ha mai creato — la violazione più diretta della protezione anti-drop. Perciò
+//! l'installazione persiste la propria configurazione ([`InstallConfig`])
+//! insieme ai record: il rollback usa **quella**, cioè l'identità reale degli
+//! artefatti creati.
+//!
+//! **Nessuna password è persistita**: l'undo non ne ha bisogno (drop di ruoli e
+//! database avviene via `psql` come utente `postgres`), e un segreto non scritto
+//! è un segreto che non può trapelare.
 //!
 //! Il path è configurabile (vedi [`crate::context::Context::state_path`]) così
 //! i test girano senza root e senza toccare il sistema.
@@ -25,10 +45,11 @@
 use std::fs;
 use std::io::Write;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde::{Deserialize, Serialize};
 
+use crate::context::Context;
 use crate::error::StepError;
 
 /// Percorso di default del file di stato in produzione (root, `0600`).
@@ -65,21 +86,108 @@ pub struct StepRecord {
     pub snapshot: serde_json::Value,
 }
 
+/// Configurazione dell'installazione persistita insieme ai record.
+///
+/// Contiene **l'identità degli artefatti** che gli `undo` devono poter
+/// nominare: quale utente, quale database, quale directory. Senza, il rollback
+/// da disco non saprebbe *cosa* rimuovere (vedi il doc del modulo).
+///
+/// # Cosa NON contiene, di proposito
+///
+/// Nessuna password (`admin_passwd`, `db_password`). Nessun `undo` ne ha
+/// bisogno: il drop del ruolo e del database passa da `psql`/`dropdb` eseguiti
+/// come utente `postgres`, non dall'autenticazione del ruolo Odoo. Persistere
+/// un segreto che non serve sarebbe superficie d'attacco gratuita, per quanto il
+/// file sia `0600` root.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstallConfig {
+    pub odoo_version: String,
+    pub odoo_version_short: String,
+    pub odoo_user: String,
+    pub db_user: String,
+    pub db_name: String,
+    pub odoo_home: PathBuf,
+    pub install_dir: PathBuf,
+    pub port: u16,
+    /// `None` = Odoo logga su journal/stdout (nessuna log dir creata).
+    pub odoo_logfile: Option<PathBuf>,
+    pub with_nginx: bool,
+    /// Utente che ha lanciato `sudo`: possiede control-script e `.bashrc`.
+    pub sudo_user: Option<String>,
+}
+
+impl InstallConfig {
+    /// Estrae dal [`Context`] i soli campi che servono al rollback da disco.
+    pub fn from_context(ctx: &Context) -> Self {
+        InstallConfig {
+            odoo_version: ctx.odoo_version.clone(),
+            odoo_version_short: ctx.odoo_version_short.clone(),
+            odoo_user: ctx.odoo_user.clone(),
+            db_user: ctx.db_user.clone(),
+            db_name: ctx.db_name.clone(),
+            odoo_home: ctx.odoo_home.clone(),
+            install_dir: ctx.install_dir.clone(),
+            port: ctx.port,
+            odoo_logfile: ctx.odoo_logfile.clone(),
+            with_nginx: ctx.with_nginx,
+            sudo_user: ctx.sudo_user.clone(),
+        }
+    }
+
+    /// Ricostruisce il [`Context`] per il rollback da disco.
+    ///
+    /// I campi non persistiti restano ai default: le password sono vuote
+    /// (nessun undo le usa) e `os_info` è `None` (serve solo a `run`).
+    pub fn to_context(
+        &self,
+        dry_run: bool,
+        aggressive_rollback: bool,
+        state_path: PathBuf,
+    ) -> Context {
+        Context {
+            odoo_version: self.odoo_version.clone(),
+            odoo_version_short: self.odoo_version_short.clone(),
+            odoo_user: self.odoo_user.clone(),
+            db_user: self.db_user.clone(),
+            db_name: self.db_name.clone(),
+            odoo_home: self.odoo_home.clone(),
+            install_dir: self.install_dir.clone(),
+            port: self.port,
+            odoo_logfile: self.odoo_logfile.clone(),
+            with_nginx: self.with_nginx,
+            sudo_user: self.sudo_user.clone(),
+            dry_run,
+            aggressive_rollback,
+            state_path,
+            ..Default::default()
+        }
+    }
+}
+
 /// Stato completo dell'installazione persistito su disco.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InstallState {
     /// Step completati, in ordine di esecuzione. Il rollback li percorre in
     /// ordine inverso (invariante 2).
     pub completed: Vec<StepRecord>,
+    /// Configurazione dell'installazione in corso, necessaria al rollback da
+    /// disco per sapere *quali* artefatti annullare.
+    ///
+    /// `Option` + `#[serde(default)]` per retrocompatibilità: un file di stato
+    /// scritto da una versione precedente a R4 non ha questo campo e resta
+    /// leggibile. Il comando `rollback` lo rileva e si ferma con un messaggio
+    /// esplicito invece di indovinare la configurazione — indovinare significa
+    /// rischiare di droppare il database sbagliato.
+    #[serde(default)]
+    pub config: Option<InstallConfig>,
 }
 
 impl InstallState {
     /// Carica lo stato dal file. Un file assente equivale a stato vuoto: è la
     /// condizione normale di una prima esecuzione, non un errore.
     ///
-    /// **Non è ancora usata dal flusso di installazione**: è il mattone su cui
-    /// poggerà il resume/rollback da stato persistito (fase R4). Oggi la
-    /// esercitano solo i test.
+    /// È il punto d'ingresso del rollback da disco
+    /// ([`crate::rollback::rollback_from_state`]).
     pub fn load(path: &Path) -> Result<Self, StepError> {
         match fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
@@ -130,10 +238,10 @@ impl InstallState {
 
     /// Rimuove il file di stato. Idempotente: un file già assente non è errore.
     ///
-    /// Chiamata da `main` a fine installazione riuscita: lo stato descrive
-    /// un'installazione *in corso*, quindi a successo avvenuto va tolto di mezzo
-    /// per non lasciare un file stantìo che il resume di R4 scambierebbe per
-    /// un'installazione da riprendere.
+    /// Chiamata da `main` a fine installazione riuscita e dal comando
+    /// `rollback` a pulizia completata: in entrambi i casi lo stato ha esaurito
+    /// il suo scopo, e lasciarlo sul disco farebbe credere al `rollback`
+    /// successivo che ci sia ancora qualcosa da annullare.
     pub fn clear(path: &Path) -> Result<(), StepError> {
         match fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -145,5 +253,12 @@ impl InstallState {
     /// Aggiunge un record di step completato allo stato in memoria.
     pub fn record(&mut self, record: StepRecord) {
         self.completed.push(record);
+    }
+
+    /// Registra la configurazione dell'installazione (una sola volta, prima del
+    /// primo step): è ciò che permette al rollback da disco di sapere *quali*
+    /// artefatti annullare.
+    pub fn set_config(&mut self, config: InstallConfig) {
+        self.config = Some(config);
     }
 }

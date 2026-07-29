@@ -128,6 +128,10 @@ default**.
 | `--aggressive-rollback` | in rollback purga anche pacchetti che di norma resterebbero | disattivo |
 | `--help` | messaggio d'aiuto | — |
 
+Sottocomandi: `odoo-installer rollback` (alias `uninstall`) — vedi
+[Disinstallare / ripulire](#disinstallare--ripulire-odoo-installer-rollback). Senza sottocomando il
+comando installa, come sempre.
+
 Esempi:
 
 ```bash
@@ -208,13 +212,56 @@ chiave è sulle **risorse preesistenti**, che non vengono mai toccate da un roll
 - **`/opt/odoo`** già presente **resta**;
 - il **`~/.bashrc`** dell'utente torna **byte-per-byte** com'era (solo la nostra riga viene rimossa).
 
-> **Limite attuale, detto chiaramente.** Il rollback è **in-process**: annulla gli step della stessa
-> esecuzione. Lo stato viene sì persistito in `/opt/odoo/.installer-state.json` durante l'installazione
-> (e rimosso a fine successo), ma **non viene ancora riletto**: se il processo viene ucciso brutalmente
-> (`kill -9`, power-loss), gli artefatti a metà restano e vanno ripuliti a mano. Il rollback/resume a
-> partire dallo stato persistito è pianificato, non ancora disponibile.
+Il rollback esiste in **due forme**, con le stesse regole:
+
+- **automatico (in-process)** — uno step fallisce e l'installazione si ritira da sola;
+- **esplicito (`odoo-installer rollback`)** — rilegge lo stato persistito in
+  `/opt/odoo/.installer-state.json` e annulla ciò che quell'installazione aveva creato. Serve sia a
+  **disinstallare** un'istanza funzionante, sia a **ripulire** dopo un Ctrl-C, un `kill -9` o uno
+  spegnimento — i casi in cui il processo muore prima di poter fare il rollback da sé.
 
 Usa **`--dry-run`** per vedere il piano prima di eseguire davvero.
+
+---
+
+## Disinstallare / ripulire: `odoo-installer rollback`
+
+```bash
+# Cosa verrebbe rimosso, senza toccare nulla
+sudo ./target/release/odoo-installer rollback --dry-run
+
+# Rimuovi davvero (chiede conferma)
+sudo ./target/release/odoo-installer rollback
+```
+
+`uninstall` è un alias dello stesso comando.
+
+Il comando legge lo stato lasciato dall'installazione, ricostruisce gli step con lo **snapshot
+dell'epoca** e ne esegue gli `undo` in ordine inverso. Vale la stessa garanzia del rollback automatico:
+viene rimosso **solo** ciò che l'installer aveva creato. Un database che esisteva già resta al suo
+posto — lo dice lo snapshot salvato, non un'ispezione fatta al momento del rollback (che a quel punto
+non saprebbe più distinguere i due casi).
+
+Prima di procedere il comando distingue **installazione completata** da **installazione interrotta a
+metà** ed elenca gli step da annullare. A fine esecuzione stampa un riepilogo di cosa è stato rimosso
+e, se qualche `undo` non è riuscito, l'elenco esatto di cosa resta da togliere a mano: il rollback è
+best-effort, e non fa finta del contrario.
+
+| Flag | Valore | Default |
+|------|--------|---------|
+| `--state <FILE>` | file di stato da consumare | `/opt/odoo/.installer-state.json` |
+| `--dry-run` | elenca senza mutare (non serve `sudo`) | disattivo |
+| `--aggressive-rollback` | purga anche PostgreSQL/Nginx installati da noi e le utility comuni | disattivo |
+| `--yes` / `-y` | salta la conferma (obbligatorio senza terminale) | disattivo |
+
+Lo stato viene rimosso solo a rollback completo: se qualcosa non è stato ripulito il file resta, e il
+comando può essere rieseguito (gli `undo` sono idempotenti).
+
+> **Nota sui file di stato precedenti a questa versione.** Lo stato ora porta con sé anche la
+> configurazione dell'installazione (utente, database, directory — mai le password), perché è ciò che
+> dice al rollback *quali* artefatti annullare. Un file scritto da una versione precedente non ce l'ha:
+> il comando lo rileva, elenca gli step registrati e si ferma, invece di dedurre i nomi dai default e
+> rischiare di rimuovere risorse che non aveva creato lui.
 
 ---
 
@@ -283,8 +330,9 @@ checksum upstream. Nota: la release `0.12.6.1-3` pubblica `.deb` amd64 **solo** 
 AutoInstallerOdoo/
 ├── Cargo.toml
 ├── src/
-│   ├── main.rs              # entry point: parse → prompt → checks → lock → execute
-│   ├── cli.rs               # argomenti CLI (clap)
+│   ├── main.rs              # entry point: install (parse → prompt → checks → lock → execute) | rollback
+│   ├── cli.rs               # argomenti CLI (clap) + sottocomando `rollback`/`uninstall`
+│   ├── rollback.rs          # rollback dallo stato persistito (reidratazione step + report residui)
 │   ├── config.rs            # cascata CLI/.env/default + parser .env dichiarativo + validatori
 │   ├── context.rs           # config risolta letta dagli step
 │   ├── engine.rs            # motore: execute + rollback (ordine inverso) + dry-run plan
