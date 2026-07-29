@@ -53,6 +53,9 @@ pub struct ModelState {
     pub ufw_active: bool,
     pub wk_version: Option<String>,
     pub sudo_home: Option<String>,
+    /// Nomi di pacchetto che su questa "release" non esistono: apt non ha un
+    /// candidato installabile (A5.1). Vuoto = tutto installabile.
+    pub packages_without_candidate: HashSet<String>,
 }
 
 /// Handle condiviso al modello.
@@ -136,6 +139,14 @@ impl SystemOps for SystemModel {
     }
     fn dpkg_is_installed(&self, pkg: &str) -> bool {
         self.state.lock().expect("l").packages.contains(pkg)
+    }
+    fn apt_has_candidate(&self, pkg: &str) -> bool {
+        !self
+            .state
+            .lock()
+            .expect("l")
+            .packages_without_candidate
+            .contains(pkg)
     }
     fn wkhtmltopdf_version(&self) -> Option<String> {
         self.state.lock().expect("l").wk_version.clone()

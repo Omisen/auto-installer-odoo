@@ -124,6 +124,10 @@ pub struct MockConfig {
     pub dir_empty: bool,
     /// Pacchetti che `dpkg_is_installed` considera già installati.
     pub installed_packages: HashSet<String>,
+    /// Pacchetti per cui apt NON ha un candidato installabile: modella un nome
+    /// che su questa release non esiste (`libtiff5-dev` su Debian 12, A5.1).
+    /// Vuoto per default → ogni nome è installabile.
+    pub packages_without_candidate: HashSet<String>,
     /// Versione riportata da `wkhtmltopdf_version` (None = non installato).
     pub wk_version: Option<String>,
     /// Stato iniziale del servizio (postgresql/odoo): enabled/active.
@@ -191,6 +195,7 @@ impl Default for MockConfig {
             owner: OwnerId { uid: 0, gid: 0 },
             dir_empty: true,
             installed_packages: HashSet::new(),
+            packages_without_candidate: HashSet::new(),
             wk_version: None,
             service_enabled: false,
             service_active: false,
@@ -369,6 +374,9 @@ impl SystemOps for MockSystemOps {
 
     fn dpkg_is_installed(&self, pkg: &str) -> bool {
         self.cfg.installed_packages.contains(pkg)
+    }
+    fn apt_has_candidate(&self, pkg: &str) -> bool {
+        !self.cfg.packages_without_candidate.contains(pkg)
     }
     fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {
         self.record(Op::AptInstall(pkgs.iter().map(|s| s.to_string()).collect()));

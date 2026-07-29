@@ -52,6 +52,7 @@ const CHAIN: &[&str] = &[
     "clone-odoo-repo",
     "create-virtualenv",
     "generate-config",
+    "setup-data-dir",
     "initialize-odoo-database",
     "setup-systemd",
     "nginx-install",

@@ -88,6 +88,39 @@ fn gevent_cython_workaround_sequence() {
 }
 
 #[test]
+fn every_pip_call_caches_inside_our_perimeter() {
+    // A-R5-3: senza `--cache-dir`, pip scrive in `$HOME/.cache` — e l'`$HOME` di
+    // `odoo` è `/opt/odoo`, che è `Preexisting` e che il rollback non svuota. La
+    // cache va dentro il venv, che l'undo di CreateVirtualenv rimuove per intero.
+    let cfg = MockConfig {
+        requirements_content: Some(REQUIREMENTS.to_string()),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let calls = pip_calls(&ops_of(&log));
+    assert!(!calls.is_empty(), "il run deve invocare pip");
+    let expected = "/opt/odoo/odoo18/sandbox/.pip-cache".to_string();
+    for (i, call) in calls.iter().enumerate() {
+        let pos = call
+            .iter()
+            .position(|a| a == "--cache-dir")
+            .unwrap_or_else(|| panic!("la chiamata pip #{i} deve passare --cache-dir: {call:?}"));
+        assert_eq!(
+            call.get(pos + 1),
+            Some(&expected),
+            "la cache di pip #{i} deve stare dentro il venv, non nella home di odoo"
+        );
+    }
+}
+
+#[test]
 fn missing_requirements_is_error() {
     let cfg = MockConfig {
         requirements_content: None, // requirements.txt assente
