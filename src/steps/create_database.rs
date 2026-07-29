@@ -16,7 +16,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// Crea il database `db_name` (reversibile) con owner `db_user`.
@@ -108,5 +108,21 @@ impl Step for CreateDatabase {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.prestate).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Reidratazione: è **qui** che la protezione anti-drop attraversa il
+    /// confine del disco.
+    ///
+    /// Il `PreState` persistito è la sola cosa che, in un rollback eseguito ore
+    /// o giorni dopo, distingue "database creato da noi" da "database del
+    /// cliente che portava lo stesso nome". Non si ricalcola interrogando
+    /// PostgreSQL — a quel punto il DB esiste in entrambi i casi e la domanda
+    /// non ha più risposta. Si rilegge, e un valore illeggibile è un errore che
+    /// blocca l'undo: meglio un database che resta da rimuovere a mano che uno
+    /// droppato per un'inferenza sbagliata.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let prestate = decode_snapshot(self.name(), snapshot)?;
+        self.prestate = prestate;
+        Ok(())
     }
 }

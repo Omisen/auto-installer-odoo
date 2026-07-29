@@ -1,12 +1,17 @@
 //! Gli step dell'installer.
 //!
 //! Ogni step vive in un proprio file: le fasi successive aggiungono un modulo
-//! qui senza toccare il motore né gli altri step. In Fase 0 esiste solo
-//! [`noop::NoopStep`], usato per testare il motore end-to-end.
+//! qui senza toccare il motore né gli altri step.
+//!
+//! Il modulo espone anche i due punti d'accesso alla sequenza:
+//! [`build_steps`] (l'ordine canonico dell'installazione) e [`step_by_name`]
+//! (la ricostruzione di un singolo step dal suo nome, usata dal rollback da
+//! disco). I due devono coprire lo stesso insieme di step: un test lo verifica.
 
 use tracing::{info, warn};
 
-use crate::system_ops::SystemOps;
+use crate::step::Step;
+use crate::system_ops::{Downloader, RealDownloader, RealSystemOps, SystemOps};
 
 /// Purga pacchetti in un `undo`, **recuperando `dpkg`** se è in stato
 /// inconsistente. Best-effort: non fallisce mai, logga cosa resta.
@@ -64,6 +69,132 @@ pub fn purge_with_dpkg_recovery(ops: &dyn SystemOps, step: &str, pkgs: &[&str]) 
              (`sudo apt-get install -f`)"
         ),
     }
+}
+
+/// Fabbrica di [`SystemOps`]: ogni step ne riceve una propria istanza.
+///
+/// È un `Fn` e non un singolo `Box<dyn SystemOps>` perché gli step possiedono le
+/// proprie `ops`: servono N istanze, non N riferimenti. In produzione ritorna
+/// `RealSystemOps`; nei test ritorna handle allo stesso `SystemModel`, così le
+/// mutazioni di uno step sono viste dagli undo degli altri.
+pub type OpsFactory<'a> = &'a dyn Fn() -> Box<dyn SystemOps>;
+
+/// Costruisce la sequenza di produzione degli step, **nell'ordine di
+/// esecuzione**. Il rollback li annulla in ordine inverso (invariante 2).
+///
+/// Vive qui e non in `main` perché è la definizione canonica della sequenza:
+/// [`step_by_name`] deve coprirla per intero perché il rollback da disco
+/// funzioni, e un test di parità lo verifica — aggiungere uno step qui senza
+/// aggiungerlo là fa fallire la build dei test, non un rollback su una macchina
+/// cliente.
+pub fn build_steps() -> Vec<Box<dyn Step>> {
+    vec![
+        Box::new(prepare_opt_root::PrepareOptRoot::new()),
+        Box::new(create_odoo_user::CreateOdooUser::new()),
+        Box::new(setup_log_dir::SetupLogDir::new()),
+        Box::new(apt_packages::AptPackagesStep::bootstrap()),
+        Box::new(apt_packages::AptPackagesStep::odoo_dependencies()),
+        Box::new(install_wkhtmltopdf::InstallWkhtmltopdf::new()),
+        // PostgreSQL: undo inverso CreateDatabase → CreateDbRole → SetupPostgres.
+        Box::new(setup_postgres::SetupPostgres::new()),
+        Box::new(create_db_role::CreateDbRole::new()),
+        Box::new(create_database::CreateDatabase::new()),
+        // Sorgenti: clone → venv → pip (undo pip no-op; venv rm; clone rm).
+        Box::new(clone_odoo_repo::CloneOdooRepo::new()),
+        Box::new(create_virtualenv::CreateVirtualenv::new()),
+        Box::new(install_python_requirements::InstallPythonRequirements::new()),
+        // Config + init schema (undo init no-op: pulizia dal dropdb di Fase 5).
+        Box::new(generate_config::GenerateConfig::new()),
+        Box::new(initialize_odoo_database::InitializeOdooDatabase::new()),
+        // Servizio systemd (undo: stop → disable → rm → daemon-reload).
+        Box::new(setup_systemd::SetupSystemd::new()),
+        // Nginx (opzionale, gated): install → vhost → enable → firewall → reload.
+        Box::new(nginx_install::NginxInstall::new()),
+        Box::new(nginx_write_config::NginxWriteConfig::new()),
+        Box::new(nginx_enable_site::NginxEnableSite::new()),
+        Box::new(nginx_firewall::NginxFirewall::new()),
+        Box::new(nginx_reload::NginxReload::new()),
+        // Comando helper `odoo` + patch PATH nel .bashrc dell'utente.
+        Box::new(write_control_script::WriteControlScript::new()),
+        Box::new(patch_bashrc::PatchBashrc::new()),
+    ]
+}
+
+/// Ricostruisce uno step dal suo **nome persistito**, con `SystemOps` iniettabili.
+///
+/// È la metà "identità" della reidratazione: dato uno `StepRecord`,
+/// `step_by_name` produce l'oggetto e [`crate::step::Step::rehydrate`] ne
+/// rimette lo stato. Insieme rendono eseguibile l'`undo` di un'installazione
+/// che questo processo non ha mai eseguito.
+///
+/// Ritorna `None` per un nome sconosciuto — uno stato scritto da una versione
+/// con step che qui non esistono più. Il chiamante lo tratta come residuo da
+/// segnalare, non come errore fatale: gli altri step vanno comunque annullati.
+///
+/// Il downloader di `install-wkhtmltopdf` è sempre quello reale: l'undo purga un
+/// pacchetto, non scarica nulla, quindi non c'è nulla da iniettare. Stessa
+/// ragione per la tabella dei checksum, presa dai pin di produzione.
+pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step>> {
+    let step: Box<dyn Step> = match name {
+        "prepare-opt-root" => Box::new(prepare_opt_root::PrepareOptRoot::new()),
+        "create-odoo-user" => Box::new(create_odoo_user::CreateOdooUser::with_ops(make_ops())),
+        "setup-log-dir" => Box::new(setup_log_dir::SetupLogDir::with_ops(make_ops())),
+        "bootstrap-prerequisites" => {
+            Box::new(apt_packages::AptPackagesStep::bootstrap_with_ops(make_ops()))
+        }
+        "install-system-dependencies" => Box::new(
+            apt_packages::AptPackagesStep::odoo_dependencies_with_ops(make_ops()),
+        ),
+        "install-wkhtmltopdf" => Box::new(install_wkhtmltopdf::InstallWkhtmltopdf::with_parts(
+            make_ops(),
+            Box::new(RealDownloader::new()) as Box<dyn Downloader>,
+            install_wkhtmltopdf::default_checksums(),
+            std::env::temp_dir(),
+        )),
+        "setup-postgres" => Box::new(setup_postgres::SetupPostgres::with_ops(make_ops())),
+        "create-db-role" => Box::new(create_db_role::CreateDbRole::with_ops(make_ops())),
+        "create-database" => Box::new(create_database::CreateDatabase::with_ops(make_ops())),
+        "clone-odoo-repo" => Box::new(clone_odoo_repo::CloneOdooRepo::with_ops(make_ops())),
+        "create-virtualenv" => Box::new(create_virtualenv::CreateVirtualenv::with_ops(make_ops())),
+        "install-python-requirements" => Box::new(
+            install_python_requirements::InstallPythonRequirements::with_parts(
+                make_ops(),
+                std::env::temp_dir(),
+            ),
+        ),
+        "generate-config" => Box::new(generate_config::GenerateConfig::with_ops(make_ops())),
+        "initialize-odoo-database" => Box::new(
+            initialize_odoo_database::InitializeOdooDatabase::with_ops(make_ops()),
+        ),
+        "setup-systemd" => Box::new(setup_systemd::SetupSystemd::with_ops(make_ops())),
+        "nginx-install" => Box::new(nginx_install::NginxInstall::with_ops(make_ops())),
+        "nginx-write-config" => {
+            Box::new(nginx_write_config::NginxWriteConfig::with_ops(make_ops()))
+        }
+        "nginx-enable-site" => Box::new(nginx_enable_site::NginxEnableSite::with_ops(make_ops())),
+        "nginx-firewall" => Box::new(nginx_firewall::NginxFirewall::with_ops(make_ops())),
+        "nginx-reload" => Box::new(nginx_reload::NginxReload::with_ops(make_ops())),
+        "write-control-script" => Box::new(write_control_script::WriteControlScript::with_ops(
+            make_ops(),
+        )),
+        "patch-bashrc" => Box::new(patch_bashrc::PatchBashrc::with_ops(make_ops())),
+        _ => return None,
+    };
+    Some(step)
+}
+
+/// Fabbrica di produzione: [`RealSystemOps`] per ogni step.
+pub fn real_ops() -> Box<dyn SystemOps> {
+    Box::new(RealSystemOps::new())
+}
+
+/// I nomi degli step della sequenza canonica, nell'ordine di esecuzione.
+///
+/// Derivato da [`build_steps`] invece che scritto a mano: una lista parallela
+/// diventerebbe stantìa senza che nulla se ne accorga, e qui il costo è un giro
+/// di costruttori senza effetti collaterali.
+pub fn canonical_step_names() -> Vec<String> {
+    build_steps().iter().map(|s| s.name().to_string()).collect()
 }
 
 pub mod apt_packages;

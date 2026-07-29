@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 const PG_SERVICE: &str = "postgresql";
@@ -180,6 +180,16 @@ impl Step for SetupPostgres {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Reidrata i **tre assi** insieme: installato / abilitato / attivo. Sono
+    /// indipendenti e ognuno decide un'azione diversa dell'undo (purge, disable,
+    /// stop); reidratarne solo uno lascerebbe gli altri a `Untracked`, cioè un
+    /// rollback che dimentica di rispegnere ciò che aveva acceso.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let snap = decode_snapshot(self.name(), snapshot)?;
+        self.snap = snap;
+        Ok(())
     }
 }
 

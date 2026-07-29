@@ -13,7 +13,7 @@ use tracing::{info, warn};
 
 use crate::context::Context;
 use crate::error::StepError;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -117,5 +117,15 @@ impl Step for NginxFirewall {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Stesso ragionamento del delta apt: il delta ufw va **riletto**, non
+    /// ricalcolato. Dopo il run le regole desiderate esistono tutte, e un delta
+    /// ricalcolato porterebbe l'undo a chiudere anche una porta che il cliente
+    /// aveva aperto per conto suo.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let snap = decode_snapshot(self.name(), snapshot)?;
+        self.snap = snap;
+        Ok(())
     }
 }

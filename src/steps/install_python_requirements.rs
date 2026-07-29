@@ -22,7 +22,7 @@ use tracing::info;
 
 use crate::context::Context;
 use crate::error::StepError;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 const VENV_SUBDIR: &str = "sandbox";
@@ -137,6 +137,14 @@ impl Step for InstallPythonRequirements {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::Value::Bool(self.installed)
+    }
+
+    /// Reidratato per simmetria: l'`undo` è un NO-OP (la pulizia è del venv),
+    /// ma il contratto `snapshot_value` ⇄ `rehydrate` vale per ogni step.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let installed = decode_snapshot(self.name(), snapshot)?;
+        self.installed = installed;
+        Ok(())
     }
 }
 

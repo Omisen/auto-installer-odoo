@@ -21,7 +21,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 
 /// Permessi della directory radice appena creata (owned root fino a Fase 3).
 const OPT_ROOT_MODE: u32 = 0o755;
@@ -139,5 +139,11 @@ impl Step for PrepareOptRoot {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.prestate).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let prestate = decode_snapshot(self.name(), snapshot)?;
+        self.prestate = prestate;
+        Ok(())
     }
 }

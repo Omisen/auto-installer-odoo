@@ -12,7 +12,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// Permessi della log dir (owner rwx, group r-x, other ---).
@@ -137,5 +137,11 @@ impl Step for SetupLogDir {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.prestate).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let prestate = decode_snapshot(self.name(), snapshot)?;
+        self.prestate = prestate;
+        Ok(())
     }
 }

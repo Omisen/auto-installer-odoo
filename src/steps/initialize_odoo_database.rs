@@ -29,7 +29,7 @@ use tracing::info;
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 const VENV_SUBDIR: &str = "sandbox";
@@ -91,22 +91,26 @@ impl Step for InitializeOdooDatabase {
         // Schema assente. HARD-STOP se il DB non è nostro: non si scrive lo
         // schema Odoo in un database preesistente del cliente.
         //
-        // Il messaggio include l'ipotesi diagnostica "residuo di una run
-        // precedente" (A3.3): l'installer non sa distinguere i due casi finché
-        // non rilegge lo stato persistito (fase R4), ma l'utente sì — e senza
-        // questo suggerimento resterebbe bloccato senza capire perché.
+        // Il comportamento resta invariato — l'hard-stop è la protezione
+        // corretta, e l'installer *non* può distinguere da solo "residuo nostro"
+        // da "database del cliente": in questa esecuzione il DB esiste e basta.
+        // Ma l'utente può, e da R4 ha anche lo strumento: se il residuo viene da
+        // un'installazione precedente non completata, il suo file di stato è
+        // ancora sul disco e `odoo-installer rollback` lo consuma, rimuovendo
+        // esattamente ciò che quella run aveva creato — e nient'altro (A3.3).
         if !ctx.db_created_by_us.load(Ordering::SeqCst) {
             return Err(StepError::Precondition(format!(
-                "Il database '{}' esisteva già prima dell'installazione; \
+                "Il database '{db}' esisteva già prima dell'installazione; \
                  l'inizializzazione dello schema Odoo è rifiutata per non alterare \
                  dati preesistenti. Usa un nome DB diverso o un DB vuoto creato \
                  dall'installer.\n\
-                 Nota: se questo database è il residuo di un'installazione precedente \
-                 non completata (e non un DB di produzione con dati reali), rimuovilo \
-                 manualmente — `sudo -u postgres dropdb {}` — oppure scegli un nome \
-                 diverso, prima di riprovare. La rimozione automatica dei residui \
-                 arriverà col comando `rollback` (in arrivo).",
-                ctx.db_name, ctx.db_name
+                 Se '{db}' è il residuo di un'installazione precedente non completata \
+                 (e non un database con dati reali), ripulisci quella installazione con \
+                 `sudo odoo-installer rollback`: legge lo stato lasciato da quella \
+                 esecuzione e rimuove solo ciò che aveva creato lei. In alternativa \
+                 rimuovi il database a mano — `sudo -u postgres dropdb {db}` — oppure \
+                 scegli un nome diverso.",
+                db = ctx.db_name
             )));
         }
 
@@ -161,5 +165,15 @@ impl Step for InitializeOdooDatabase {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.prestate).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Reidratato per simmetria, benché l'`undo` sia un NO-OP: il contratto
+    /// `snapshot_value` ⇄ `rehydrate` vale per tutti gli step, così l'invariante
+    /// è verificabile uniformemente e un futuro undo non nascerà con uno stato
+    /// vuoto senza che nessuno se ne accorga.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let prestate = decode_snapshot(self.name(), snapshot)?;
+        self.prestate = prestate;
+        Ok(())
     }
 }

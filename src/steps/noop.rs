@@ -13,7 +13,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 
 /// Log condiviso dell'ordine in cui gli `undo` compiono un'azione effettiva.
 ///
@@ -171,5 +171,11 @@ impl Step for NoopStep {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.prestate).unwrap_or(serde_json::Value::Null)
+    }
+
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let prestate = decode_snapshot(self.name(), snapshot)?;
+        self.prestate = prestate;
+        Ok(())
     }
 }

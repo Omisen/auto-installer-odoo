@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// Template `odoo.conf`, incorporato nel binario.
@@ -176,6 +176,15 @@ impl Step for GenerateConfig {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Reidrata anche il `backup_path`: senza, un undo su `Preexisting` non
+    /// saprebbe da dove ripristinare il `.conf` del cliente e si limiterebbe a
+    /// un warning, lasciando al suo posto il file che abbiamo scritto noi.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let snap = decode_snapshot(self.name(), snapshot)?;
+        self.snap = snap;
+        Ok(())
     }
 }
 

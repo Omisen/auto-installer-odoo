@@ -17,7 +17,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// La riga esatta che aggiungiamo (match `grep -Fqx`).
@@ -185,6 +185,17 @@ impl Step for PatchBashrc {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Terza protezione critica anche da disco. I tre campi contano tutti:
+    /// `prestate` decide *se* toccare il file, `bashrc_existed` distingue
+    /// "rimuovi la riga" da "rimuovi il file che abbiamo creato noi", e
+    /// `backup_path` è ciò che rende il ripristino byte-per-byte. Un solo campo
+    /// perso e l'undo o non agisce, o cancella un `.bashrc` che non era nostro.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let snap = decode_snapshot(self.name(), snapshot)?;
+        self.snap = snap;
+        Ok(())
     }
 }
 

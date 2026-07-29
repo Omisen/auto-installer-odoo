@@ -20,7 +20,7 @@ use tracing::info;
 
 use crate::context::Context;
 use crate::error::StepError;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// Prerequisiti bootstrap: utility comuni a basso rischio.
@@ -240,5 +240,17 @@ impl Step for AptPackagesStep {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// Reidrata il **delta**: i pacchetti che non c'erano prima di noi.
+    ///
+    /// Ricalcolarlo sarebbe sbagliato per costruzione — dopo il `run` tutta la
+    /// lista risulta installata e il delta apparirebbe vuoto (nessun purge) o,
+    /// peggio, coinciderebbe con l'intera lista, portando l'undo a purgare
+    /// pacchetti che il cliente aveva già.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let snap = decode_snapshot(self.name(), snapshot)?;
+        self.snap = snap;
+        Ok(())
     }
 }

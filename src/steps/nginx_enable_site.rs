@@ -15,7 +15,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
-use crate::step::Step;
+use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 const SITES_AVAILABLE: &str = "/etc/nginx/sites-available";
@@ -145,5 +145,15 @@ impl Step for NginxEnableSite {
 
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
+    }
+
+    /// `default_site_existed` è l'informazione che permette all'undo di
+    /// **ricucire** la config del cliente: senza reidratarla, un rollback da
+    /// disco rimuoverebbe il nostro vhost e lascerebbe la porta 80 senza il
+    /// default site che avevamo tolto.
+    fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
+        let snap = decode_snapshot(self.name(), snapshot)?;
+        self.snap = snap;
+        Ok(())
     }
 }
