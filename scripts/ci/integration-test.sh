@@ -310,6 +310,13 @@ fi
 # /opt/odoo: resta, ma deve contenere solo la contabilità dell'installer.
 # Il log è un artefatto post-mortem voluto (si tiene apposta); il lock è vuoto.
 # Qualsiasi altra cosa è un residuo.
+#
+# È questa riga ad aver trovato A-R5-3: `.cache` (la cache di pip, che nasceva
+# nella home dell'utente odoo) e `.local` (il filestore, che Odoo si creava da
+# sé, fuori da ogni step e quindi non annullabile). Chiuse in R6 dai due lati
+# opposti — la cache non nasce più qui (`pip --cache-dir` dentro il venv), il
+# filestore è ora lo step `setup-data-dir` con il suo PreState. Resta la guardia
+# di regressione: se una di quelle due cose torna, questo assert cade.
 if [ -d "$ODOO_HOME" ]; then
   leftovers="$(sudo ls -A "$ODOO_HOME" | grep -vx -e '.installer.log' -e '.installer.lock' || true)"
   if [ -z "$leftovers" ]; then

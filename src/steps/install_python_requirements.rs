@@ -10,6 +10,23 @@
 //!
 //! Tutte le install girano come utente **odoo**, dal `pip` del venv.
 //!
+//! # La cache di pip vive nel nostro perimetro (A-R5-3)
+//!
+//! `pip` mette la sua cache in `$HOME/.cache/pip`, e l'`$HOME` dell'utente
+//! `odoo` è `/opt/odoo` — che è la directory che l'installer, se la trova già
+//! esistente, considera `Preexisting` e non tocca mai. Risultato osservato in
+//! campo (job Ubuntu di R5): dopo un rollback completo, `/opt/odoo/.cache`
+//! restava lì. Non sono dati critici, ma la promessa è "il sistema torna
+//! esattamente com'era", e un residuo è un residuo.
+//!
+//! La correzione è **preventiva**, non una pulizia: `--cache-dir` sposta la
+//! cache in `<install_dir>/sandbox/.pip-cache`, cioè dentro il venv, che l'undo
+//! di [`CreateVirtualenv`](crate::steps::create_virtualenv) rimuove per intero
+//! con un `rm -rf`. Niente nasce fuori dal perimetro, quindi niente va inseguito
+//! con euristiche di cancellazione dentro la home del cliente. La cache resta
+//! comunque una cache: un secondo giro dell'installer (idempotenza) la ritrova
+//! al suo posto e non riscarica le wheel.
+//!
 //! # Workaround Cython/gevent (fix reale per Odoo 18, da preservare)
 //!
 //! Cython 3 ha rimosso il tipo `long` di Python 2; gevent (richiesto da Odoo 18)
@@ -27,6 +44,9 @@ use crate::system_ops::{RealSystemOps, SystemOps};
 
 const VENV_SUBDIR: &str = "sandbox";
 const REPO_SUBDIR: &str = "odoo";
+/// Cache di pip, **dentro** il venv: sparisce con il `rm -rf sandbox` dell'undo
+/// di `CreateVirtualenv` invece di restare in `/opt/odoo/.cache` (A-R5-3).
+const PIP_CACHE_SUBDIR: &str = ".pip-cache";
 
 /// Installa le dipendenze pip nel venv (senza undo proprio).
 pub struct InstallPythonRequirements {
@@ -78,6 +98,9 @@ impl Step for InstallPythonRequirements {
         let pip = venv.join("bin").join("pip");
         let pip = pip.to_string_lossy();
         let requirements = ctx.install_dir.join(REPO_SUBDIR).join("requirements.txt");
+        // Cache nel nostro perimetro: vedi la nota di modulo (A-R5-3).
+        let cache_dir = venv.join(PIP_CACHE_SUBDIR);
+        let cache_dir = cache_dir.to_string_lossy();
 
         // requirements.txt deve esistere (read_to_string fallisce se assente).
         let content = self.ops.read_to_string(&requirements)?;
@@ -86,19 +109,37 @@ impl Step for InstallPythonRequirements {
         self.ops.run_as_user(
             user,
             &pip,
-            &["install", "--quiet", "--upgrade", "pip", "wheel"],
+            &[
+                "install",
+                "--quiet",
+                "--cache-dir",
+                &cache_dir,
+                "--upgrade",
+                "pip",
+                "wheel",
+            ],
         )?;
 
         // 2) Cython compatibile (< 3.0).
-        self.ops
-            .run_as_user(user, &pip, &["install", "--quiet", "Cython<3"])?;
+        self.ops.run_as_user(
+            user,
+            &pip,
+            &["install", "--quiet", "--cache-dir", &cache_dir, "Cython<3"],
+        )?;
 
         // 3) gevent con la spec da requirements, build senza isolamento.
         let gevent_spec = extract_gevent_spec(&content);
         self.ops.run_as_user(
             user,
             &pip,
-            &["install", "--quiet", "--no-build-isolation", &gevent_spec],
+            &[
+                "install",
+                "--quiet",
+                "--cache-dir",
+                &cache_dir,
+                "--no-build-isolation",
+                &gevent_spec,
+            ],
         )?;
 
         // 4) resto dei requirements, escludendo gevent (già installato).
@@ -112,6 +153,8 @@ impl Step for InstallPythonRequirements {
             &[
                 "install",
                 "--quiet",
+                "--cache-dir",
+                &cache_dir,
                 "--prefer-binary",
                 "--requirement",
                 &tmp_str,

@@ -188,6 +188,19 @@ impl Step for GenerateConfig {
     }
 }
 
+/// Il `data_dir` di Odoo: dove finiscono il **filestore** (gli allegati dei
+/// record) e le sessioni.
+///
+/// Sta qui perché è questo step a scriverlo nel `.conf`, ma non è più solo un
+/// valore del template: [`SetupDataDir`](crate::steps::setup_data_dir) crea
+/// quella directory in modo reversibile, e dovrà creare *esattamente* il path
+/// che Odoo poi userà. Due `format!` identici in due file sono la premessa di un
+/// rollback che pulisce la directory sbagliata, quindi la formula vive in un
+/// solo posto.
+pub fn data_dir(ctx: &Context) -> std::path::PathBuf {
+    ctx.odoo_home.join(".local").join("share").join("Odoo")
+}
+
 /// Secondi dall'epoch (per il nome del backup). In codice normale è lecito.
 fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
@@ -203,7 +216,8 @@ pub fn render_config(template: &str, ctx: &Context) -> String {
     let install = ctx.install_dir.to_string_lossy();
     let addons =
         format!("{install}/odoo/odoo/addons,{install}/odoo/addons,{install}/repos/modules");
-    let data_dir = format!("{}/.local/share/Odoo", ctx.odoo_home.to_string_lossy());
+    let data_dir = data_dir(ctx);
+    let data_dir = data_dir.to_string_lossy();
     let logfile = ctx
         .odoo_logfile
         .as_ref()
@@ -220,7 +234,7 @@ pub fn render_config(template: &str, ctx: &Context) -> String {
         ("ODOO_VERSION", ctx.odoo_version.as_str()),
         ("ODOO_ADDONS_PATH", addons.as_str()),
         ("ODOO_ADMIN_PASSWD", admin),
-        ("ODOO_DATA_DIR", data_dir.as_str()),
+        ("ODOO_DATA_DIR", &data_dir),
         ("DB_HOST", ""),
         ("DB_NAME", ctx.db_name.as_str()),
         ("DB_PASSWORD", db_password),

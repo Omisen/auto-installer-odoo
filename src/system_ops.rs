@@ -337,6 +337,19 @@ pub trait SystemOps {
     // --- apt / dpkg (Fase 4) -------------------------------------------------
     /// `true` se il pacchetto risulta `install ok installed` a `dpkg-query`.
     fn dpkg_is_installed(&self, pkg: &str) -> bool;
+    /// `true` se apt ha un **candidato installabile** per questo nome su questo
+    /// sistema (`apt-cache policy` → `Candidate:` diverso da `(none)`).
+    ///
+    /// È una query, non una mutazione: serve a scegliere *quale* nome installare
+    /// quando lo stesso pacchetto ne cambia uno tra release
+    /// (`libtiff5-dev` → `libtiff-dev`, A5.1). Senza questa domanda l'unico modo
+    /// di scoprire che un nome non esiste più è l'`apt-get install` che fallisce
+    /// sull'intero gruppo, cioè a mutazione già iniziata.
+    ///
+    /// Risponde `false` anche quando `apt-cache` non è eseguibile o le liste apt
+    /// sono vuote: chi chiama distingue i due casi solo dal fatto che *nessun*
+    /// nome risulti disponibile, e lo dice nel messaggio d'errore.
+    fn apt_has_candidate(&self, pkg: &str) -> bool;
     /// `apt-get install -y --no-install-recommends <pkgs>` (idempotente).
     fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError>;
     /// `apt-get purge -y <pkgs>`.
@@ -605,18 +618,50 @@ fn run_apt(args: &[&str]) -> Result<(), StepError> {
     )
 }
 
+/// `true` se l'output di `apt-cache policy` dichiara un candidato installabile.
+///
+/// Pura e pubblica per essere verificabile sui casi reali senza avere apt sotto
+/// mano: pacchetto disponibile, pacchetto puramente virtuale (`Candidate:
+/// (none)`), nome inesistente (nessuna riga `Candidate:`, solo un `N: Unable to
+/// locate package`).
+pub fn has_installable_candidate(policy_output: &str) -> bool {
+    policy_output.lines().any(|line| {
+        line.trim()
+            .strip_prefix("Candidate:")
+            .map(|value| {
+                let value = value.trim();
+                !value.is_empty() && value != "(none)"
+            })
+            .unwrap_or(false)
+    })
+}
+
 /// Esegue un comando catturandone lo stdout (per query psql/systemctl).
 fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
+    capture_command_with_env(program, args, &[])
+}
+
+/// Come [`capture_command`], con variabili d'ambiente aggiuntive.
+///
+/// Esiste per `LC_ALL=C`: l'output di `apt-cache` è **localizzato**, e un parser
+/// che cerca `Candidate:` su una macchina italiana leggerebbe `Candidato:` e
+/// concluderebbe che nessun pacchetto è installabile.
+fn capture_command_with_env(
+    program: &str,
+    args: &[&str],
+    envs: &[(&str, &str)],
+) -> Result<String, StepError> {
     let rendered = format!("{program} {}", args.join(" "));
-    let output =
-        Command::new(program)
-            .args(args)
-            .output()
-            .map_err(|e| StepError::CommandFailed {
-                command: rendered.clone(),
-                status: "spawn-failed".to_string(),
-                stderr: e.to_string(),
-            })?;
+    let mut command = Command::new(program);
+    command.args(args);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().map_err(|e| StepError::CommandFailed {
+        command: rendered.clone(),
+        status: "spawn-failed".to_string(),
+        stderr: e.to_string(),
+    })?;
     if output.status.success() {
         Ok(String::from_utf8_lossy(&output.stdout).into_owned())
     } else {
@@ -795,6 +840,16 @@ impl SystemOps for RealSystemOps {
                 String::from_utf8_lossy(&out.stdout).contains("install ok installed")
             }
             _ => false,
+        }
+    }
+
+    fn apt_has_candidate(&self, pkg: &str) -> bool {
+        match capture_command_with_env("apt-cache", &["policy", "--", pkg], &[("LC_ALL", "C")]) {
+            Ok(out) => has_installable_candidate(&out),
+            // apt-cache assente o in errore: nessuna informazione → nessun
+            // candidato. Il chiamante fallisce prima di mutare, che è il verso
+            // giusto in cui sbagliare.
+            Err(_) => false,
         }
     }
 

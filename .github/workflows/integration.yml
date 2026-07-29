@@ -149,7 +149,12 @@ jobs:
   # possono coprire e che l'audit segnala come fragile:
   #
   #   A5.1  nomi dei pacchetti apt su una distro diversa (`libtiff5-dev`,
-  #         `node-less` e compagnia cambiano fra release);
+  #         `libjpeg8-dev`, `node-less` cambiano o scompaiono fra release). È il
+  #         job che ha trovato il problema in R5 e che ora ne verifica il fix:
+  #         dalla R6 la lista è di *gruppi di alternative* risolti a runtime, e
+  #         su Debian il gruppo deve risolversi al nome che esiste lì. Se la
+  #         risoluzione sbagliasse, `install-system-dependencies` tornerebbe a
+  #         fallire esattamente qui;
   #   A5.2  mappatura codename → pin wkhtmltopdf, con `bookworm` e `bullseye`
   #         che hanno pin diretti (i runner Ubuntu esercitano solo `jammy` e il
   #         fallback `noble → jammy`);

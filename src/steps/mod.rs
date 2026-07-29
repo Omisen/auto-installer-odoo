@@ -105,6 +105,10 @@ pub fn build_steps() -> Vec<Box<dyn Step>> {
         Box::new(install_python_requirements::InstallPythonRequirements::new()),
         // Config + init schema (undo init no-op: pulizia dal dropdb di Fase 5).
         Box::new(generate_config::GenerateConfig::new()),
+        // Il filestore va creato prima che Odoo lo crei da sé: solo così è un
+        // artefatto registrato, e quindi annullabile (A-R5-3). Deve stare dopo
+        // `create-database`, da cui legge se il DB è nostro.
+        Box::new(setup_data_dir::SetupDataDir::new()),
         Box::new(initialize_odoo_database::InitializeOdooDatabase::new()),
         // Servizio systemd (undo: stop → disable → rm → daemon-reload).
         Box::new(setup_systemd::SetupSystemd::new()),
@@ -163,6 +167,7 @@ pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step
             ),
         ),
         "generate-config" => Box::new(generate_config::GenerateConfig::with_ops(make_ops())),
+        "setup-data-dir" => Box::new(setup_data_dir::SetupDataDir::with_ops(make_ops())),
         "initialize-odoo-database" => Box::new(
             initialize_odoo_database::InitializeOdooDatabase::with_ops(make_ops()),
         ),
@@ -215,6 +220,7 @@ pub mod nginx_write_config;
 pub mod noop;
 pub mod patch_bashrc;
 pub mod prepare_opt_root;
+pub mod setup_data_dir;
 pub mod setup_log_dir;
 pub mod setup_postgres;
 pub mod setup_systemd;
