@@ -48,7 +48,7 @@ Scarica l'ultimo binario dalla pagina **[Releases](../../releases/latest)**. Due
 Ogni archivio ha un file `.sha256` per **verificare l'integrità** del download.
 
 ```bash
-VER=v2.0.0                       # sostituisci con l'ultima versione
+VER=v2.1.0                       # sostituisci con l'ultima versione
 file=odoo-installer-x86_64-unknown-linux-musl.tar.gz
 base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
 
@@ -69,8 +69,8 @@ finisce nel `PATH` ed è rimovibile con `apt remove odoo-installer`. Il `.deb` �
 servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
 
 ```bash
-VER=v2.0.0                       # sostituisci con l'ultima versione
-deb=odoo-installer_2.0.0_amd64.deb
+VER=v2.1.0                       # sostituisci con l'ultima versione
+deb=odoo-installer_2.1.0_amd64.deb
 base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
 
 curl -fsSL -O "${base}/${deb}" -O "${base}/${deb}.sha256"

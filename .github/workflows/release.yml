@@ -2,7 +2,7 @@
 # .github/workflows/release.yml
 # Release automatica con binari LINUX precompilati.
 #
-# A ogni tag di versione (es. v2.0.0), builda l'installer in release per due
+# A ogni tag di versione (es. v2.1.0), builda l'installer in release per due
 # target Linux x86_64 e allega gli archivi (+ checksum SHA-256) alla GitHub
 # Release. Così clienti e stagisti scaricano un eseguibile pronto, senza avere
 # Rust installato — "un file, lo lanci, funziona".
