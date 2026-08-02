@@ -274,10 +274,13 @@ fn print_interrupt_notice(state_path: &Path) {
 fn run_rollback(args: &RollbackArgs) -> Result<()> {
     let _log_guard = odoo_installer::logging::init(args.dry_run);
 
+    // Senza `--state`, il manifesto si cerca prima dove lo scriviamo oggi e poi
+    // dove lo scriveva la 2.1.0: un'istanza installata da una versione
+    // precedente deve restare disinstallabile.
     let state_path = args
         .state
         .clone()
-        .unwrap_or_else(|| PathBuf::from(DEFAULT_STATE_PATH));
+        .unwrap_or_else(odoo_installer::state::resolve_state_path);
 
     let state = InstallState::load(&state_path).map_err(|e| anyhow!(e))?;
 
@@ -490,7 +493,10 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
         }
     }
     println!();
-    println!("Il dettaglio completo è nel log (/opt/odoo/.installer.log).");
+    println!(
+        "Il dettaglio completo è nel log ({}).",
+        odoo_installer::logging::DEFAULT_LOG_PATH
+    );
     println!("================================================================");
     println!();
 }

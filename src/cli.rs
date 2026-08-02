@@ -108,7 +108,8 @@ pub enum Command {
 /// Opzioni di `odoo-installer rollback`.
 #[derive(Args, Debug)]
 pub struct RollbackArgs {
-    /// File di stato da consumare (default: /opt/odoo/.installer-state.json).
+    /// File di stato da consumare (default: /var/lib/odoo-installer/state.json,
+    /// con ripiego sul percorso storico /opt/odoo/.installer-state.json).
     #[arg(long, value_name = "FILE")]
     pub state: Option<PathBuf>,
 

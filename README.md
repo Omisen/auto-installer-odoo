@@ -216,7 +216,7 @@ Il rollback esiste in **due forme**, con le stesse regole:
 
 - **automatico (in-process)** — uno step fallisce e l'installazione si ritira da sola;
 - **esplicito (`odoo-installer rollback`)** — rilegge lo stato persistito in
-  `/opt/odoo/.installer-state.json` e annulla ciò che quell'installazione aveva creato. Serve sia a
+  `/var/lib/odoo-installer/state.json` e annulla ciò che quell'installazione aveva creato. Serve sia a
   **disinstallare** un'istanza funzionante, sia a **ripulire** dopo un Ctrl-C, un `kill -9` o uno
   spegnimento — i casi in cui il processo muore prima di poter fare il rollback da sé.
 
@@ -249,7 +249,7 @@ best-effort, e non fa finta del contrario.
 
 | Flag | Valore | Default |
 |------|--------|---------|
-| `--state <FILE>` | file di stato da consumare | `/opt/odoo/.installer-state.json` |
+| `--state <FILE>` | file di stato da consumare | `/var/lib/odoo-installer/state.json` (ripiego sul percorso storico `/opt/odoo/.installer-state.json`) |
 | `--dry-run` | elenca senza mutare (non serve `sudo`) | disattivo |
 | `--aggressive-rollback` | purga anche PostgreSQL/Nginx installati da noi e le utility comuni | disattivo |
 | `--yes` / `-y` | salta la conferma (obbligatorio senza terminale) | disattivo |
@@ -292,8 +292,8 @@ journalctl -u odoo18 -n 50 --no-pager
 # Comando helper locale (dopo: source ~/.bashrc)
 odoo status        # start | stop | restart | status | dev
 
-# Log dell'installer (post-mortem)
-sudo cat /opt/odoo/.installer.log
+# Log dell'installer (post-mortem; sopravvive al rollback, apposta)
+sudo cat /var/log/odoo-installer.log
 ```
 
 ---

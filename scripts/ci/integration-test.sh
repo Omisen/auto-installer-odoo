@@ -48,7 +48,7 @@ ODOO_HOME=/opt/odoo
 INSTALL_DIR="$ODOO_HOME/odoo${VER_SHORT}"
 UNIT="odoo${VER_SHORT}"
 UNIT_FILE="/etc/systemd/system/${UNIT}.service"
-STATE="$ODOO_HOME/.installer-state.json"
+STATE="/var/lib/odoo-installer/state.json"
 WORK="$(mktemp -d)"
 
 # Le asserzioni NON si fermano alla prima: un solo giro di CI (che dura decine
@@ -97,6 +97,20 @@ pkg_installed() {
 group "Installazione reale ($MODE)"
 echo "OS: $(. /etc/os-release && echo "$PRETTY_NAME")"
 echo "Config: $ENV_FILE"
+
+# Fotografia PRIMA di mutare: /opt/odoo esiste già su questo runner?
+# Serve alla verifica finale (A-V3-2). Se era preesistente, il rollback deve
+# lasciarla — `prepare-opt-root` la marca Preexisting — e pretendere che sparisca
+# sarebbe pretendere una violazione del principio chirurgico. Sui runner e nei
+# container l'attesa è che NON esista, e in quel caso dopo il rollback non deve
+# esistere nemmeno alla fine.
+if [ -d "$ODOO_HOME" ]; then
+  OPT_ODOO_PREEXISTING=1
+  info "$ODOO_HOME esisteva già prima dell'installazione"
+else
+  OPT_ODOO_PREEXISTING=0
+  info "$ODOO_HOME assente prima dell'installazione (macchina vergine)"
+fi
 set +e
 sudo "$BIN" --config "$ENV_FILE"
 INSTALL_RC=$?
@@ -307,23 +321,35 @@ if [ "$preexisting_lost" -eq 0 ]; then
   ok "nessun pacchetto preesistente è stato toccato"
 fi
 
-# /opt/odoo: resta, ma deve contenere solo la contabilità dell'installer.
-# Il log è un artefatto post-mortem voluto (si tiene apposta); il lock è vuoto.
-# Qualsiasi altra cosa è un residuo.
+# /opt/odoo: su macchina vergine, dopo il rollback NON deve esistere.
+#
+# Fino ad A-V3-2 questa verifica accettava una whitelist (`.installer.log`,
+# `.installer.lock`) e dichiarava OK una directory sopravvissuta: metteva per
+# iscritto il residuo come comportamento atteso, ed è il motivo per cui la CI
+# non ha mai trovato il difetto. I due file erano lì perché lock e log vivevano
+# dentro la home; ora vivono in /run e /var/log, la directory non ha più alcuna
+# ragione di sopravvivere, e l'undo di `prepare-opt-root` può finalmente
+# attivarsi.
 #
 # È questa riga ad aver trovato A-R5-3: `.cache` (la cache di pip, che nasceva
 # nella home dell'utente odoo) e `.local` (il filestore, che Odoo si creava da
 # sé, fuori da ogni step e quindi non annullabile). Chiuse in R6 dai due lati
 # opposti — la cache non nasce più qui (`pip --cache-dir` dentro il venv), il
-# filestore è ora lo step `setup-data-dir` con il suo PreState. Resta la guardia
-# di regressione: se una di quelle due cose torna, questo assert cade.
-if [ -d "$ODOO_HOME" ]; then
-  leftovers="$(sudo ls -A "$ODOO_HOME" | grep -vx -e '.installer.log' -e '.installer.lock' || true)"
-  if [ -z "$leftovers" ]; then
-    ok "$ODOO_HOME contiene solo log e lock dell'installer"
-  else
-    fail "$ODOO_HOME contiene residui: $(echo "$leftovers" | tr '\n' ' ')"
-  fi
+# filestore è ora lo step `setup-data-dir` con il suo PreState. La guardia di
+# regressione resta, ora più stretta: qualunque contenuto è un residuo, e lo è
+# anche la directory stessa.
+#
+# Nota: vale perché il runner parte da una macchina senza /opt/odoo. Se la
+# directory fosse preesistente, `prepare-opt-root` la marcherebbe Preexisting e
+# NON rimuoverla sarebbe il comportamento corretto — per questo si verifica
+# che fosse assente prima di installare.
+if [ "${OPT_ODOO_PREEXISTING:-0}" = "1" ]; then
+  ok "$ODOO_HOME era preesistente: il rollback non deve rimuoverla (nessuna asserzione)"
+elif [ -d "$ODOO_HOME" ]; then
+  leftovers="$(sudo ls -A "$ODOO_HOME" | tr '\n' ' ' || true)"
+  fail "$ODOO_HOME è sopravvissuta al rollback (contenuto: ${leftovers:-vuota}) — A-V3-2"
+else
+  ok "$ODOO_HOME non esiste più: il perimetro è tornato com'era"
 fi
 
 endgroup
@@ -337,5 +363,5 @@ if [ "$FAILURES" -eq 0 ]; then
 fi
 echo "=== INTEGRAZIONE FALLITA ($MODE): $FAILURES verifiche non superate ==="
 echo "Log dell'installer:"
-sudo tail -n 100 "$ODOO_HOME/.installer.log" 2>/dev/null || echo "(nessun log)"
+sudo tail -n 100 /var/log/odoo-installer.log 2>/dev/null || echo "(nessun log)"
 exit 1

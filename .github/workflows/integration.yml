@@ -108,14 +108,14 @@ jobs:
           MODE: full
         run: bash scripts/ci/integration-test.sh
 
-      # Il log su file, se c'è. Attenzione: alla **prima** installazione su una
-      # macchina pulita non c'è — `logging::init` apre /opt/odoo/.installer.log
-      # prima che PrepareOptRoot crei /opt/odoo, quindi degrada al solo stderr
-      # (A-R5-2, vedi audit). Lo stderr finisce comunque nel log del job, che
-      # resta la fonte completa; questo artefatto è un di più.
+      # Il log su file. Da A-V3-2 vive in /var/log/odoo-installer.log e non
+      # dipende più da una directory che l'installer deve ancora creare: nasce
+      # quindi anche alla **prima** installazione su macchina pulita, che è il
+      # caso in cui A-R5-2 lasciava senza post-mortem. Lo stderr resta comunque
+      # nel log del job.
       - name: Log dell'installer, se presente
         if: always()
-        run: sudo cp /opt/odoo/.installer.log "installer-${{ matrix.os }}.log" || true
+        run: sudo cp /var/log/odoo-installer.log "installer-${{ matrix.os }}.log" || true
 
       - name: Carica il log
         if: always()
@@ -239,7 +239,7 @@ jobs:
         if: always()
         run: |
           tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
-          cp /opt/odoo/.installer.log "installer-$tag.log" 2>/dev/null || true
+          cp /var/log/odoo-installer.log "installer-$tag.log" 2>/dev/null || true
 
       - name: Carica il log
         if: always()

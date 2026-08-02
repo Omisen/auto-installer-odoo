@@ -17,7 +17,20 @@ use tracing_subscriber::prelude::*;
 use tracing_subscriber::{fmt, EnvFilter};
 
 /// Percorso di default del log file (owned root).
-pub const DEFAULT_LOG_PATH: &str = "/opt/odoo/.installer.log";
+///
+/// **Fuori da `/opt/odoo`** (A-V3-2 / A-R5-2). Il log si apre come primissima
+/// cosa in `run_install`, quando `/opt/odoo` non esiste ancora: finché il
+/// percorso era `/opt/odoo/.installer.log`, alla **prima** installazione — cioè
+/// l'unica che conta per un post-mortem su macchina cliente — il file non
+/// nasceva affatto e restava solo il TTY. Il post-mortem non può dipendere da
+/// una directory che l'installer deve ancora creare, e a crearla non deve
+/// pensarci né il logger né il lock. `/var/log` esiste sempre.
+///
+/// Conseguenza dichiarata: il log **sopravvive al rollback**. È voluto — è
+/// l'unico resoconto di cosa è successo, e serve soprattutto quando qualcosa è
+/// andato storto. Vale come prima: cambia solo che ora vive in un posto suo
+/// invece di tenere in piedi una directory che doveva sparire.
+pub const DEFAULT_LOG_PATH: &str = "/var/log/odoo-installer.log";
 
 /// Prova ad aprire (in append, creando) il file di log. `None` se il percorso
 /// non è scrivibile: il logging degrada al solo TTY.

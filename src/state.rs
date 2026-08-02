@@ -1,7 +1,11 @@
 //! Pattern `PreState` e persistenza dello stato su disco.
 //!
 //! Implementa l'invariante 4 di `CLAUDE.md`: `completed` + snapshot vanno
-//! scritti su `/opt/odoo/.installer-state.json` (owned root, `0600`).
+//! scritti su `/var/lib/odoo-installer/state.json` (owned root, `0600`).
+//! Il percorso storico `/opt/odoo/.installer-state.json` resta **leggibile**
+//! (vedi [`resolve_state_path`]) ma non viene più scritto: il manifesto non può
+//! vivere dentro il perimetro che il rollback deve rimuovere, o l'ultimo undo
+//! trova la directory occupata proprio da lui (A-V3-2).
 //!
 //! # Il consumatore dello stato: il comando `rollback` (R4)
 //!
@@ -52,8 +56,56 @@ use serde::{Deserialize, Serialize};
 use crate::context::Context;
 use crate::error::StepError;
 
+/// Directory del manifesto in produzione. Creata da [`InstallState::save`] e
+/// rimossa, se vuota, da [`InstallState::clear`].
+pub const DEFAULT_STATE_DIR: &str = "/var/lib/odoo-installer";
+
 /// Percorso di default del file di stato in produzione (root, `0600`).
-pub const DEFAULT_STATE_PATH: &str = "/opt/odoo/.installer-state.json";
+///
+/// **Fuori da `/opt/odoo`** (A-V3-2). Il manifesto è l'ultimo artefatto a
+/// morire: `clear` lo rimuove *dopo* che tutti gli undo sono girati, perché un
+/// rollback che non arriva in fondo deve poter essere ripetuto. Finché viveva
+/// dentro `/opt/odoo`, l'undo di `PrepareOptRoot` — che è l'**ultimo** a girare,
+/// essendo il primo step — trovava lì il manifesto, vedeva una directory non
+/// vuota e rinunciava a rimuoverla (mai `rm -rf`). Spostare lock e log non
+/// bastava: era questo il terzo residente, ed è il motivo per cui `/opt/odoo`
+/// sopravviveva comunque a ogni rollback.
+pub const DEFAULT_STATE_PATH: &str = "/var/lib/odoo-installer/state.json";
+
+/// Percorso storico del manifesto, dentro `/opt/odoo` (fino alla 2.1.0).
+///
+/// Non si scrive più qui, ma si continua a **leggere**: un'istanza installata
+/// da una versione precedente ha il suo unico manifesto in questa posizione, e
+/// rendergliela invisibile significherebbe renderla non disinstallabile — cioè
+/// il danno che A-V3-1 descrive, causato dalla correzione di un altro finding.
+/// Vedi [`resolve_state_path`].
+pub const LEGACY_STATE_PATH: &str = "/opt/odoo/.installer-state.json";
+
+/// Sceglie il manifesto da consumare quando l'utente non passa `--state`.
+///
+/// Ordine: il percorso corrente se esiste, altrimenti quello storico se esiste,
+/// altrimenti di nuovo il corrente (così il messaggio d'errore nomina il posto
+/// giusto in cui l'utente dovrebbe cercarlo). Non tenta alcuna migrazione: un
+/// rollback non è il momento per spostare file, e il manifesto storico verrà
+/// comunque rimosso dal `clear` a pulizia completata.
+pub fn resolve_state_path() -> PathBuf {
+    pick_state_path(Path::new(DEFAULT_STATE_PATH), Path::new(LEGACY_STATE_PATH))
+}
+
+/// La regola di [`resolve_state_path`], con i due percorsi come parametri.
+///
+/// Esiste separata per la stessa ragione per cui `Context::state_path` è
+/// configurabile: la scelta va verificata con percorsi di prova, non contro il
+/// filesystem della macchina che esegue i test.
+pub fn pick_state_path(current: &Path, legacy: &Path) -> PathBuf {
+    if current.exists() {
+        return current.to_path_buf();
+    }
+    if legacy.exists() {
+        return legacy.to_path_buf();
+    }
+    current.to_path_buf()
+}
 
 /// Modalità del file di stato: leggibile/scrivibile solo dal proprietario.
 const STATE_FILE_MODE: u32 = 0o600;
@@ -269,12 +321,28 @@ impl InstallState {
     ///
     /// Ora a fine successo lo stato viene **marcato** ([`InstallState::finished`])
     /// e conservato.
+    /// # Perché rimuove anche la directory
+    ///
+    /// `save` crea `/var/lib/odoo-installer` per ospitare il manifesto: è un
+    /// artefatto nostro, e lasciarne il guscio vuoto dopo una pulizia riuscita
+    /// sarebbe lo stesso residuo che A-V3-2 rimprovera a `/opt/odoo`, solo più
+    /// piccolo. La rimozione è ristretta alla **costante** [`DEFAULT_STATE_DIR`]
+    /// e alla sola directory vuota: un `--state` che punti altrove non fa
+    /// sparire la directory di qualcun altro.
     pub fn clear(path: &Path) -> Result<(), StepError> {
         match fs::remove_file(path) {
-            Ok(()) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(e) => Err(StepError::io(path, e)),
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(StepError::io(path, e)),
         }
+
+        if path.parent() == Some(Path::new(DEFAULT_STATE_DIR)) {
+            // Best-effort e mai forzata: `remove_dir` fallisce da sé se dentro
+            // c'è rimasto qualcosa, ed è il comportamento voluto.
+            let _ = fs::remove_dir(DEFAULT_STATE_DIR);
+        }
+
+        Ok(())
     }
 
     /// Aggiunge un record di step completato allo stato in memoria.

@@ -700,7 +700,7 @@ fn rollback_and_its_uninstall_alias_parse_with_their_options() {
     };
     assert!(
         args.state.is_none(),
-        "default: /opt/odoo/.installer-state.json"
+        "senza --state il percorso lo risolve `state::resolve_state_path`"
     );
     assert!(!args.dry_run && !args.yes && !args.aggressive_rollback);
 
