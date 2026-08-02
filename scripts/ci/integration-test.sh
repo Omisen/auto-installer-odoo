@@ -231,6 +231,30 @@ l'istanza potrebbe non essere più disinstallabile (A-V3-1)"
     sudo diff "$WORK/manifest-before.json" "$WORK/manifest-after.json" || true
   fi
 
+  # Il rifiuto deve venire dal MANIFESTO, non da un effetto collaterale.
+  #
+  # A-R9-1: la prima versione di questo blocco si accontentava di `exit != 0` e
+  # di un messaggio che citasse `rollback`. Passava — anzi, falliva — per la
+  # ragione sbagliata: l'installazione veniva respinta da `check_ports` («porta
+  # 8069 già in uso»), perché Odoo era in ascolto, e il controllo sul manifesto
+  # non veniva raggiunto mai. Un'uscita non-zero non dice *perché*, e qui il
+  # perché è tutto: «libera la porta» manda l'utente a fermare Odoo, non a
+  # disinstallarlo.
+  if grep -q "installazione completata su questa macchina" "$WORK/second-install.log"; then
+    ok "il rifiuto viene dal manifesto (A-V3-1), non da un effetto collaterale"
+  else
+    fail "la seconda installazione è stata respinta, ma NON dal controllo sul manifesto: \
+il rifiuto di A-V3-1 non è stato raggiunto (A-R9-1)"
+    tail -n 20 "$WORK/second-install.log" || true
+  fi
+
+  if grep -q -e 'porta .* in uso' "$WORK/second-install.log"; then
+    fail "il rifiuto arriva dal controllo sulla porta: è una CONSEGUENZA \
+dell'installazione esistente, non la causa — l'utente viene mandato a fermare Odoo (A-R9-1)"
+  else
+    ok "nessuna diagnosi fuorviante sulla porta"
+  fi
+
   if grep -q -e 'rollback' -e '--force' "$WORK/second-install.log"; then
     ok "il rifiuto indica come procedere (rollback o --force)"
   else

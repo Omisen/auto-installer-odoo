@@ -99,23 +99,40 @@ fn run_install(cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
-    // Preflight checks NON mutanti: falliscono prima di ogni mutazione.
+    // I preflight girano in DUE gruppi, e l'ordine fra loro non è cosmetico
+    // (A-R9-1, trovato dalla CI di integrazione).
     //
-    // Girano **prima** della decisione sul manifesto e prima della conferma, e
-    // l'ordine conta: il manifesto è `0600 root`, quindi senza `check_root` un
-    // utente non privilegiato leggerebbe «permission denied» su un file di cui
-    // non sa nulla, invece del messaggio che gli dice di usare sudo. Più in
-    // generale: tutto ciò che può dire di no senza toccare niente viene prima
-    // della domanda, così all'utente non si chiede di confermare qualcosa che
-    // stiamo per rifiutare comunque.
-    let os_info = run_preflight_checks(&ctx)?;
-    ctx.os_info = Some(os_info);
+    // Prima **chi** sta eseguendo: root e sudo. Serve subito, perché il manifesto
+    // è `0600 root` e senza questo controllo un utente non privilegiato
+    // leggerebbe «permission denied» su un file di cui non sa nulla.
+    checks::check_caller().map_err(|e| anyhow!(e))?;
 
-    // Manifesto già sul disco: decide se questa esecuzione è una prima
-    // installazione, un resume o un rifiuto (A-V3-1). Legge il disco e basta:
-    // l'eventuale mutazione (archiviare il manifesto per `--force`) avviene dopo
-    // la conferma e dopo il lock, con tutte le altre.
+    // Poi **se** questa esecuzione debba avvenire: manifesto già sul disco →
+    // prima installazione, resume o rifiuto (A-V3-1). Legge il disco e basta;
+    // l'unica mutazione che ne discende (archiviare il manifesto per `--force`)
+    // avviene dopo la conferma e dopo il lock.
+    //
+    // Sta **prima** dei check d'ambiente, e ci è finito dopo che la CI ha
+    // mostrato perché: reinstallare sopra un'istanza funzionante significa avere
+    // Odoo in ascolto sulla porta, quindi `check_ports` falliva per primo e
+    // questo controllo non veniva raggiunto mai — proprio nello scenario per cui
+    // esiste. L'utente si vedeva dire «libera la porta», cioè "ferma Odoo",
+    // invece di «esiste già un'installazione: usa rollback o --force».
+    // Una porta occupata è una **conseguenza** dell'installazione esistente:
+    // diagnosticare la conseguenza al posto della causa manda a sistemare la
+    // cosa sbagliata.
     let start = decide_start(&ctx, cli.force)?;
+
+    // Infine **se la macchina può ospitarla**: OS, disco, porte, comandi.
+    //
+    // Il controllo sulla porta si salta quando a occuparla siamo noi: in un
+    // resume il manifesto dice se `setup-systemd` era già passato, e in quel caso
+    // il servizio in ascolto è quello che stiamo per finire di installare. Senza
+    // questa eccezione un'installazione interrotta dopo lo step 17 non sarebbe
+    // più riprendibile — il resume di R8 morirebbe sul suo stesso servizio.
+    let port_is_ours = matches!(&start, Start::Resume(state) if state.owns_the_http_port());
+    let os_info = run_environment_checks(&ctx, port_is_ours)?;
+    ctx.os_info = Some(os_info);
 
     // Conferma finale interattiva prima di mutare il sistema.
     let question = match &start {
@@ -233,8 +250,8 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
 
         StartDecision::Resume => {
             println!(
-                "Installazione interrotta trovata in {}: {} step gia' completati, si riprende.\n\
-                 Gli step gia' eseguiti non vengono rifatti e la proprieta' degli artefatti \n\
+                "Installazione interrotta trovata in {}: {} step già completati, si riprende.\n\
+                 Gli step già eseguiti non vengono rifatti e la proprietà degli artefatti \n\
                  registrata allora viene conservata.\n\
                  (Per ricominciare da capo: `sudo odoo-installer rollback`, oppure `--force`.)",
                 ctx.state_path.display(),
@@ -258,7 +275,7 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
                 })
                 .unwrap_or_else(|| "configurazione non registrata".to_string());
             bail!(
-                "Risulta gia' un'installazione completata su questa macchina.\n\
+                "Risulta già un'installazione completata su questa macchina.\n\
                  \n  Manifesto : {}\n  Istanza   : {}\n  Step      : {} registrati\n\
                  \n\
                  Per rimuoverla:                        sudo odoo-installer rollback\n\
@@ -266,7 +283,7 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
                  \n\
                  Proseguire senza una scelta esplicita sovrascriverebbe il manifesto con \
                  artefatti tutti marcati come preesistenti, e questa istanza non sarebbe \
-                 piu' disinstallabile automaticamente.",
+                 più disinstallabile automaticamente.",
                 ctx.state_path.display(),
                 istanza,
                 state.completed.len()
@@ -279,10 +296,10 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
                 .map(|(campo, prima, ora)| format!("  {campo}: '{prima}' -> '{ora}'"))
                 .collect();
             bail!(
-                "C'e' un'installazione interrotta ({} step) in {}, ma i parametri richiesti \
+                "C'è un'installazione interrotta ({} step) in {}, ma i parametri richiesti \
                  nominano artefatti diversi:\n{}\n\
                  \n\
-                 Riprendere cosi' produrrebbe un manifesto a meta' fra due istanze, e il \
+                 Riprendere così produrrebbe un manifesto a metà fra due istanze, e il \
                  rollback agirebbe in parte sugli artefatti sbagliati.\n\
                  \n\
                  Rilancia con gli stessi parametri per riprendere, oppure \
@@ -294,7 +311,7 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
         }
 
         StartDecision::RefuseUnknownIdentity => bail!(
-            "C'e' un'installazione interrotta ({} step) in {}, ma il manifesto non registra \
+            "C'è un'installazione interrotta ({} step) in {}, ma il manifesto non registra \
              la configurazione (formato precedente alla R4): non posso verificare che \
              descriva gli stessi artefatti, quindi non la riprendo.\n\
              \n\
@@ -325,12 +342,19 @@ fn archive_manifest(path: &Path) -> Result<PathBuf> {
     Ok(target)
 }
 
-/// Esegue i preflight checks non mutanti nell'ordine del Bash. Ritorna le info
-/// OS da propagare nel [`Context`]. Un fallimento ferma tutto prima di qualsiasi
-/// mutazione.
-fn run_preflight_checks(ctx: &Context) -> Result<OsInfo> {
-    checks::check_root().map_err(|e| anyhow!(e))?;
-    checks::check_sudo_user().map_err(|e| anyhow!(e))?;
+/// Check d'**ambiente**: la macchina può ospitare questa installazione?
+///
+/// Non mutano nulla e falliscono prima di ogni mutazione. Sono separati dai
+/// check sul chiamante ([`checks::check_caller`]) perché rispondono a una domanda
+/// diversa e vanno fatti in un momento diverso: *chi sei* si sa subito, *se la
+/// macchina è adatta* ha senso chiederlo solo dopo aver stabilito che questa
+/// installazione debba avvenire (A-R9-1).
+///
+/// `port_is_ours` salta il controllo sulla porta: in un resume il servizio in
+/// ascolto è il nostro, e rifiutarsi di proseguire per un conflitto con noi
+/// stessi renderebbe irriprendibile proprio l'installazione che stiamo
+/// riprendendo.
+fn run_environment_checks(ctx: &Context, port_is_ours: bool) -> Result<OsInfo> {
     let os_info = checks::check_os().map_err(|e| anyhow!(e))?;
 
     let required_gb = std::env::var("MIN_DISK_GB")
@@ -339,7 +363,14 @@ fn run_preflight_checks(ctx: &Context) -> Result<OsInfo> {
         .unwrap_or(checks::DEFAULT_MIN_DISK_GB);
     checks::check_disk(&ctx.odoo_home, required_gb).map_err(|e| anyhow!(e))?;
 
-    checks::check_ports(ctx.port, ctx.with_nginx).map_err(|e| anyhow!(e))?;
+    if port_is_ours {
+        tracing::info!(
+            port = ctx.port,
+            "porta occupata dal servizio della stessa installazione: controllo saltato (resume)"
+        );
+    } else {
+        checks::check_ports(ctx.port, ctx.with_nginx).map_err(|e| anyhow!(e))?;
+    }
     checks::check_commands().map_err(|e| anyhow!(e))?;
     Ok(os_info)
 }

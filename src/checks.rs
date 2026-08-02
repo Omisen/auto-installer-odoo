@@ -106,6 +106,19 @@ pub fn check_sudo_user() -> Result<(), CheckError> {
     Ok(())
 }
 
+/// Check sul **chiamante**: chi sta eseguendo l'installer.
+///
+/// Separati dai check d'ambiente perché vanno fatti in un momento diverso
+/// (A-R9-1): questi rispondono a *chi sei*, e la risposta serve subito — il
+/// manifesto dell'installazione è `0600 root`, e senza questi controlli chi lo
+/// legge senza privilegi si vede un «permission denied» su un file di cui non sa
+/// nulla. I check d'ambiente rispondono invece a *la macchina è adatta*, e vanno
+/// fatti solo dopo aver stabilito che l'installazione debba avvenire.
+pub fn check_caller() -> Result<(), CheckError> {
+    check_root()?;
+    check_sudo_user()
+}
+
 // --- OS ----------------------------------------------------------------------
 
 /// Estrae il valore di una chiave da un file `os-release`, togliendo gli apici.

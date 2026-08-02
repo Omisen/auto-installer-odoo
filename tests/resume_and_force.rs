@@ -344,3 +344,47 @@ fn a_resumed_installation_finishes_with_a_single_coherent_manifest() {
     assert_eq!(alpha, PreState::CreatedByUs);
     assert_eq!(beta, PreState::Preexisting);
 }
+
+// --- A-R9-1: la porta occupata da noi stessi non blocca il resume ------------
+
+/// Il preflight sulla porta esiste per intercettare un conflitto con **terzi**.
+/// Dopo `setup-systemd` il servizio in ascolto è il nostro: un'installazione
+/// interrotta allo step 18 di 24 non deve diventare irriprendibile per colpa del
+/// servizio che ha appena installato.
+#[test]
+fn a_manifest_past_setup_systemd_owns_the_http_port() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+
+    let prima = partial_state(
+        &ctx,
+        &[
+            ("prepare-opt-root", PreState::CreatedByUs),
+            ("create-database", PreState::CreatedByUs),
+        ],
+    );
+    assert!(
+        !prima.owns_the_http_port(),
+        "senza setup-systemd la porta non è nostra: un conflitto è reale e va segnalato"
+    );
+
+    let dopo = partial_state(
+        &ctx,
+        &[
+            ("prepare-opt-root", PreState::CreatedByUs),
+            ("setup-systemd", PreState::CreatedByUs),
+        ],
+    );
+    assert!(
+        dopo.owns_the_http_port(),
+        "con setup-systemd registrato la porta è del nostro servizio: il controllo va saltato, \
+         o il resume muore sul servizio che ha appena installato (A-R9-1)"
+    );
+}
+
+/// Un manifesto vuoto non possiede nulla: una prima installazione deve passare
+/// dal controllo sulla porta come sempre.
+#[test]
+fn an_empty_manifest_owns_no_port() {
+    assert!(!InstallState::default().owns_the_http_port());
+}

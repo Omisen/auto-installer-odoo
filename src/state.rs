@@ -481,4 +481,26 @@ impl InstallState {
     pub fn record_for(&self, name: &str) -> Option<&StepRecord> {
         self.completed.iter().find(|r| r.name == name)
     }
+
+    /// La porta HTTP è occupata da un servizio **di questa installazione**?
+    ///
+    /// Vero quando il manifesto registra `setup-systemd` come completato: da quel
+    /// momento il servizio Odoo è installato e attivo, quindi è lui a tenere la
+    /// porta.
+    ///
+    /// Serve al **resume** (A-R9-1): il controllo di preflight sulla porta esiste
+    /// per intercettare un conflitto con *qualcun altro*. In un resume, se il
+    /// primo giro era arrivato oltre `setup-systemd`, quel qualcun altro siamo
+    /// noi — e rifiutare l'esecuzione renderebbe irriprendibile proprio
+    /// l'installazione che stiamo riprendendo. Se invece `setup-systemd` non era
+    /// passato, la porta è di un terzo e il conflitto è reale: il controllo va
+    /// fatto.
+    ///
+    /// Si legge dal manifesto e non si deduce dal sistema, per la stessa ragione
+    /// per cui il rollback rilegge i `PreState` invece di rifare gli snapshot:
+    /// "chi tiene la porta" non è osservabile, "chi l'ha aperta" sì — ed è
+    /// scritto.
+    pub fn owns_the_http_port(&self) -> bool {
+        self.record_for("setup-systemd").is_some()
+    }
 }
