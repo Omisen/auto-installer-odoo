@@ -6,6 +6,8 @@
 //! un'implementazione ([`IndicatifReporter`]), selezionata in `main` quando c'è
 //! un TTY; altrimenti si usa [`LogReporter`] o [`NoopReporter`].
 
+use std::sync::Once;
+
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{info, warn};
 
@@ -50,6 +52,7 @@ impl ProgressReporter for LogReporter {
 /// Progress bar / spinner con `indicatif` (TTY interattivo).
 pub struct IndicatifReporter {
     bar: ProgressBar,
+    ticking: Once,
 }
 
 impl IndicatifReporter {
@@ -59,13 +62,31 @@ impl IndicatifReporter {
         {
             bar.set_style(style);
         }
-        bar.enable_steady_tick(std::time::Duration::from_millis(120));
-        Self { bar }
+        Self {
+            bar,
+            ticking: Once::new(),
+        }
+    }
+
+    /// Avvia il ticker al **primo evento**, non alla costruzione.
+    ///
+    /// `enable_steady_tick` fa partire un thread che ridisegna la barra su
+    /// stderr; `inquire` scrive sullo stesso stream, quindi una barra viva
+    /// mentre l'utente risponde a un prompt gli cancella la riga e l'eco della
+    /// risposta finisce altrove. Costruire il reporter non deve prendere
+    /// possesso del terminale: lo prende il primo step, quando le domande sono
+    /// finite per costruzione.
+    fn ensure_ticking(&self) {
+        self.ticking.call_once(|| {
+            self.bar
+                .enable_steady_tick(std::time::Duration::from_millis(120));
+        });
     }
 }
 
 impl ProgressReporter for IndicatifReporter {
     fn step_start(&self, name: &str, _index: usize, _total: usize) {
+        self.ensure_ticking();
         self.bar.set_message(name.to_string());
     }
     fn step_done(&self, _name: &str) {
@@ -75,9 +96,11 @@ impl ProgressReporter for IndicatifReporter {
         self.bar.set_message(format!("fallito: {name}"));
     }
     fn rollback_start(&self, _total: usize) {
+        self.ensure_ticking();
         self.bar.set_message("rollback in corso…".to_string());
     }
     fn undo_start(&self, name: &str) {
+        self.ensure_ticking();
         self.bar.set_message(format!("undo: {name}"));
     }
 }

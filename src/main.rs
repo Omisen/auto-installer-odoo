@@ -88,18 +88,11 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     let mut steps = steps::build_steps();
 
-    // Reporter: barra `indicatif` solo con TTY interattivo e installazione reale;
-    // altrimenti solo log. Il motore dipende dall'astrazione, non da indicatif.
-    let reporter: Box<dyn ProgressReporter> = if interactive && !ctx.dry_run {
-        Box::new(IndicatifReporter::new(steps.len()))
-    } else {
-        Box::new(LogReporter)
-    };
-
     // --- dry-run: mostra il piano, non muta nulla, non persiste stato ---------
+    // Il piano non ha progresso da mostrare: solo log.
     if ctx.dry_run {
         println!("=== PIANO (dry-run) — nessuna modifica al sistema ===");
-        dry_run_plan(&mut steps, &ctx, reporter.as_ref());
+        dry_run_plan(&mut steps, &ctx, &LogReporter);
         println!("=== fine piano (dry-run) ===");
         return Ok(());
     }
@@ -121,6 +114,18 @@ fn run_install(cli: &Cli) -> Result<()> {
     let _lock =
         odoo_installer::lockfile::acquire(Path::new(odoo_installer::lockfile::DEFAULT_LOCK_PATH))
             .map_err(|e| anyhow!(e))?;
+
+    // Reporter: barra `indicatif` solo con TTY interattivo (in dry-run non si
+    // arriva qui). Costruito **qui**, non prima: `IndicatifReporter` avvia un
+    // ticker che ridisegna la barra su stderr, e `inquire` scrive sullo stesso
+    // stream — una barra viva durante un prompt gli cancella la riga sotto il
+    // naso e l'eco della risposta finisce su un'altra riga. Il progresso nasce
+    // quando c'è progresso da mostrare: dopo l'ultima domanda.
+    let reporter: Box<dyn ProgressReporter> = if interactive {
+        Box::new(IndicatifReporter::new(steps.len()))
+    } else {
+        Box::new(LogReporter)
+    };
 
     let mut installer = Installer::new();
     installer
