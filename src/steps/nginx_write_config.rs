@@ -17,8 +17,6 @@ const VHOST_TEMPLATE: &str = include_str!("../../templates/nginx.conf.tpl");
 const SITES_AVAILABLE: &str = "/etc/nginx/sites-available";
 const VHOST_MODE: u32 = 0o644;
 const DEFAULT_CLIENT_MAX: &str = "100m";
-const DEFAULT_CERT_PATH: &str = "/etc/ssl/certs/odoo.crt";
-const DEFAULT_KEY_PATH: &str = "/etc/ssl/private/odoo.key";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NginxWriteConfigSnapshot {
@@ -167,12 +165,13 @@ fn unix_timestamp() -> u64 {
 /// Renderizza il vhost dal template embedded.
 pub fn render_vhost(ctx: &Context) -> String {
     let port = ctx.port.to_string();
-    let replacements: [(&str, &str); 5] = [
+    // Nessun placeholder per i certificati: il vhost non ha un blocco 443, e
+    // i due che c'erano venivano sostituiti dentro righe commentate — davano
+    // l'impressione che TLS fosse configurato da qui (A-V3-6).
+    let replacements: [(&str, &str); 3] = [
         ("{{NGINX_SERVER_NAME}}", ctx.nginx_server_name.as_str()),
         ("{{ODOO_PORT}}", port.as_str()),
         ("{{NGINX_CLIENT_MAX}}", DEFAULT_CLIENT_MAX),
-        ("{{NGINX_CERT_PATH}}", DEFAULT_CERT_PATH),
-        ("{{NGINX_KEY_PATH}}", DEFAULT_KEY_PATH),
     ];
     let mut out = VHOST_TEMPLATE.to_string();
     for (token, value) in replacements {

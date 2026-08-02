@@ -777,3 +777,22 @@ fn the_init_hard_stop_points_at_the_rollback_command() {
         "resta anche l'alternativa manuale: {msg}"
     );
 }
+
+/// A-V3-6: il flag è stato rinominato in ciò che fa, ma il nome storico resta
+/// accettato — vive negli script e nei `.env` dei clienti, e romperli per una
+/// questione di nomi sarebbe un danno maggiore del difetto.
+#[test]
+fn the_https_port_flag_keeps_its_historical_alias() {
+    let nuovo = Cli::parse_from(["odoo-installer", "--with-nginx", "--open-https-port"]);
+    assert!(nuovo.open_https_port);
+
+    // `try_parse_from` e non `parse_from`: se l'alias sparisse, `parse_from`
+    // chiamerebbe `exit(2)` e il test morirebbe senza dire perché — un guardiano
+    // che fallisce senza spiegarsi costringe il prossimo a indagare da zero.
+    let storico = Cli::try_parse_from(["odoo-installer", "--with-nginx", "--enable-ssl"])
+        .expect("`--enable-ssl` deve continuare a essere accettato: è il nome con cui il flag è nato, e vive negli script dei clienti");
+    assert!(storico.open_https_port);
+
+    let assente = Cli::parse_from(["odoo-installer"]);
+    assert!(!assente.open_https_port);
+}

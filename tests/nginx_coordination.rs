@@ -50,7 +50,7 @@ fn full_rollback_restores_default_site_and_removes_only_delta() {
 
     let ctx = Context {
         with_nginx: true,
-        nginx_enable_ssl: true, // desidera 80 + 443 → delta = 443
+        nginx_open_https_port: true, // desidera 80 + 443 → delta = 443
         nginx_server_name: "_".to_string(),
         odoo_version_short: "18".to_string(),
         port: 8069,

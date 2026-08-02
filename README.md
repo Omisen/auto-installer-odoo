@@ -122,7 +122,7 @@ default**.
 | `--logfile` | file di log di Odoo | assente → journal/stdout |
 | `--with-nginx` | reverse proxy Nginx | disattivo |
 | `--server-name` | `server_name` del vhost Nginx | `_` (catch-all) |
-| `--enable-ssl` | blocco SSL nel vhost + porta 443 | disattivo |
+| `--open-https-port` | apre la 443 sul firewall in vista di TLS (**non** configura TLS; alias storico: `--enable-ssl`) | disattivo |
 | `--config <FILE>` | carica un file `.env` (dichiarativo) | — |
 | `--dry-run` | mostra il piano senza mutare nulla | disattivo |
 | `--aggressive-rollback` | in rollback purga anche pacchetti che di norma resterebbero | disattivo |
@@ -157,7 +157,7 @@ letterale). Le chiavi sconosciute producono un warning e vengono ignorate.
 
 Chiavi riconosciute: `ODOO_VERSION`, `ODOO_USER`, `DB_USER`, `DB_PASSWORD`, `ODOO_PORT`, `DB_NAME`,
 `ODOO_INSTALL_DIR`, `ODOO_ADMIN_PASSWD`, `ODOO_LOGFILE`, `WITH_NGINX`, `NGINX_SERVER_NAME`,
-`NGINX_ENABLE_SSL`. (`ODOO_HOME` è costante e viene ignorata.)
+`NGINX_OPEN_HTTPS_PORT` (alias storico `NGINX_ENABLE_SSL`). (`ODOO_HOME` è costante e viene ignorata.)
 
 ```bash
 # configs/production.env
@@ -326,6 +326,17 @@ sudo cat /var/log/odoo-installer.log
   rifiuta l'installazione: comportamento mai bypassato.
 - **Comando `odoo` non globale**: installato solo per l'utente installatore (`~/.local/bin`), non in
   `/usr/local/bin`, per ridurre l'esposizione.
+- **TLS non è configurato dall'installer, ed è deliberato.** Il vhost Nginx generato ascolta solo
+  sulla porta 80. Per HTTPS si usa `certbot --nginx`, che ottiene i certificati e **riscrive il vhost
+  da sé**, aggiungendo il blocco su 443 e il redirect da 80:
+
+  ```bash
+  sudo apt install certbot python3-certbot-nginx
+  sudo certbot --nginx -d odoo.example.com
+  ```
+
+  `--open-https-port` apre soltanto la 443 sul firewall, in vista di quel passaggio. Si chiamava
+  `--enable-ssl`, un nome che prometteva TLS senza fornirlo: il vecchio nome resta accettato.
 
 ### Rigenerare i pin checksum wkhtmltopdf
 

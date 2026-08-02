@@ -17,7 +17,7 @@ use odoo_installer::steps::nginx_write_config::{render_vhost, validate_vhost, Ng
 fn ctx(with_nginx: bool, ssl: bool) -> Context {
     Context {
         with_nginx,
-        nginx_enable_ssl: ssl,
+        nginx_open_https_port: ssl,
         nginx_server_name: "_".to_string(),
         odoo_version_short: "18".to_string(),
         port: 8069,
@@ -497,5 +497,76 @@ fn a_pre_r11_snapshot_still_restores_the_default_site() {
                     && src.as_path() == Path::new("/etc/nginx/sites-available/default")
         )),
         "senza la natura registrata si ricade sul target standard: {ops:?}"
+    );
+}
+
+// --- A-V3-6: il flag dice cosa fa, e il vhost non finge -----------------------
+
+/// **La proprietà che dà il nome al flag.** `--open-https-port` tocca il
+/// firewall e **solo** il firewall: il vhost generato è identico con e senza.
+///
+/// Prima si chiamava `--enable-ssl` e prometteva TLS. Il vhost però non ha né
+/// mai ha avuto un listener su 443 — il blocco era interamente commentato — e i
+/// placeholder dei certificati venivano sostituiti *dentro quei commenti*. Chi
+/// lo passava otteneva una porta aperta verso nulla e la convinzione di avere
+/// TLS: peggio di un flag assente.
+#[test]
+fn opening_the_https_port_does_not_change_the_vhost() {
+    let senza = render_vhost(&ctx(true, false));
+    let con = render_vhost(&ctx(true, true));
+
+    assert_eq!(
+        senza, con,
+        "il flag non deve toccare il vhost: TLS è compito di `certbot --nginx`, \
+         che il vhost lo riscrive da sé"
+    );
+}
+
+/// Il vhost non contiene un blocco 443 — né attivo né commentato — e nessun
+/// riferimento a certificati.
+///
+/// Il blocco commentato non era innocuo: descriveva una configurazione che
+/// nessuno generava, prometteva che *«sarà ignorato da Nginx se il certificato
+/// non esiste»* (falso: nginx rifiuta di partire) e citava `lib/nginx.sh`, un
+/// file dell'era Bash che non esiste più. Un template che dice di sé cose non
+/// vere è documentazione al contrario.
+#[test]
+fn the_vhost_makes_no_tls_promises() {
+    let reso = render_vhost(&ctx(true, true));
+
+    for bugia in [
+        "listen 443",
+        "ssl_certificate",
+        "NGINX_CERT_PATH",
+        "lib/nginx.sh",
+    ] {
+        assert!(
+            !reso.contains(bugia),
+            "il vhost non deve contenere '{bugia}': non configura TLS (A-V3-6)"
+        );
+    }
+    // E resta un vhost valido, senza placeholder residui.
+    validate_vhost(&reso).expect("nessun placeholder residuo");
+    assert!(reso.contains("listen 80"), "il vhost serve la porta 80");
+}
+
+/// Il firewall è l'unico effetto reale, e c'è: la 443 si apre.
+#[test]
+fn opening_the_https_port_opens_443_on_the_firewall() {
+    let cfg = MockConfig {
+        ufw_available: true,
+        ufw_active: true,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxFirewall::with_ops(Box::new(mock));
+    let c = ctx(true, true);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    assert!(
+        ops_of(&log).contains(&Op::UfwAllow("443/tcp".to_string())),
+        "l'unico effetto del flag deve esserci davvero"
     );
 }

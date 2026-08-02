@@ -71,9 +71,17 @@ pub struct Cli {
     #[arg(long, value_name = "NAME")]
     pub server_name: Option<String>,
 
-    /// Abilita SSL nel vhost Nginx e apre la porta 443 sul firewall.
-    #[arg(long)]
-    pub enable_ssl: bool,
+    /// Apre la porta 443 sul firewall, in vista di TLS.
+    ///
+    /// **Non configura TLS**: il vhost generato ascolta solo sulla 80. I
+    /// certificati e il blocco `server` su 443 li mette `certbot --nginx`, che
+    /// riscrive il vhost da sé. Questo flag serve ad avere la porta già aperta
+    /// quando lo farai.
+    ///
+    /// Si chiamava `--enable-ssl`, nome che prometteva ciò che non faceva
+    /// (A-V3-6). Il vecchio nome resta accettato per non rompere gli script.
+    #[arg(long, alias = "enable-ssl")]
+    pub open_https_port: bool,
 
     /// Percorso del logfile Odoo. Se assente, Odoo logga su journal/stdout.
     #[arg(long, value_name = "FILE")]

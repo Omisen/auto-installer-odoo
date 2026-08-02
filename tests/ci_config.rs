@@ -33,6 +33,8 @@ const KNOWN_KEYS: &[&str] = &[
     "ODOO_LOGFILE",
     "WITH_NGINX",
     "NGINX_SERVER_NAME",
+    "NGINX_OPEN_HTTPS_PORT",
+    // Nome storico, ancora riconosciuto: vive nei `.env` dei clienti (A-V3-6).
     "NGINX_ENABLE_SSL",
 ];
 

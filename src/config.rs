@@ -92,7 +92,8 @@ pub struct RawConfig {
     pub logfile: Option<String>,
     pub with_nginx: Option<bool>,
     pub server_name: Option<String>,
-    pub enable_ssl: Option<bool>,
+    /// Apre la 443 sul firewall. Non abilita TLS: vedi `Cli::open_https_port`.
+    pub open_https_port: Option<bool>,
 }
 
 impl RawConfig {
@@ -118,7 +119,11 @@ impl RawConfig {
             // negazione da CLI, esattamente come nel Bash.
             with_nginx: if cli.with_nginx { Some(true) } else { None },
             server_name: cli.server_name.clone(),
-            enable_ssl: if cli.enable_ssl { Some(true) } else { None },
+            open_https_port: if cli.open_https_port {
+                Some(true)
+            } else {
+                None
+            },
         }
     }
 }
@@ -172,7 +177,11 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
             "ODOO_LOGFILE" => raw.logfile = Some(value),
             "WITH_NGINX" => raw.with_nginx = Some(parse_bool(&value)),
             "NGINX_SERVER_NAME" => raw.server_name = Some(value),
-            "NGINX_ENABLE_SSL" => raw.enable_ssl = Some(parse_bool(&value)),
+            // `NGINX_ENABLE_SSL` è il nome storico: continua a funzionare
+            // perché vive nei `.env` dei clienti, ma prometteva TLS (A-V3-6).
+            "NGINX_OPEN_HTTPS_PORT" | "NGINX_ENABLE_SSL" => {
+                raw.open_https_port = Some(parse_bool(&value))
+            }
             "ODOO_HOME" => warn!("ODOO_HOME è una costante fissa, chiave .env ignorata"),
             other => warn!(key = other, "chiave .env sconosciuta ignorata"),
         }
@@ -339,7 +348,9 @@ pub struct ResolvedConfig {
     pub odoo_logfile: Option<PathBuf>,
     pub with_nginx: bool,
     pub nginx_server_name: String,
-    pub nginx_enable_ssl: bool,
+    /// Apre la 443 sul firewall. **Non** abilita TLS nel vhost: quello è
+    /// compito di `certbot --nginx`, che riscrive il vhost da sé (A-V3-6).
+    pub nginx_open_https_port: bool,
 }
 
 /// Sceglie il primo valore presente nella cascata (priorità da sinistra).
@@ -418,10 +429,10 @@ impl ResolvedConfig {
         let nginx_server_name = pick(&cli.server_name, &prompted.server_name, &env.server_name)
             .filter(|s| !s.is_empty())
             .unwrap_or_else(|| "_".to_string());
-        let nginx_enable_ssl = cli
-            .enable_ssl
-            .or(prompted.enable_ssl)
-            .or(env.enable_ssl)
+        let nginx_open_https_port = cli
+            .open_https_port
+            .or(prompted.open_https_port)
+            .or(env.open_https_port)
             .unwrap_or(false);
 
         Ok(ResolvedConfig {
@@ -438,7 +449,7 @@ impl ResolvedConfig {
             odoo_logfile,
             with_nginx,
             nginx_server_name,
-            nginx_enable_ssl,
+            nginx_open_https_port,
         })
     }
 }

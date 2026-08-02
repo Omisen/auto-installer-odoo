@@ -1,20 +1,22 @@
 # =============================================================================
-# templates/nginx.conf.tpl — Reverse proxy Nginx per Odoo 18
-# Placeholder sostituiti da lib/nginx.sh tramite sed:
+# templates/nginx.conf.tpl — Reverse proxy Nginx per Odoo
+# Placeholder sostituiti da `nginx_write_config::render_vhost`:
 #   {{NGINX_SERVER_NAME}}   nome di dominio o IP (es. odoo.example.com)
 #   {{ODOO_PORT}}           porta locale di Odoo (default 8069)
 #   {{NGINX_CLIENT_MAX}}    dimensione massima body upload (default 100m)
-#   {{NGINX_CERT_PATH}}     percorso certificato TLS
-#   {{NGINX_KEY_PATH}}      percorso chiave privata TLS
 # =============================================================================
-
-# ── Redirect HTTP → HTTPS (attivo solo se NGINX_ENABLE_SSL=true) ─────────────
-# Se SSL è disabilitato questo blocco non viene generato nel file finale;
-# il template viene sempre scritto completo e nginx.sh lascia o rimuove
-# questo blocco via sed quando NGINX_ENABLE_SSL != true.
-# Per semplicità mantenere entrambi i blocchi: il secondo server{} su 443
-# sarà ignorato da Nginx se il certificato non esiste — l'importante è che
-# nginx -t passi. In produzione SSL usare Certbot o fornire cert validi.
+#
+# TLS: questo vhost ascolta **solo sulla porta 80**, di proposito.
+#
+# Il modo supportato per ottenere HTTPS è `certbot --nginx`, che ottiene i
+# certificati e **riscrive questo vhost da sé**, aggiungendo il blocco su 443 e
+# il redirect da 80. Generare qui un blocco 443 significherebbe competere con
+# lui — e, se puntasse a certificati inesistenti, `nginx -t` fallirebbe e con
+# esso l'intera installazione.
+#
+# Il flag `--open-https-port` apre la 443 sul firewall in vista di quel
+# passaggio; non tocca questo file. Si chiamava `--enable-ssl` e prometteva
+# quello che non faceva (A-V3-6).
 # =============================================================================
 
 # ── Upstream Odoo ─────────────────────────────────────────────────────────────
@@ -113,24 +115,3 @@ server {
         deny all;
     }
 }
-
-# ── HTTPS (porta 443) — attivare solo con certificati validi ──────────────────
-# server {
-#     listen 443 ssl http2;
-#     listen [::]:443 ssl http2;
-#     server_name {{NGINX_SERVER_NAME}};
-#
-#     ssl_certificate     {{NGINX_CERT_PATH}};
-#     ssl_certificate_key {{NGINX_KEY_PATH}};
-#
-#     ssl_protocols             TLSv1.2 TLSv1.3;
-#     ssl_ciphers               ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384;
-#     ssl_prefer_server_ciphers off;
-#     ssl_session_cache         shared:SSL:10m;
-#     ssl_session_timeout       1d;
-#     ssl_session_tickets       off;
-#     ssl_stapling              on;
-#     ssl_stapling_verify       on;
-#
-#     # (stesse location del blocco HTTP sopra)
-# }

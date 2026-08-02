@@ -47,7 +47,8 @@ pub struct Context {
     /// Nome server/dominio del vhost Nginx (default `_`).
     pub nginx_server_name: String,
     /// Se abilitare SSL nel vhost e aprire la 443 sul firewall.
-    pub nginx_enable_ssl: bool,
+    /// Apre la 443 sul firewall; non abilita TLS (A-V3-6).
+    pub nginx_open_https_port: bool,
     /// Se `true`, `run`/`undo` non devono mutare il sistema né persistere stato.
     pub dry_run: bool,
     /// Se `true`, il rollback purga anche pacchetti che di norma lascerebbe
@@ -87,7 +88,7 @@ impl Context {
             odoo_logfile: config.odoo_logfile,
             with_nginx: config.with_nginx,
             nginx_server_name: config.nginx_server_name,
-            nginx_enable_ssl: config.nginx_enable_ssl,
+            nginx_open_https_port: config.nginx_open_https_port,
             dry_run,
             aggressive_rollback: false,
             state_path,

@@ -40,7 +40,7 @@ impl NginxFirewall {
 
     fn desired_rules(ctx: &Context) -> Vec<&'static str> {
         let mut rules = vec!["80/tcp"];
-        if ctx.nginx_enable_ssl {
+        if ctx.nginx_open_https_port {
             rules.push("443/tcp");
         }
         rules

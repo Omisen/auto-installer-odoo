@@ -337,3 +337,21 @@ fn version_normalization() {
     // Il campo `config` è pubblico e usato: silenzia eventuali warning inutili.
     let _ = config::ODOO_HOME;
 }
+
+/// A-V3-6: anche la chiave `.env` storica resta riconosciuta. Vive nei file di
+/// configurazione già distribuiti ai clienti: ignorarla in silenzio
+/// significherebbe non aprire una porta che l'utente crede aperta.
+#[test]
+fn the_historical_env_key_for_the_https_port_still_works() {
+    let dir = tempfile::tempdir().expect("tempdir");
+
+    let storico = dir.path().join("storico.env");
+    std::fs::write(&storico, "NGINX_ENABLE_SSL=true\n").expect("write");
+    let raw = config::parse_env_file(&storico).expect("parse");
+    assert_eq!(raw.open_https_port, Some(true));
+
+    let nuovo = dir.path().join("nuovo.env");
+    std::fs::write(&nuovo, "NGINX_OPEN_HTTPS_PORT=true\n").expect("write");
+    let raw = config::parse_env_file(&nuovo).expect("parse");
+    assert_eq!(raw.open_https_port, Some(true));
+}

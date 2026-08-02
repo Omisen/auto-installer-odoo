@@ -287,7 +287,7 @@ fn ctx_nginx(state_path: PathBuf, aggressive: bool, ssl: bool) -> Context {
     Context {
         with_nginx: true,
         nginx_server_name: "_".to_string(),
-        nginx_enable_ssl: ssl,
+        nginx_open_https_port: ssl,
         ..ctx(state_path, aggressive)
     }
 }
