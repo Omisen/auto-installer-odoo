@@ -145,6 +145,16 @@ else
   DEFAULT_SITE_BEFORE="assente"
 fi
 [ "$WITH_NGINX" = "true" ] && info "default site nginx prima dell'installazione: $DEFAULT_SITE_BEFORE"
+
+# ufw è ATTIVO? Solo allora `nginx-firewall` fa qualcosa: sui runner di default
+# ufw è installato ma inattivo, e lo step esce subito (A-V3-7 mai esercitato).
+if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+  UFW_ACTIVE=1
+  sudo ufw status | sed 's/^/  ufw· /'
+else
+  UFW_ACTIVE=0
+  [ "$WITH_NGINX" = "true" ] && info "ufw non attivo: le verifiche sul firewall verranno saltate"
+fi
 set +e
 sudo "$BIN" --config "$ENV_FILE"
 INSTALL_RC=$?
@@ -265,6 +275,21 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
 
   # Il default site è stato tolto di mezzo: è ciò che libera la porta 80.
   refute "il default site è stato disattivato" sudo test -e "$DEFAULT_SITE"
+
+  # Firewall: la porta 80 dev'essere stata aperta (A-V3-7).
+  #
+  # È la verifica che il confronto per token funziona su una macchina vera. Con
+  # il vecchio `status.contains("80/tcp")`, la presenza di `8080/tcp` faceva
+  # risultare la 80 già aperta: non entrava nel delta, non veniva aperta, e
+  # nginx restava irraggiungibile **senza alcun errore**.
+  if [ "$UFW_ACTIVE" = "1" ]; then
+    if sudo ufw status | awk '{print $1}' | grep -qx "80/tcp"; then
+      ok "regola ufw 80/tcp aperta (A-V3-7: non confusa con 8080/tcp)"
+    else
+      fail "la porta 80 NON è stata aperta su ufw: nginx resta irraggiungibile"
+      sudo ufw status || true
+    fi
+  fi
 
   # E la 80 serve Odoo attraverso il proxy: è l'unica prova che l'intera catena
   # (vhost + reload + upstream) funziona davvero.
@@ -493,6 +518,22 @@ configurazione che A-V3-5 descrive"
       fi
       ;;
   esac
+
+  # Firewall dopo il rollback: si chiude ciò che abbiamo aperto, e **solo**
+  # quello. Una regola preesistente del cliente non si tocca mai — è la stessa
+  # regola del delta apt, applicata al firewall.
+  if [ "$UFW_ACTIVE" = "1" ]; then
+    if sudo ufw status | awk '{print $1}' | grep -qx "80/tcp"; then
+      fail "la regola 80/tcp aperta da noi è rimasta dopo il rollback"
+    else
+      ok "la regola ufw 80/tcp è stata richiusa"
+    fi
+    if sudo ufw status | awk '{print $1}' | grep -qx "8080/tcp"; then
+      ok "la regola preesistente 8080/tcp è intatta"
+    else
+      fail "il rollback ha rimosso una regola ufw che non aveva aperto lui"
+    fi
+  fi
 
   # nginx sopravvive e resta servibile: il rollback non deve lasciare il
   # servizio del cliente con una config rotta (A1.4).

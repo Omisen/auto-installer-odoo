@@ -267,9 +267,20 @@ jobs:
   # costerebbe quaranta minuti per ripetere le stesse asserzioni.
   # ---------------------------------------------------------------------------
   nginx:
-    name: install + rollback con Nginx (ubuntu-24.04)
+    name: install + rollback con Nginx (default site ${{ matrix.default_site }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      # Le DUE nature del default site (A-V3-5). Un ciclo installazione+rollback
+      # ne esercita una sola, e sono trattate da rami diversi:
+      #   symlink       → si rimuove e si ricrea verso il target REGISTRATO;
+      #   regular-file  → si sposta in un backup e l'undo lo rimette.
+      # Il secondo è quello grave — l'unico punto dell'audit in cui si *perde*
+      # configurazione del cliente — e finché non girava era coperto solo da
+      # mock. In matrice i due job vanno in parallelo: il wall-clock non cambia.
+      matrix:
+        default_site: [symlink, regular-file]
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -286,16 +297,49 @@ jobs:
       - name: Indice apt aggiornato (ambiente di test esplicito)
         run: sudo apt-get update
 
-      # Il default site della distro dev'esserci **davvero**: è l'artefatto di
-      # terzi che il rollback deve rimettere a posto (A-V3-5), e senza di esso
-      # metà delle asserzioni non avrebbe nulla da osservare. Sui runner nginx è
+      # Il default site dev'esserci **davvero**: è l'artefatto di terzi che il
+      # rollback deve rimettere a posto (A-V3-5), e senza di esso metà delle
+      # asserzioni non avrebbe nulla da osservare. Sui runner nginx è
       # preinstallato ma la configurazione varia: lo si mette in uno stato noto.
-      - name: Nginx con il default site attivo (stato di partenza noto)
+      - name: Nginx attivo con il default site (${{ matrix.default_site }})
         run: |
           sudo apt-get install -y nginx
-          sudo ln -sfn /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+          sudo rm -f /etc/nginx/sites-enabled/default
+
+          if [ "${{ matrix.default_site }}" = "symlink" ]; then
+            # Il caso della distribuzione: un link a sites-available/default.
+            sudo ln -sfn /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+          else
+            # Il caso che perde dati: un amministratore che ha scritto il file
+            # direttamente in sites-enabled. `symlink_exists` rispondeva `true`
+            # anche qui e `remove_symlink` è `fs::remove_file`: il contenuto
+            # veniva distrutto e l'undo restituiva un symlink al default della
+            # distro. Il marcatore serve a provare che torni **quel** file.
+            sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+            printf '\n# marcatore-del-cliente-%s\n' "$GITHUB_RUN_ID" | sudo tee -a /etc/nginx/sites-enabled/default >/dev/null
+            sudo sha256sum /etc/nginx/sites-enabled/default | sudo tee /tmp/default-site.sha256
+          fi
+
           sudo systemctl restart nginx
           echo "default site:"; ls -l /etc/nginx/sites-enabled/
+
+      # ufw ATTIVO: è l'unico modo di esercitare `nginx-firewall`, che sui runner
+      # esce sempre subito perché ufw è installato ma inattivo — A-V3-7 non era
+      # mai stato provato in campo.
+      #
+      # La regola `8080/tcp` è una **trappola deliberata**: con il confronto per
+      # sottostringa di prima, `"80/tcp"` risultava presente perché contenuto in
+      # `"8080/tcp"`, la porta 80 non entrava nel delta e non veniva aperta. Il
+      # sintomo sarebbe stato «Odoo non risponde sulla 80», non un errore.
+      - name: ufw attivo, con la trappola 8080/tcp (A-V3-7)
+        run: |
+          sudo apt-get install -y ufw
+          # Prima le regole, poi l'enable: `--force` mette default deny in
+          # ingresso, e senza queste il runner si chiuderebbe fuori da sé.
+          sudo ufw allow OpenSSH || sudo ufw allow 22/tcp
+          sudo ufw allow 8080/tcp
+          sudo ufw --force enable
+          sudo ufw status verbose
 
       - name: Installazione reale + rollback verificato (con Nginx)
         env:
@@ -303,15 +347,30 @@ jobs:
           ENV_FILE: configs/ci-nginx.env
         run: bash scripts/ci/integration-test.sh
 
+      # Il file del cliente dev'essere tornato **identico**, non "di solito
+      # giusto": è la differenza fra ripristinare e rimpiazzare.
+      - name: Il default site regolare è tornato byte-per-byte
+        if: matrix.default_site == 'regular-file'
+        run: |
+          sudo test -f /etc/nginx/sites-enabled/default \
+            || { echo "::error::il file del cliente non è tornato"; exit 1; }
+          sudo test ! -L /etc/nginx/sites-enabled/default \
+            || { echo "::error::era un FILE, è tornato un symlink (A-V3-5)"; exit 1; }
+          sudo sha256sum -c /tmp/default-site.sha256 \
+            || { echo "::error::il contenuto è cambiato: configurazione del cliente persa"; exit 1; }
+          sudo grep -q "marcatore-del-cliente" /etc/nginx/sites-enabled/default \
+            || { echo "::error::il marcatore è sparito: non è il file originale"; exit 1; }
+          echo "✔ il file del cliente è tornato identico"
+
       - name: Log dell'installer, se presente
         if: always()
-        run: sudo cp /var/log/odoo-installer.log installer-nginx.log || true
+        run: sudo cp /var/log/odoo-installer.log "installer-nginx-${{ matrix.default_site }}.log" || true
 
       - name: Carica il log
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: installer-log-nginx
+          name: installer-log-nginx-${{ matrix.default_site }}
           path: installer-*.log
           if-no-files-found: ignore
 
