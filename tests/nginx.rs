@@ -3,7 +3,7 @@
 mod common;
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
 use odoo_installer::context::Context;
@@ -311,4 +311,191 @@ fn vhost_rendering_has_no_residue() {
     assert!(!vhost.contains("{{"), "nessun placeholder residuo");
     assert!(vhost.contains("127.0.0.1:8069"), "porta Odoo nel proxy");
     validate_vhost(&vhost).expect("vhost valido");
+}
+
+// --- A-V3-5: la natura del default site, non solo la sua esistenza ----------
+
+use odoo_installer::steps::nginx_enable_site::{DefaultSite, NginxEnableSiteSnapshot};
+use odoo_installer::system_ops::PathKind;
+
+fn enable_site_snapshot(step: &NginxEnableSite) -> NginxEnableSiteSnapshot {
+    serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile")
+}
+
+/// **Il ripristino dev'essere fedele.** Se il default site del cliente puntava
+/// a un vhost con un altro nome, l'undo deve riportarlo **là**, non al target
+/// standard della distribuzione.
+///
+/// Prima lo snapshot era un `bool` e l'undo ricreava sempre un symlink verso
+/// `/etc/nginx/sites-available/default`: la config non tornava com'era, tornava
+/// com'è *di solito*. Per un progetto che ripristina il `.bashrc` byte-per-byte
+/// era un doppio standard.
+#[test]
+fn a_non_standard_default_site_is_restored_to_its_own_target() {
+    let cliente = PathBuf::from("/etc/nginx/sites-available/vhost-del-cliente");
+    let cfg = MockConfig {
+        default_site_exists: true,
+        default_site_kind: Some(PathKind::Symlink {
+            target: cliente.clone(),
+        }),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxEnableSite::with_ops(Box::new(mock));
+    let c = ctx(true, false);
+
+    step.snapshot(&c).expect("snapshot");
+    assert_eq!(
+        enable_site_snapshot(&step).default_site,
+        Some(DefaultSite::Symlink {
+            target: cliente.clone()
+        }),
+        "lo snapshot deve registrare il target, non solo l'esistenza"
+    );
+
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    let ops = ops_of(&log);
+    assert!(
+        ops.iter().any(|o| matches!(
+            o,
+            Op::CreateSymlink { src, link } if *src == cliente && *link == default_site()
+        )),
+        "l'undo deve ricreare il symlink verso il target ORIGINALE: {ops:?}"
+    );
+    assert!(
+        !ops.iter().any(|o| matches!(
+            o,
+            Op::CreateSymlink { src, link }
+                if *link == default_site()
+                    && src.as_path() == Path::new("/etc/nginx/sites-available/default")
+        )),
+        "nessun ripristino verso il target standard: la config del cliente non è quella: {ops:?}"
+    );
+}
+
+/// **Un file regolare non si cancella.** `symlink_exists` rispondeva `true`
+/// anche per un file vero e `remove_symlink` è `fs::remove_file`: un
+/// amministratore che avesse scritto `sites-enabled/default` come file si vedeva
+/// il contenuto distrutto, e l'undo gli restituiva un symlink al default della
+/// distro. Non un residuo: una perdita di configurazione.
+#[test]
+fn a_regular_default_site_is_moved_to_a_backup_never_deleted() {
+    let cfg = MockConfig {
+        default_site_exists: true,
+        default_site_kind: Some(PathKind::RegularFile),
+        // Il backup, una volta creato, esiste: senza questo l'undo lo
+        // troverebbe assente e si asterrebbe (comportamento corretto, ma qui
+        // stiamo verificando il ripristino).
+        path_exists: true,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxEnableSite::with_ops(Box::new(mock));
+    let c = ctx(true, false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let ops = ops_of(&log);
+    assert!(
+        !ops.iter()
+            .any(|o| matches!(o, Op::RemoveSymlink(p) if *p == default_site())),
+        "un file regolare non va MAI rimosso: {ops:?}"
+    );
+    let spostato = ops
+        .iter()
+        .find_map(|o| match o {
+            Op::MoveFile { src, dst } if *src == default_site() => Some(dst.clone()),
+            _ => None,
+        })
+        .expect("il file va spostato in un backup");
+
+    // Il backup non può restare in sites-enabled: nginx include `sites-enabled/*`
+    // — ogni file, non solo i .conf — quindi verrebbe ricaricato e la porta 80
+    // resterebbe occupata. Sarebbe lo stesso difetto con un altro nome.
+    assert!(
+        !spostato.starts_with("/etc/nginx/sites-enabled"),
+        "il backup non deve restare dove nginx lo ricaricherebbe: {}",
+        spostato.display()
+    );
+
+    // E l'undo lo rimette esattamente dov'era.
+    step.undo(&c).expect("undo");
+    let ops = ops_of(&log);
+    assert!(
+        ops.iter().any(|o| matches!(
+            o,
+            Op::MoveFile { src, dst } if *src == spostato && *dst == default_site()
+        )),
+        "l'undo deve rimettere il file al suo posto: {ops:?}"
+    );
+}
+
+/// Directory (o symlink illeggibile) al posto del default site: non sappiamo
+/// trattarlo, quindi non lo tocchiamo. Fail-closed: meglio una porta 80 occupata
+/// e un avviso che una rimozione alla cieca.
+#[test]
+fn an_unknown_default_site_is_left_alone() {
+    let cfg = MockConfig {
+        default_site_exists: true,
+        default_site_kind: Some(PathKind::Other),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxEnableSite::with_ops(Box::new(mock));
+    let c = ctx(true, false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    let ops = ops_of(&log);
+    assert!(
+        !ops.iter().any(|o| matches!(
+            o,
+            Op::RemoveSymlink(p) | Op::MoveFile { src: p, .. } if *p == default_site()
+        )),
+        "su qualcosa che non sappiamo trattare non si agisce: {ops:?}"
+    );
+}
+
+/// Retrocompatibilità: uno stato persistito **prima** della R11 non ha la natura
+/// del default site, solo il `bool`. Deve restare consumabile — e ricadere sul
+/// comportamento storico, che è il meglio ricavabile da quell'informazione.
+///
+/// Renderlo illeggibile significherebbe lasciare la porta 80 senza il default
+/// site che avevamo tolto: la stessa cura di retrocompatibilità dell'
+/// `InstallConfig` in R4.
+#[test]
+fn a_pre_r11_snapshot_still_restores_the_default_site() {
+    let legacy = serde_json::json!({
+        "link": "CreatedByUs",
+        "default_site_existed": true
+    });
+
+    let (mock, log) = MockSystemOps::new(MockConfig::default());
+    let mut step = NginxEnableSite::with_ops(Box::new(mock));
+    step.rehydrate(&legacy)
+        .expect("uno stato pre-R11 resta leggibile");
+
+    let snap = enable_site_snapshot(&step);
+    assert!(snap.default_site_existed);
+    assert_eq!(
+        snap.default_site, None,
+        "il campo nuovo resta assente: è ciò che segnala uno stato vecchio"
+    );
+
+    step.undo(&ctx(true, false)).expect("undo");
+    let ops = ops_of(&log);
+    assert!(
+        ops.iter().any(|o| matches!(
+            o,
+            Op::CreateSymlink { src, link }
+                if *link == default_site()
+                    && src.as_path() == Path::new("/etc/nginx/sites-available/default")
+        )),
+        "senza la natura registrata si ricade sul target standard: {ops:?}"
+    );
 }

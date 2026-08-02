@@ -17,6 +17,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StepError;
 
+/// Che cosa c'è a un path, guardato **senza seguire i symlink**.
+///
+/// Esiste perché `symlink_exists` risponde `true` a troppe domande diverse: un
+/// symlink, un file regolare e una directory sono tutti «esiste», ma solo il
+/// primo si può rimuovere e ricreare identico. Distinguere è la differenza fra
+/// ripristinare la configurazione di un cliente e distruggerla (A-V3-5).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum PathKind {
+    /// Non c'è nulla.
+    Absent,
+    /// Un link simbolico, con il target che punta *così com'è scritto*.
+    Symlink { target: PathBuf },
+    /// Un file regolare: ha un contenuto, e quel contenuto è di qualcuno.
+    RegularFile,
+    /// Directory, socket, device… o un symlink il cui target non è leggibile.
+    /// Non sappiamo trattarlo: chi lo riceve deve astenersi.
+    Other,
+}
+
 /// Owner numerico di un path (uid/gid), serializzabile per la persistenza.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerId {
@@ -451,7 +470,18 @@ pub trait SystemOps {
     /// Rimuove un symlink. Idempotente (assente → no-op).
     fn remove_symlink(&self, link: &Path) -> Result<(), StepError>;
     /// `true` se esiste (anche dangling: `test -e`/`test -L`).
+    ///
+    /// **Attenzione:** risponde `true` anche per un **file regolare** o una
+    /// directory — usa `symlink_metadata`, che guarda il path, non la sua natura.
+    /// Se la natura conta, usa [`SystemOps::path_kind`]: confondere le due cose è
+    /// costato la distruzione di un file di configurazione del cliente (A-V3-5).
     fn symlink_exists(&self, link: &Path) -> bool;
+    /// Che cosa c'è a questo path, **senza seguire i symlink**.
+    ///
+    /// Serve dove la differenza fra «un symlink» e «un file vero» cambia ciò che
+    /// è lecito fare: un symlink si può rimuovere e ricreare identico, un file
+    /// regolare contiene dati che vanno preservati.
+    fn path_kind(&self, path: &Path) -> PathKind;
     /// `ufw` è installato?
     fn ufw_available(&self) -> bool;
     /// `ufw` è attivo (`Status: active`)?
@@ -1059,6 +1089,25 @@ impl SystemOps for RealSystemOps {
 
     fn symlink_exists(&self, link: &Path) -> bool {
         link.symlink_metadata().is_ok()
+    }
+
+    fn path_kind(&self, path: &Path) -> PathKind {
+        let Ok(meta) = path.symlink_metadata() else {
+            return PathKind::Absent;
+        };
+        if meta.file_type().is_symlink() {
+            // Un link il cui target non si legge non è ricreabile identico:
+            // trattarlo come "non so cos'è" è meglio che ricrearlo sbagliato.
+            return match std::fs::read_link(path) {
+                Ok(target) => PathKind::Symlink { target },
+                Err(_) => PathKind::Other,
+            };
+        }
+        if meta.is_file() {
+            PathKind::RegularFile
+        } else {
+            PathKind::Other
+        }
     }
 
     fn ufw_available(&self) -> bool {

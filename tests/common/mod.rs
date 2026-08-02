@@ -16,7 +16,9 @@ use std::sync::{Arc, Mutex};
 
 use odoo_installer::error::StepError;
 use odoo_installer::progress::ProgressReporter;
-use odoo_installer::system_ops::{Downloader, OdooSourceState, OwnerId, SystemOps, UserSpec};
+use odoo_installer::system_ops::{
+    Downloader, OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec,
+};
 
 /// Operazione mutante registrata dal mock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,6 +177,13 @@ pub struct MockConfig {
     pub real_fs: bool,
     /// Nginx: il default site (`sites-enabled/default`) esiste?
     pub default_site_exists: bool,
+    /// Nginx: **cosa** c'è al posto del default site (A-V3-5).
+    ///
+    /// `None` = coerente con `default_site_exists`: un symlink al target
+    /// standard se esiste, altrimenti assente. Si valorizza esplicitamente per
+    /// modellare i casi che il `bool` non sapeva distinguere — un file regolare,
+    /// un symlink verso un target non standard.
+    pub default_site_kind: Option<PathKind>,
     /// Nginx: il nostro symlink `sites-enabled/odoo<N>` esiste già?
     pub our_link_exists: bool,
     /// Firewall: ufw installato / attivo, e regole già presenti.
@@ -229,6 +238,7 @@ impl Default for MockConfig {
             db_initialized: false,
             real_fs: false,
             default_site_exists: false,
+            default_site_kind: None,
             our_link_exists: false,
             ufw_available: false,
             ufw_active: false,
@@ -536,6 +546,27 @@ impl SystemOps for MockSystemOps {
             self.cfg.default_site_exists
         } else {
             self.cfg.our_link_exists
+        }
+    }
+    fn path_kind(&self, path: &Path) -> PathKind {
+        if !path.ends_with("default") {
+            return if self.cfg.our_link_exists {
+                PathKind::Symlink {
+                    target: PathBuf::from("/etc/nginx/sites-available/odoo18"),
+                }
+            } else {
+                PathKind::Absent
+            };
+        }
+        if let Some(kind) = &self.cfg.default_site_kind {
+            return kind.clone();
+        }
+        if self.cfg.default_site_exists {
+            PathKind::Symlink {
+                target: PathBuf::from("/etc/nginx/sites-available/default"),
+            }
+        } else {
+            PathKind::Absent
         }
     }
     fn ufw_available(&self) -> bool {

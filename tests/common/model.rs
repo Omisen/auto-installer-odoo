@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use odoo_installer::error::StepError;
-use odoo_installer::system_ops::{OdooSourceState, OwnerId, SystemOps, UserSpec};
+use odoo_installer::system_ops::{OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
 
 /// Stato del sistema modellato. `PartialEq` per confrontare inizio/fine.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -205,6 +205,23 @@ impl SystemOps for SystemModel {
     }
     fn symlink_exists(&self, link: &Path) -> bool {
         self.state.lock().expect("l").symlinks.contains(link)
+    }
+    fn path_kind(&self, path: &Path) -> PathKind {
+        let st = self.state.lock().expect("l");
+        if st.symlinks.contains(path) {
+            // Il modello non traccia il target dei symlink: per il default site
+            // vale quello standard, che è ciò che una macchina reale ha.
+            return PathKind::Symlink {
+                target: std::path::PathBuf::from("/etc/nginx/sites-available/default"),
+            };
+        }
+        if st.file_contents.contains_key(path) {
+            return PathKind::RegularFile;
+        }
+        if st.paths.contains(path) {
+            return PathKind::Other;
+        }
+        PathKind::Absent
     }
     fn ufw_available(&self) -> bool {
         self.state.lock().expect("l").ufw_available
