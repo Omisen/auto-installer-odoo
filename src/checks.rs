@@ -189,6 +189,35 @@ pub fn check_os_from(path: &Path) -> Result<OsInfo, CheckError> {
     Ok(info)
 }
 
+/// L'ultima Ubuntu su cui la CI di integrazione installa davvero.
+pub const NEWEST_TESTED_UBUNTU: (u32, u32) = (24, 4);
+/// L'ultima Debian su cui la CI di integrazione gira davvero (job `container`).
+pub const NEWEST_TESTED_DEBIAN: (u32, u32) = (12, 0);
+
+/// La release è **più recente** dell'ultima che abbiamo davvero provato?
+///
+/// Le soglie di [`validate_os`] sono aperte verso l'alto, e devono restarci: un
+/// rifiuto senza prova blocca il caso buono, e un'installazione impedita è un
+/// danno certo mentre quello evitato è ipotetico (la lezione di A5.1-bis). Ma
+/// «accettiamo» non deve voler dire «tacciamo»: chi installa su Ubuntu 26.04 o
+/// Debian 13 ha diritto di sapere che quella release non è fra quelle su cui
+/// giriamo la CI, perché è l'informazione che gli serve quando qualcosa va
+/// storto (A5.3).
+///
+/// Pura: la soglia superiore si verifica senza avere quell'OS sotto mano.
+pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
+    let (major, minor) = parse_version(version);
+    let (tested_major, tested_minor) = match id {
+        "ubuntu" => NEWEST_TESTED_UBUNTU,
+        "debian" => NEWEST_TESTED_DEBIAN,
+        // Una distribuzione che non riconosciamo è già stata rifiutata da
+        // `validate_os`: qui non ci arriva, e inventarle una soglia sarebbe
+        // un ramo che non può eseguire.
+        _ => return false,
+    };
+    (major, minor) > (tested_major, tested_minor)
+}
+
 /// Applica le soglie di versione minima: Ubuntu ≥ 22.04, Debian ≥ 11.
 pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
     let (major, minor) = parse_version(&info.version);
@@ -235,6 +264,16 @@ pub fn check_os() -> Result<OsInfo, CheckError> {
         codename = ?info.codename,
         "✔ OS supportato"
     );
+    if is_newer_than_tested(&info.id, &info.version) {
+        warn!(
+            os = %info.id,
+            version = %info.version,
+            "questa release è più recente di quelle su cui l'installer viene provato \
+             (Ubuntu 24.04, Debian 12): l'installazione prosegue, ma nomi di pacchetti e \
+             pacchetto wkhtmltopdf potrebbero non essere quelli giusti. Se qualcosa non \
+             torna, è il primo posto dove guardare."
+        );
+    }
     Ok(info)
 }
 

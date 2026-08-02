@@ -206,3 +206,65 @@ fn the_integration_script_is_executable_and_syntactically_valid() {
         .expect("bash deve essere disponibile");
     assert!(status.success(), "sintassi non valida in {CI_SCRIPT}");
 }
+
+// --- A5.3: le costanti "ultima release provata" seguono la CI vera ----------
+
+const WORKFLOW: &str = ".github/workflows/integration.yml";
+
+/// `NEWEST_TESTED_UBUNTU` / `NEWEST_TESTED_DEBIAN` dicono all'utente su cosa
+/// l'installer viene provato davvero. Se divergessero dalla matrice della CI,
+/// l'avviso mentirebbe in una delle due direzioni: tacerebbe su una release non
+/// provata, o allarmerebbe su una che proviamo.
+///
+/// La fonte di verità resta il workflow; queste costanti la inseguono, e questo
+/// test lo rende obbligatorio invece che auspicabile.
+#[test]
+fn the_newest_tested_releases_match_the_ci_matrix() {
+    use odoo_installer::checks::{NEWEST_TESTED_DEBIAN, NEWEST_TESTED_UBUNTU};
+
+    let wf = std::fs::read_to_string(WORKFLOW).expect("il workflow di integrazione deve esistere");
+
+    // Ubuntu: `os: [ubuntu-22.04, ubuntu-24.04]` più i `runs-on:` dei job
+    // singoli, che non passano dalla matrice.
+    let ubuntu_max = versions_in(&wf, "ubuntu-")
+        .into_iter()
+        .max()
+        .expect("la CI deve girare su almeno una Ubuntu");
+    assert_eq!(
+        ubuntu_max, NEWEST_TESTED_UBUNTU,
+        "la CI gira su Ubuntu {ubuntu_max:?} ma la costante dice {NEWEST_TESTED_UBUNTU:?}: \
+         l'avviso su release non testate direbbe il falso"
+    );
+
+    // Debian: `image: ["debian:12", "debian:11"]`.
+    let debian_max = versions_in(&wf, "debian:")
+        .into_iter()
+        .max()
+        .expect("la CI deve girare su almeno una Debian");
+    assert_eq!(
+        debian_max, NEWEST_TESTED_DEBIAN,
+        "la CI gira su Debian {debian_max:?} ma la costante dice {NEWEST_TESTED_DEBIAN:?}"
+    );
+}
+
+/// Tutte le versioni che seguono `prefisso` nel testo, come `(major, minor)`.
+fn versions_in(text: &str, prefisso: &str) -> Vec<(u32, u32)> {
+    let mut out = Vec::new();
+    for (_, resto) in text
+        .match_indices(prefisso)
+        .map(|(i, m)| (i, &text[i + m.len()..]))
+    {
+        let numero: String = resto
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '.')
+            .collect();
+        if numero.is_empty() {
+            continue;
+        }
+        let mut parti = numero.split('.');
+        let major = parti.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parti.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        out.push((major, minor));
+    }
+    out
+}

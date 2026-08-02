@@ -4,8 +4,8 @@ use std::io::Write;
 use std::path::Path;
 
 use odoo_installer::checks::{
-    check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user, ports_to_check,
-    CheckError,
+    check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user,
+    is_newer_than_tested, ports_to_check, validate_os, CheckError, OsInfo,
 };
 
 fn write_os_release(dir: &Path, body: &str) -> std::path::PathBuf {
@@ -176,4 +176,56 @@ fn an_occupied_port_still_stops_the_installation() {
         check_ports(porta, false, false).is_err(),
         "una porta occupata da terzi deve fermare l'installazione"
     );
+}
+
+// --- A5.3: accettare una release non testata, ma dirlo ----------------------
+
+/// Le soglie di `validate_os` sono aperte verso l'alto — e devono restarci: un
+/// rifiuto senza prova blocca il caso buono, e un'installazione impedita è un
+/// danno certo mentre quello evitato è ipotetico (lezione di A5.1-bis).
+///
+/// Ma «accettiamo» non deve voler dire «tacciamo»: su una release più recente di
+/// quelle che proviamo davvero, l'utente ha diritto di saperlo — è
+/// l'informazione che gli serve quando qualcosa va storto.
+#[test]
+fn a_release_newer_than_the_tested_ones_is_flagged() {
+    // Ubuntu: 24.04 è l'ultima provata.
+    assert!(!is_newer_than_tested("ubuntu", "22.04"));
+    assert!(!is_newer_than_tested("ubuntu", "24.04"));
+    assert!(is_newer_than_tested("ubuntu", "24.10"));
+    assert!(is_newer_than_tested("ubuntu", "26.04"));
+
+    // Debian: 12 è l'ultima provata.
+    assert!(!is_newer_than_tested("debian", "11"));
+    assert!(!is_newer_than_tested("debian", "12"));
+    assert!(
+        is_newer_than_tested("debian", "13"),
+        "Debian 13 supera le soglie e va segnalata: è lo stesso scenario che in \
+         A5.2 si prendeva un pacchetto Ubuntu"
+    );
+}
+
+/// Restare **accettate**: la segnalazione è un avviso, non un rifiuto.
+#[test]
+fn a_newer_release_is_still_accepted() {
+    for (id, version) in [("ubuntu", "26.04"), ("debian", "13")] {
+        let info = OsInfo {
+            id: id.to_string(),
+            version: version.to_string(),
+            codename: None,
+        };
+        assert!(
+            validate_os(&info).is_ok(),
+            "{id} {version} dev'essere accettata: bloccarla sarebbe un danno certo \
+             per evitarne uno ipotetico"
+        );
+        assert!(is_newer_than_tested(id, version), "…ma con un avviso");
+    }
+}
+
+/// Una distribuzione che non trattiamo è già rifiutata da `validate_os`: darle
+/// una soglia superiore sarebbe un ramo che non può eseguire.
+#[test]
+fn an_unsupported_distribution_has_no_upper_threshold() {
+    assert!(!is_newer_than_tested("fedora", "99"));
 }

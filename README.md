@@ -26,10 +26,10 @@ servizio systemd e (opzionale) Nginx.
 
 | Requisito | Dettaglio |
 |-----------|-----------|
-| OS | Ubuntu ≥ 22.04 **o** Debian ≥ 11 |
+| OS | Ubuntu ≥ 22.04 **o** Debian ≥ 11 — provati in CI fino a **Ubuntu 24.04** e **Debian 12**; una release più recente viene accettata con un avviso, non rifiutata |
 | Privilegi | utente normale con `sudo` (non login diretto come root) |
 | Disk | ≥ 5 GB liberi (override `MIN_DISK_GB`) |
-| Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx |
+| Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx — a meno che a tenerle non sia già Nginx, nel qual caso non è un conflitto |
 | Installazione | **binario precompilato** dalle [release](../../releases/latest), oppure build da sorgente (toolchain Rust `cargo`) |
 
 `ODOO_HOME` è **costante** `/opt/odoo` (non sovrascrivibile).

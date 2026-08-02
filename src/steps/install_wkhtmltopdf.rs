@@ -31,28 +31,54 @@ pub struct CodenameMapping {
     pub fallback: bool,
 }
 
-/// Mappa codename → suffisso pacchetto (fallback `jammy` per gli sconosciuti).
+/// Mappa codename → suffisso pacchetto, con **fallback per famiglia** (A5.2).
 ///
 /// I suffissi ammessi sono **solo** quelli per cui la release `0.12.6.1-3`
 /// pubblica davvero un `.deb` amd64: `jammy`, `bullseye`, `bookworm`. In
 /// particolare **non** esiste un `focal_amd64.deb` in questa release, e
 /// `focal` (Ubuntu 20.04) è comunque già rifiutato a monte da
-/// [`crate::checks::validate_os`] (richiede Ubuntu ≥ 22.04): non ha quindi un
-/// ramo dedicato e, nel caso teorico arrivasse qui, cade nel fallback `jammy`
-/// come ogni altro codename sconosciuto.
-pub fn map_codename(codename: Option<&str>) -> CodenameMapping {
+/// [`crate::checks::validate_os`] (richiede Ubuntu ≥ 22.04).
+///
+/// # Il fallback segue la famiglia dell'OS, non un default unico
+///
+/// Prima **ogni** codename sconosciuto ricadeva su `jammy`, che è un pacchetto
+/// *Ubuntu*. Il caso non era teorico come sembrava: Debian 13 (`trixie`) supera
+/// il controllo di versione — le soglie sono aperte verso l'alto — e sarebbe
+/// arrivato qui a prendersi un `.deb` costruito per Ubuntu 22.04, con le
+/// librerie di sistema di un'altra distribuzione. Un fallback che ignora la
+/// famiglia non è un ripiego prudente: è la scelta sbagliata travestita da
+/// default.
+///
+/// Ora un codename Ubuntu ignoto ricade su `jammy` e uno Debian su `bookworm`
+/// — in entrambi i casi il pacchetto più recente che abbiamo *per quella
+/// famiglia*. Se nemmeno la famiglia è nota, resta `jammy`: è l'unico ripiego
+/// possibile, e il `fallback: true` lo rende visibile nel log.
+///
+/// **Perché un ripiego e non un rifiuto.** È la lezione di A5.1-bis: un rifiuto
+/// senza prova blocca il caso buono, e un'installazione impedita è un danno
+/// certo mentre quello evitato è ipotetico. Il pin TOFU resta comunque
+/// fail-closed sul contenuto — quello che scarichiamo è verificato, quale che
+/// sia il suffisso scelto.
+pub fn map_codename(os_id: Option<&str>, codename: Option<&str>) -> CodenameMapping {
     let mapped = |s: &str| CodenameMapping {
         suffix: s.to_string(),
         fallback: false,
     };
+    let fallback = |s: &str| CodenameMapping {
+        suffix: s.to_string(),
+        fallback: true,
+    };
     match codename {
-        // Nessun pacchetto native: jammy è compatibile (mapping esplicito).
+        // Nessun pacchetto nativo: jammy è compatibile (mapping esplicito).
         Some("noble") | Some("mantic") | Some("lunar") | Some("jammy") => mapped("jammy"),
         Some("bookworm") => mapped("bookworm"),
         Some("bullseye") => mapped("bullseye"),
-        _ => CodenameMapping {
-            suffix: "jammy".to_string(),
-            fallback: true,
+        // Codename ignoto: si sceglie il pacchetto più recente della **sua**
+        // famiglia. `validate_os` ha già escluso le distribuzioni che non
+        // sappiamo trattare, quindi qui `os_id` è ubuntu o debian.
+        _ => match os_id {
+            Some("debian") => fallback("bookworm"),
+            _ => fallback("jammy"),
         },
     }
 }
@@ -147,9 +173,16 @@ impl InstallWkhtmltopdf {
     /// Scarica, **verifica il checksum**, installa. Pulisce sempre il temp.
     fn download_verify_install(&self, ctx: &Context) -> Result<(), StepError> {
         let codename = ctx.os_info.as_ref().and_then(|os| os.codename.as_deref());
-        let mapping = map_codename(codename);
+        let os_id = ctx.os_info.as_ref().map(|os| os.id.as_str());
+        let mapping = map_codename(os_id, codename);
         if mapping.fallback {
-            warn!(codename = ?codename, "codename non mappato: uso il pacchetto jammy come fallback");
+            warn!(
+                codename = ?codename,
+                os = ?os_id,
+                pacchetto = %mapping.suffix,
+                "codename non mappato: uso il pacchetto più recente della stessa famiglia. \
+                 Se wkhtmltopdf non funziona su questa release, è il primo posto dove guardare."
+            );
         }
         let suffix = &mapping.suffix;
 

@@ -257,7 +257,7 @@ fn production_pins_cover_every_mapped_suffix() {
         Some("chimera"),
         None,
     ] {
-        let suffix = map_codename(codename).suffix;
+        let suffix = map_codename(Some("ubuntu"), codename).suffix;
         let pin = pins
             .get(&suffix)
             .unwrap_or_else(|| panic!("pin mancante per il suffisso '{suffix}' ({codename:?})"));
@@ -335,30 +335,58 @@ fn preexisting_correct_version_is_skipped() {
 
 #[test]
 fn codename_mapping() {
-    assert_eq!(map_codename(Some("noble")).suffix, "jammy");
-    assert!(!map_codename(Some("noble")).fallback);
-    assert_eq!(map_codename(Some("bookworm")).suffix, "bookworm");
-    assert_eq!(map_codename(Some("bullseye")).suffix, "bullseye");
+    let ubuntu = |c| map_codename(Some("ubuntu"), Some(c));
+    let debian = |c| map_codename(Some("debian"), Some(c));
 
-    let unknown = map_codename(Some("chimera"));
-    assert_eq!(unknown.suffix, "jammy");
-    assert!(
-        unknown.fallback,
-        "un codename ignoto usa jammy come fallback (con warning)"
-    );
+    assert_eq!(ubuntu("noble").suffix, "jammy");
+    assert!(!ubuntu("noble").fallback);
+    assert_eq!(debian("bookworm").suffix, "bookworm");
+    assert_eq!(debian("bullseye").suffix, "bullseye");
 
-    let none = map_codename(None);
-    assert_eq!(none.suffix, "jammy");
-    assert!(none.fallback);
-
-    // focal non ha più un ramo dedicato: il .deb `focal_amd64` non esiste nella
+    // focal non ha un ramo dedicato: il .deb `focal_amd64` non esiste nella
     // release 0.12.6.1-3, e Ubuntu 20.04 è già rifiutato da validate_os.
-    let focal = map_codename(Some("focal"));
+    let focal = ubuntu("focal");
     assert_eq!(focal.suffix, "jammy");
     assert!(
         focal.fallback,
         "focal deve cadere nel fallback come ogni codename non mappato"
     );
+}
+
+/// **A5.2.** Un codename ignoto ricade sul pacchetto più recente della **sua
+/// famiglia**, non su un default unico.
+///
+/// Il caso non era teorico come sembrava: Debian 13 (`trixie`) supera il
+/// controllo di versione — le soglie sono aperte verso l'alto, ed è giusto che
+/// lo siano — e prima si sarebbe preso un `.deb` costruito per **Ubuntu 22.04**,
+/// con le librerie di sistema di un'altra distribuzione. Un fallback che ignora
+/// la famiglia non è un ripiego prudente: è la scelta sbagliata travestita da
+/// default.
+#[test]
+fn an_unknown_codename_falls_back_within_its_own_family() {
+    let debian_futura = map_codename(Some("debian"), Some("trixie"));
+    assert_eq!(
+        debian_futura.suffix, "bookworm",
+        "una Debian ignota deve prendere il pacchetto Debian più recente, non uno Ubuntu"
+    );
+    assert!(
+        debian_futura.fallback,
+        "resta un ripiego, e va detto nel log"
+    );
+
+    let ubuntu_futura = map_codename(Some("ubuntu"), Some("questing"));
+    assert_eq!(ubuntu_futura.suffix, "jammy");
+    assert!(ubuntu_futura.fallback);
+
+    // Famiglia ignota o assente: resta `jammy`, l'unico ripiego possibile.
+    for id in [None, Some("chimeraos")] {
+        let m = map_codename(id, Some("qualcosa"));
+        assert_eq!(m.suffix, "jammy");
+        assert!(m.fallback);
+    }
+    let senza_nulla = map_codename(None, None);
+    assert_eq!(senza_nulla.suffix, "jammy");
+    assert!(senza_nulla.fallback);
 }
 
 /// A-V3-3: il `.deb` non deve nascere a un percorso che chiunque legga il
