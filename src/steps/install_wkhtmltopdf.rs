@@ -165,7 +165,20 @@ impl InstallWkhtmltopdf {
         let url = format!(
             "https://github.com/wkhtmltopdf/packaging/releases/download/{WK_VERSION}/{pkg}"
         );
-        let tmp = self.tmp_dir.join(&pkg);
+        // Nome **imprevedibile**, non `<tmp>/wkhtmltox_….deb` (A-V3-3): con un
+        // nome fisso e noto, un utente locale poteva piazzare a quel path un
+        // symlink verso un file di sistema e farci scrivere sopra da root prima
+        // ancora che l'installer partisse.
+        //
+        // Sul *contenuto* la difesa c'era già ed è quella giusta: il `.deb` viene
+        // verificato contro il pin TOFU prima dell'installazione, quindi un file
+        // sostituito viene rifiutato. Qui si chiude l'altra metà — dove il file
+        // nasce — perché la stessa classe di rischio era già stata giudicata
+        // inaccettabile in R1 per il `.conf`, e valeva la coerenza.
+        //
+        // L'estensione `.deb` va conservata: `apt-get install <file>` riconosce
+        // un percorso locale solo da quella.
+        let tmp = system_ops::private_temp_path_keeping_extension(&self.tmp_dir, &pkg);
 
         // Scarica → verifica → installa; il temp va pulito comunque.
         let outcome = self.download_verify_install_inner(&url, &tmp, expected);

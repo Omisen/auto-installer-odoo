@@ -203,6 +203,25 @@ pub fn private_temp_path(dest: &Path, fallback_name: &str) -> PathBuf {
     parent.join(format!(".{name}.{}.tmp", random_suffix()))
 }
 
+/// Come [`private_temp_path`], ma **conserva l'estensione** del nome dato.
+///
+/// Esiste per un vincolo esterno, non per gusto: `apt-get install <file>` tratta
+/// l'argomento come percorso locale solo se termina in `.deb`, altrimenti lo
+/// interpreta come nome di pacchetto e fallisce. Un temporaneo `….tmp` avrebbe
+/// reso il nome imprevedibile e l'installazione impossibile — l'ha intercettato
+/// il test di `install-wkhtmltopdf`, non un ragionamento.
+///
+/// Il file resta nascosto (punto iniziale) e con un suffisso casuale prima
+/// dell'estensione: `wkhtmltox_….deb` → `.wkhtmltox_….<random>.deb`.
+pub fn private_temp_path_keeping_extension(dir: &Path, name: &str) -> PathBuf {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, ext),
+        // Nessuna estensione da preservare: si ricade sulla forma normale.
+        _ => return private_temp_path(&dir.join(name), name),
+    };
+    dir.join(format!(".{stem}.{}.{ext}", random_suffix()))
+}
+
 /// Suffisso esadecimale casuale (8 byte) per i nomi temporanei.
 ///
 /// Legge da `/dev/urandom`; se non fosse disponibile degrada su pid + nanosecondi
@@ -1244,7 +1263,25 @@ impl SystemOps for RealSystemOps {
     }
 
     fn tarball_install(&self, user: &str, url: &str, target: &Path) -> Result<(), StepError> {
-        let tmp = std::env::temp_dir().join("odoo-src.tar.gz");
+        // Nome **imprevedibile** e file creato da noi prima di passarlo a wget
+        // (A-V3-3). Il nome fisso `/tmp/odoo-src.tar.gz` era noto a chiunque
+        // leggesse il sorgente: bastava piazzarci un symlink prima che
+        // l'installer partisse (root ci scriveva sopra), o sostituire l'archivio
+        // fra il download e il `tar` che lo estrae come utente `odoo` — e il
+        // tarball, a differenza del `.deb` di wkhtmltopdf, **non ha un checksum
+        // atteso** da opporre a un contenuto sostituito.
+        //
+        // `create_private_file` apre con `O_CREAT | O_EXCL | O_NOFOLLOW`: se a
+        // quel path c'è già qualcosa — file, directory o symlink — fallisce
+        // invece di scriverci. Dopo, wget riapre il path per nome, ma il file è
+        // già nostro, il nome non era indovinabile, e `/tmp` è sticky: nessun
+        // altro utente può rimuoverlo per metterci il proprio.
+        //
+        // Il `chown` non è un dettaglio: il file nasce `0600 root` e a leggerlo
+        // sarà il `tar` lanciato come utente `odoo`.
+        let tmp = private_temp_path_keeping_extension(&std::env::temp_dir(), "odoo-src.tar.gz");
+        self.create_private_file(&tmp, "")?;
+        self.chown_named(&tmp, user, user)?;
         let tmp_str = tmp.to_string_lossy().into_owned();
         let target_str = target.to_string_lossy().into_owned();
 
@@ -1333,17 +1370,7 @@ impl SystemOps for RealSystemOps {
     }
 
     fn create_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true) // O_CREAT | O_EXCL
-            .custom_flags(nix::libc::O_NOFOLLOW)
-            .mode(PRIVATE_FILE_MODE)
-            .open(path)
-            .map_err(|e| StepError::io(path, e))?;
-        file.write_all(content.as_bytes())
-            .map_err(|e| StepError::io(path, e))
+        create_private_file_at(path, content)
     }
 
     fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError> {
@@ -1480,12 +1507,40 @@ impl RealDownloader {
 
 impl Downloader for RealDownloader {
     fn download(&self, url: &str, dest: &Path) -> Result<(), StepError> {
+        // Il file di destinazione lo creiamo **noi**, fail-closed, prima di
+        // dare il path a wget (A-V3-3): `wget -O` apre per nome e segue i
+        // symlink, quindi da solo scriverebbe volentieri dove punta un link
+        // piazzato da altri. Con `O_EXCL | O_NOFOLLOW` un path già occupato —
+        // da un file, una directory o un symlink — fa fallire il download
+        // invece di dirottarlo.
+        create_private_file_at(dest, "")?;
         let rendered = dest.to_string_lossy();
         // Rete → timeout. Un download troncato dal kill non è comunque
         // installabile: il chiamante verifica il checksum (fail-closed) e
         // rimuove il file parziale.
         run_network_command("wget", &["-q", "-O", &rendered, url])
     }
+}
+
+/// Crea un file privato (`0600`) fail-closed: `O_CREAT | O_EXCL | O_NOFOLLOW`.
+///
+/// È il corpo di [`SystemOps::create_private_file`], estratto come funzione
+/// libera perché serve anche a chi non ha un `SystemOps` sotto mano — cioè al
+/// [`RealDownloader`], che deve poter creare **lui** il file di destinazione
+/// prima di consegnarne il path a `wget` (A-V3-3). Una sola implementazione
+/// della primitiva delicata: se cambia, cambia per tutti.
+pub fn create_private_file_at(path: &Path, content: &str) -> Result<(), StepError> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true) // O_CREAT | O_EXCL
+        .custom_flags(nix::libc::O_NOFOLLOW)
+        .mode(PRIVATE_FILE_MODE)
+        .open(path)
+        .map_err(|e| StepError::io(path, e))?;
+    file.write_all(content.as_bytes())
+        .map_err(|e| StepError::io(path, e))
 }
 
 /// Calcola lo SHA-256 di un file come stringa esadecimale minuscola.

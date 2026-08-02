@@ -360,3 +360,71 @@ fn codename_mapping() {
         "focal deve cadere nel fallback come ogni codename non mappato"
     );
 }
+
+/// A-V3-3: il `.deb` non deve nascere a un percorso che chiunque legga il
+/// sorgente possa prevedere.
+///
+/// Con `<tmp>/wkhtmltox_0.12.6.1-3.jammy_amd64.deb` un utente locale poteva
+/// piazzare a quel path un symlink verso un file di sistema **prima** che
+/// l'installer partisse, e farci scrivere sopra da root. Il pin TOFU protegge il
+/// contenuto — un `.deb` sostituito viene rifiutato — ma non la scrittura, che
+/// avviene prima della verifica.
+///
+/// Vincolo che tira nella direzione opposta: `apt-get install <file>` riconosce
+/// un percorso locale **solo** dall'estensione `.deb`. Il nome deve quindi essere
+/// imprevedibile *e* finire in `.deb`, e sono entrambe condizioni necessarie.
+#[test]
+fn the_downloaded_deb_has_an_unpredictable_path() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bytes = b"contenuto .deb valido".to_vec();
+    let good = sha_of(&bytes, dir.path());
+
+    let (mock, log) = MockSystemOps::new(MockConfig::default());
+    let downloader = MockDownloader::new(bytes, log.clone());
+    let mut step = InstallWkhtmltopdf::with_parts(
+        Box::new(mock),
+        Box::new(downloader),
+        table(&[("jammy", &good)]),
+        dir.path().to_path_buf(),
+    );
+    let c = ctx("jammy");
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let ops = ops_of(&log);
+    let dest = ops
+        .iter()
+        .find_map(|op| match op {
+            Op::Download { dest, .. } => Some(dest.clone()),
+            _ => None,
+        })
+        .expect("il download deve essere avvenuto");
+    let nome = dest
+        .file_name()
+        .expect("nome")
+        .to_string_lossy()
+        .into_owned();
+
+    assert_ne!(
+        nome, "wkhtmltox_0.12.6.1-3.jammy_amd64.deb",
+        "il nome del pacchetto è scritto nel sorgente: a quel path chiunque può \
+         piazzare un symlink prima di noi (A-V3-3)"
+    );
+    assert!(
+        nome.ends_with(".deb"),
+        "apt non riconoscerebbe un percorso locale senza estensione .deb: {nome}"
+    );
+    assert!(
+        nome.starts_with('.'),
+        "il temporaneo deve essere nascosto: {nome}"
+    );
+
+    // Il file installato è quello scaricato: non si verifica un file e se ne
+    // installa un altro.
+    assert!(
+        ops.iter()
+            .any(|op| matches!(op, Op::AptInstallDebFile(p) if *p == dest)),
+        "apt deve installare esattamente il file verificato: {ops:?}"
+    );
+}

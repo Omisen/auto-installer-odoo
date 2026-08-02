@@ -234,12 +234,9 @@ pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step
         "create-database" => Box::new(create_database::CreateDatabase::with_ops(make_ops())),
         "clone-odoo-repo" => Box::new(clone_odoo_repo::CloneOdooRepo::with_ops(make_ops())),
         "create-virtualenv" => Box::new(create_virtualenv::CreateVirtualenv::with_ops(make_ops())),
-        "install-python-requirements" => Box::new(
-            install_python_requirements::InstallPythonRequirements::with_parts(
-                make_ops(),
-                std::env::temp_dir(),
-            ),
-        ),
+        "install-python-requirements" => {
+            Box::new(install_python_requirements::InstallPythonRequirements::with_ops(make_ops()))
+        }
         "generate-config" => Box::new(generate_config::GenerateConfig::with_ops(make_ops())),
         "setup-data-dir" => Box::new(setup_data_dir::SetupDataDir::with_ops(make_ops())),
         "initialize-odoo-database" => Box::new(

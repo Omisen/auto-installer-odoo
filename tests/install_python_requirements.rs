@@ -54,8 +54,7 @@ fn undo_is_noop_pip_removal_belongs_to_venv() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
@@ -79,8 +78,7 @@ fn gevent_cython_workaround_sequence() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
@@ -114,8 +112,7 @@ fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
@@ -150,8 +147,7 @@ fn every_pip_call_caches_inside_our_perimeter() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
@@ -180,8 +176,7 @@ fn missing_requirements_is_error() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
@@ -266,8 +261,7 @@ fn requirements_without_gevent_produce_no_dedicated_step() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
@@ -290,8 +284,7 @@ fn pip_receives_a_file_never_a_hand_picked_version() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let dir = tempfile::tempdir().expect("tempdir");
-    let mut step = InstallPythonRequirements::with_parts(Box::new(mock), dir.path().to_path_buf());
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
@@ -311,4 +304,124 @@ fn pip_receives_a_file_never_a_hand_picked_version() {
         gevent_call.contains(&"--no-build-isolation".to_string()),
         "il workaround Cython<3 resta: su Jammy gevent 21.8.0 non ha wheel"
     );
+}
+
+// --- A-V3-3: dove nascono i requirements temporanei --------------------------
+
+/// Estrae i path dei file creati con la primitiva fail-closed.
+fn created_private_files(ops: &[Op]) -> Vec<PathBuf> {
+    ops.iter()
+        .filter_map(|o| match o {
+            Op::CreatePrivateFile(p) => Some(p.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// **Il difetto di A-V3-3.** I due requirements nascevano in `/tmp` con un nome
+/// scritto nel sorgente: root li scriveva, pip li leggeva come utente `odoo`, e
+/// nella finestra in mezzo chiunque avesse un utente locale poteva sostituirli
+/// e far installare pacchetti arbitrari nel venv.
+///
+/// Ora nascono dentro `<install_dir>/sandbox`, che è di proprietà di `odoo` e
+/// non è scrivibile da terzi: il presupposto dell'attacco sparisce, invece di
+/// essere contrastato.
+#[test]
+fn requirements_are_written_inside_the_venv_not_in_a_shared_temp_dir() {
+    let cfg = MockConfig {
+        requirements_content: Some(ODOO18_REQUIREMENTS.to_string()),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let creati = created_private_files(&ops_of(&log));
+    assert_eq!(
+        creati.len(),
+        2,
+        "attesi i due file di requirements (gevent + filtrato): {creati:?}"
+    );
+
+    let venv = c.install_dir.join("sandbox");
+    for path in &creati {
+        assert!(
+            path.starts_with(&venv),
+            "{} deve nascere dentro il venv, non altrove: in /tmp sarebbe sostituibile \
+             da un utente locale prima che pip lo legga (A-V3-3)",
+            path.display()
+        );
+        let nome = path
+            .file_name()
+            .expect("nome")
+            .to_string_lossy()
+            .into_owned();
+        assert!(
+            nome.starts_with('.') && nome.ends_with(".tmp"),
+            "nome non imprevedibile: {nome}"
+        );
+    }
+    assert_ne!(
+        creati[0], creati[1],
+        "due file distinti, non lo stesso path"
+    );
+}
+
+/// Il file nasce `0600 root` e a leggerlo è pip, che gira come `odoo`: senza il
+/// `chown` il passo fallirebbe. È l'unico motivo per cui il chown esiste.
+#[test]
+fn each_requirements_file_is_handed_over_to_the_odoo_user() {
+    let cfg = MockConfig {
+        requirements_content: Some(ODOO18_REQUIREMENTS.to_string()),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let ops = ops_of(&log);
+    for path in created_private_files(&ops) {
+        assert!(
+            ops.iter().any(|o| matches!(
+                o,
+                Op::ChownNamed { path: p, owner, group }
+                    if *p == path && owner == "odoo" && group == "odoo"
+            )),
+            "{} non viene consegnato a odoo: pip non potrebbe leggerlo",
+            path.display()
+        );
+    }
+}
+
+/// I temporanei vengono rimossi dopo l'uso, e la rimozione passa da `SystemOps`
+/// come la creazione. Restano comunque dentro il venv, quindi anche un'esecuzione
+/// interrotta non lascia nulla fuori dal perimetro reversibile.
+#[test]
+fn requirements_files_are_removed_after_use() {
+    let cfg = MockConfig {
+        requirements_content: Some(ODOO18_REQUIREMENTS.to_string()),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let ops = ops_of(&log);
+    for path in created_private_files(&ops) {
+        assert!(
+            ops.iter()
+                .any(|o| matches!(o, Op::RemoveFile(p) if *p == path)),
+            "{} non viene rimosso dopo l'uso",
+            path.display()
+        );
+    }
 }

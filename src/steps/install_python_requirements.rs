@@ -82,22 +82,57 @@ const PIP_CACHE_SUBDIR: &str = ".pip-cache";
 /// Installa le dipendenze pip nel venv (senza undo proprio).
 pub struct InstallPythonRequirements {
     ops: Box<dyn SystemOps>,
-    /// Directory per il requirements temporaneo (configurabile nei test).
-    tmp_dir: std::path::PathBuf,
     installed: bool,
 }
 
 impl InstallPythonRequirements {
     pub fn new() -> Self {
-        Self::with_parts(Box::new(RealSystemOps::new()), std::env::temp_dir())
+        Self::with_ops(Box::new(RealSystemOps::new()))
     }
 
-    pub fn with_parts(ops: Box<dyn SystemOps>, tmp_dir: std::path::PathBuf) -> Self {
+    pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
-            tmp_dir,
             installed: false,
         }
+    }
+
+    /// Scrive un file di requirements **dentro il venv**, non in `/tmp`, e lo
+    /// consegna all'utente che dovrà leggerlo (A-V3-3).
+    ///
+    /// # Perché non `/tmp`
+    ///
+    /// Qui root scrive un file che pip legge come utente `odoo`: due operazioni
+    /// distinte, con una finestra in mezzo. In `/tmp` — world-writable, e con un
+    /// nome fisso scritto nel sorgente — chi controlla un utente locale
+    /// qualsiasi può provare a sostituire il file in quella finestra e far
+    /// installare a pip pacchetti arbitrari nel venv: esecuzione di codice come
+    /// il proprietario del filestore e del database. Non è il caso del symlink
+    /// (che `fs.protected_symlinks` mitiga): è la sostituzione del **contenuto**,
+    /// e lì il kernel non aiuta.
+    ///
+    /// `<install_dir>/sandbox` toglie il presupposto invece di difendersi
+    /// dall'attacco: è di proprietà di `odoo` e non è scrivibile da altri, quindi
+    /// nessun terzo può creare o sostituire nulla al suo interno. In più il file
+    /// nasce e muore dentro il perimetro reversibile — l'undo di
+    /// `CreateVirtualenv` fa `rm -rf sandbox` — quindi un'esecuzione interrotta
+    /// non lascia residui fuori.
+    ///
+    /// Nome imprevedibile e creazione fail-closed (`O_EXCL | O_NOFOLLOW`) restano
+    /// comunque: sono la difesa che R1 ha scelto per il `.conf`, e questa è la
+    /// stessa classe di problema. Il `chown` finale serve perché il file nasce
+    /// `0600 root` e chi deve leggerlo è `odoo`.
+    fn write_requirements_for_user(
+        &self,
+        venv: &std::path::Path,
+        user: &str,
+        nome: &str,
+        content: &str,
+    ) -> Result<std::path::PathBuf, StepError> {
+        let path = crate::system_ops::private_temp_path(&venv.join(nome), nome);
+        self.ops.create_private_file(&path, content)?;
+        self.ops.chown_named(&path, user, user)?;
+        Ok(path)
     }
 }
 
@@ -174,9 +209,12 @@ impl Step for InstallPythonRequirements {
         if gevent_lines.trim().is_empty() {
             info!("run: nessuna riga gevent nei requirements, salto il passo dedicato");
         } else {
-            let tmp_gevent = self.tmp_dir.join("odoo-requirements-gevent.txt");
-            std::fs::write(&tmp_gevent, &gevent_lines)
-                .map_err(|e| StepError::io(&tmp_gevent, e))?;
+            let tmp_gevent = self.write_requirements_for_user(
+                &venv,
+                user,
+                "requirements-gevent.txt",
+                &gevent_lines,
+            )?;
             let tmp_gevent_str = tmp_gevent.to_string_lossy().into_owned();
             let outcome = self.ops.run_as_user(
                 user,
@@ -191,15 +229,15 @@ impl Step for InstallPythonRequirements {
                     &tmp_gevent_str,
                 ],
             );
-            let _ = std::fs::remove_file(&tmp_gevent);
+            let _ = self.ops.remove_file(&tmp_gevent);
             outcome?;
         }
 
         // 4) resto dei requirements, escludendo ciò che il passo 3 ha già
         //    installato (gevent e greenlet).
         let filtered = filter_out_gevent_stack(&content);
-        let tmp_req = self.tmp_dir.join("odoo-requirements-filtered.txt");
-        std::fs::write(&tmp_req, filtered).map_err(|e| StepError::io(&tmp_req, e))?;
+        let tmp_req =
+            self.write_requirements_for_user(&venv, user, "requirements-filtered.txt", &filtered)?;
         let tmp_str = tmp_req.to_string_lossy().into_owned();
         let outcome = self.ops.run_as_user(
             user,
@@ -214,7 +252,7 @@ impl Step for InstallPythonRequirements {
                 &tmp_str,
             ],
         );
-        let _ = std::fs::remove_file(&tmp_req);
+        let _ = self.ops.remove_file(&tmp_req);
         outcome?;
 
         self.installed = true;
