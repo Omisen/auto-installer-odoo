@@ -1,9 +1,12 @@
 # Environment / secrets
 configs/*.env
-# Eccezione: la config della CI di integrazione non è un segreto — è un preset
-# usa-e-getta per container effimeri, e deve stare nel repo perché il workflow
-# possa usarlo (vedi .github/workflows/integration.yml).
+# Eccezione: le config della CI di integrazione non sono segreti — sono preset
+# usa-e-getta per runner effimeri, e devono stare nel repo perché il workflow
+# possa usarli (vedi .github/workflows/integration.yml).
 !configs/ci.env
+# La variante con Nginx (B-V3-7): senza di lei il job `nginx` non troverebbe il
+# file al checkout, e `tests/ci_config.rs` fallirebbe pure in CI.
+!configs/ci-nginx.env
 temp/*.txt
 docs/*.md
 

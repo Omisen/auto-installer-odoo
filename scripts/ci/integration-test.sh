@@ -36,6 +36,18 @@ MODE="${MODE:-full}"
 BIN="${BIN:-./target/release/odoo-installer}"
 ENV_FILE="${ENV_FILE:-configs/ci.env}"
 
+# Il test si adatta alla configurazione che gli viene data invece di assumerla:
+# con `WITH_NGINX=true` verifica anche i cinque step nginx, che altrimenti
+# escono al primo `if` e restano coperti solo dai mock (B-V3-7).
+#
+# Si legge il file con `sed`, non con `source`: è lo stesso motivo per cui
+# l'installer lo fa in modo dichiarativo — un `.env` non è codice da eseguire.
+env_value() {
+  sed -n "s/^$1=[\"']\\?\\([^\"']*\\)[\"']\\?[[:space:]]*$/\\1/p" "$ENV_FILE" | tail -n 1
+}
+WITH_NGINX="$(env_value WITH_NGINX)"
+WITH_NGINX="${WITH_NGINX:-false}"
+
 # Deve combaciare con configs/ci.env. Il DB_NAME non di default è deliberato:
 # vedi il commento nel file di config.
 DB_NAME="${DB_NAME:-citest}"
@@ -111,6 +123,28 @@ else
   OPT_ODOO_PREEXISTING=0
   info "$ODOO_HOME assente prima dell'installazione (macchina vergine)"
 fi
+
+# L'utente di sistema c'era già? Se sì, il rollback deve LASCIARLO: è la
+# protezione più importante del progetto applicata agli utenti, e va verificata
+# nel verso giusto — pretendere che sparisca sarebbe pretendere una violazione.
+if id "$OS_USER" >/dev/null 2>&1; then
+  OS_USER_PREEXISTING=1
+  info "l'utente '$OS_USER' esisteva già prima dell'installazione"
+else
+  OS_USER_PREEXISTING=0
+  info "l'utente '$OS_USER' assente prima dell'installazione"
+fi
+
+# Nginx: cosa c'era al posto del default site, prima di noi (A-V3-5).
+DEFAULT_SITE=/etc/nginx/sites-enabled/default
+if [ -L "$DEFAULT_SITE" ]; then
+  DEFAULT_SITE_BEFORE="symlink:$(readlink "$DEFAULT_SITE")"
+elif [ -f "$DEFAULT_SITE" ]; then
+  DEFAULT_SITE_BEFORE="file"
+else
+  DEFAULT_SITE_BEFORE="assente"
+fi
+[ "$WITH_NGINX" = "true" ] && info "default site nginx prima dell'installazione: $DEFAULT_SITE_BEFORE"
 set +e
 sudo "$BIN" --config "$ENV_FILE"
 INSTALL_RC=$?
@@ -188,6 +222,63 @@ installazione interrotta"
     fail "il manifesto non porta il db_name reale: il rollback non saprebbe cosa \
 rimuovere (regressione A-R4-1)"
   fi
+
+  endgroup
+fi
+
+# --- fase 2-ter: la fase Nginx, quando è richiesta (B-V3-7) ------------------
+#
+# Fino a questo punto la CI reale non l'aveva **mai** eseguita: `configs/ci.env`
+# ha `WITH_NGINX="false"`, quindi i cinque step nginx uscivano al primo `if` in
+# ogni installazione mai fatta su una macchina vera. Il vhost non veniva mai
+# scritto né validato da `nginx -t`, il default site mai rimosso né ripristinato.
+# R11 (A-V3-5) e R12 (A-V3-6) vivevano interamente su mock — ed è esattamente la
+# situazione in cui, in questo progetto, i difetti sono sopravvissuti: A1.4
+# (ordine del reload nginx) è stato trovato da un e2e, non da una rilettura.
+
+if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]; then
+  group "Verifica Nginx"
+
+  VHOST="/etc/nginx/sites-available/odoo${VER_SHORT}"
+  VHOST_LINK="/etc/nginx/sites-enabled/odoo${VER_SHORT}"
+
+  assert "vhost generato in $VHOST" sudo test -f "$VHOST"
+  assert "sito abilitato ($VHOST_LINK)" sudo test -L "$VHOST_LINK"
+  assert "la configurazione nginx è valida (nginx -t)" sudo nginx -t
+  assert "nginx attivo" systemctl is-active --quiet nginx
+
+  # A-V3-12: i log del vhost portano la versione, non un `odoo18` cablato.
+  if sudo grep -q "odoo${VER_SHORT}.access.log" "$VHOST"; then
+    ok "i log del vhost seguono la versione installata (A-V3-12)"
+  else
+    fail "i log del vhost non portano la versione: due istanze si scriverebbero addosso"
+    sudo grep -n "access_log\|error_log" "$VHOST" || true
+  fi
+
+  # A-V3-6: il vhost NON promette TLS. Un blocco 443 verso certificati
+  # inesistenti farebbe fallire `nginx -t` — e infatti sopra passa.
+  if sudo grep -qE "^\s*listen\s+443|^\s*ssl_certificate" "$VHOST"; then
+    fail "il vhost contiene direttive TLS: non le genera l'installer (A-V3-6)"
+  else
+    ok "il vhost non promette TLS (è compito di certbot --nginx)"
+  fi
+
+  # Il default site è stato tolto di mezzo: è ciò che libera la porta 80.
+  refute "il default site è stato disattivato" sudo test -e "$DEFAULT_SITE"
+
+  # E la 80 serve Odoo attraverso il proxy: è l'unica prova che l'intera catena
+  # (vhost + reload + upstream) funziona davvero.
+  http80=""
+  for _ in $(seq 1 15); do
+    http80="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1/" 2>/dev/null || echo 000)"
+    case "$http80" in 200|301|302|303|307) break ;; esac
+    sleep 2
+  done
+  case "$http80" in
+    200|301|302|303|307) ok "Odoo risponde attraverso Nginx sulla porta 80 (HTTP $http80)" ;;
+    *) fail "la porta 80 non serve Odoo (ultimo codice: ${http80:-nessuno})"
+       sudo nginx -T 2>/dev/null | head -n 40 || true ;;
+  esac
 
   endgroup
 fi
@@ -334,8 +425,14 @@ fi
 
 group "Verifica di pulizia post-rollback"
 
-refute "l'utente di sistema '$OS_USER' è stato rimosso" id "$OS_USER"
-refute "il gruppo '$OS_USER' è stato rimosso" getent group "$OS_USER"
+if [ "$OS_USER_PREEXISTING" = "1" ]; then
+  # Preesistente: NON è nostro da cancellare. È l'anti-drop applicato agli
+  # utenti, e qui l'asserzione va nel verso opposto.
+  assert "l'utente preesistente '$OS_USER' è sopravvissuto al rollback" id "$OS_USER"
+else
+  refute "l'utente di sistema '$OS_USER' è stato rimosso" id "$OS_USER"
+  refute "il gruppo '$OS_USER' è stato rimosso" getent group "$OS_USER"
+fi
 refute "la directory di installazione è sparita" test -d "$INSTALL_DIR"
 refute "l'unit systemd è stata rimossa" test -f "$UNIT_FILE"
 refute "il servizio non è più attivo" systemctl is-active --quiet "$UNIT"
@@ -363,6 +460,46 @@ fi
 # è il comportamento corretto, non un residuo.
 if pkg_installed postgresql; then
   ok "PostgreSQL resta installato (corretto: purge solo con --aggressive-rollback)"
+fi
+
+# Nginx: la config del cliente torna com'era (B-V3-7).
+#
+# È la metà che conta di A-V3-5. Il default site è **config preesistente di
+# terzi**: rimuoverlo per liberare la porta 80 è lecito, non rimetterlo a posto
+# no. Fino a questa fase nessuna esecuzione reale l'aveva mai verificato.
+if [ "$WITH_NGINX" = "true" ]; then
+  refute "il vhost è stato rimosso" sudo test -f "/etc/nginx/sites-available/odoo${VER_SHORT}"
+  refute "il sito è stato disabilitato" sudo test -e "/etc/nginx/sites-enabled/odoo${VER_SHORT}"
+
+  case "$DEFAULT_SITE_BEFORE" in
+    assente)
+      refute "nessun default site inventato dal rollback" sudo test -e "$DEFAULT_SITE"
+      ;;
+    symlink:*)
+      atteso="${DEFAULT_SITE_BEFORE#symlink:}"
+      if [ -L "$DEFAULT_SITE" ] && [ "$(readlink "$DEFAULT_SITE")" = "$atteso" ]; then
+        ok "il default site è tornato al suo target originale ($atteso)"
+      else
+        fail "il default site NON è stato ripristinato com'era: atteso symlink → $atteso, \
+trovato $( [ -e "$DEFAULT_SITE" ] && ls -ld "$DEFAULT_SITE" || echo assente )"
+      fi
+      ;;
+    file)
+      if [ -f "$DEFAULT_SITE" ] && [ ! -L "$DEFAULT_SITE" ]; then
+        ok "il default site (file regolare) è stato rimesso al suo posto"
+      else
+        fail "un default site che era un FILE non è tornato tale: è la perdita di \
+configurazione che A-V3-5 descrive"
+      fi
+      ;;
+  esac
+
+  # nginx sopravvive e resta servibile: il rollback non deve lasciare il
+  # servizio del cliente con una config rotta (A1.4).
+  if pkg_installed nginx || pkg_installed nginx-core || pkg_installed nginx-full; then
+    ok "nginx resta installato (purge solo con --aggressive-rollback)"
+  fi
+  assert "la configurazione nginx è valida anche dopo il rollback" sudo nginx -t
 fi
 
 # Il delta apt: purgato per intero.

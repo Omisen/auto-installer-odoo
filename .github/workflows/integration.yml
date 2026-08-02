@@ -248,3 +248,185 @@ jobs:
           name: installer-log-${{ strategy.job-index }}
           path: installer-*.log
           if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # La fase Nginx, che nessuna esecuzione reale aveva mai toccato (B-V3-7).
+  #
+  # `configs/ci.env` ha `WITH_NGINX="false"`: i cinque step nginx uscivano al
+  # primo `if` in ogni installazione reale mai fatta. Il vhost non veniva mai
+  # scritto né validato da `nginx -t`, il default site mai rimosso né
+  # ripristinato. Due fasi intere — A-V3-5 (il ripristino fedele del default
+  # site) e A-V3-6 (il vhost che non promette TLS) — vivevano solo su mock.
+  #
+  # In questo progetto i difetti sono stati trovati quasi sempre da una macchina
+  # vera; l'unico difetto nginx mai emerso (A1.4) l'ha trovato un test end-to-end
+  # e non una rilettura. Questo job chiude l'ultima zona non osservata.
+  #
+  # Un solo OS: la fase nginx non ha differenze fra jammy e noble (nessun nome di
+  # pacchetto condizionale, nessun pin per codename), quindi un secondo runner
+  # costerebbe quaranta minuti per ripetere le stesse asserzioni.
+  # ---------------------------------------------------------------------------
+  nginx:
+    name: install + rollback con Nginx (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Indice apt aggiornato (ambiente di test esplicito)
+        run: sudo apt-get update
+
+      # Il default site della distro dev'esserci **davvero**: è l'artefatto di
+      # terzi che il rollback deve rimettere a posto (A-V3-5), e senza di esso
+      # metà delle asserzioni non avrebbe nulla da osservare. Sui runner nginx è
+      # preinstallato ma la configurazione varia: lo si mette in uno stato noto.
+      - name: Nginx con il default site attivo (stato di partenza noto)
+        run: |
+          sudo apt-get install -y nginx
+          sudo ln -sfn /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
+          sudo systemctl restart nginx
+          echo "default site:"; ls -l /etc/nginx/sites-enabled/
+
+      - name: Installazione reale + rollback verificato (con Nginx)
+        env:
+          MODE: full
+          ENV_FILE: configs/ci-nginx.env
+        run: bash scripts/ci/integration-test.sh
+
+      - name: Log dell'installer, se presente
+        if: always()
+        run: sudo cp /var/log/odoo-installer.log installer-nginx.log || true
+
+      - name: Carica il log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-nginx
+          path: installer-*.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # L'utente `odoo` già presente sulla macchina (B-V3-7, chiude A-V3-4).
+  #
+  # È la precondizione del finding, e i runner non ce l'hanno mai avuta: la
+  # correzione della R10 — `PrepareOptRoot` che consegna la home a un utente già
+  # esistente — non era quindi mai stata eseguita davvero.
+  #
+  # Due scenari, in quest'ordine, perché il primo lascia il sistema come serve al
+  # secondo dopo una sola pulizia:
+  #   1. utente presente + /opt/odoo preesistente di root → l'installazione deve
+  #      RIFIUTARSI con una precondizione esplicita, prima di mutare;
+  #   2. utente presente + /opt/odoo assente → l'installazione riesce, e la home
+  #      creata da noi viene consegnata all'utente. Il rollback la rimuove ma
+  #      **lascia l'utente**, che non è nostro.
+  # ---------------------------------------------------------------------------
+  preexisting-user:
+    name: utente odoo preesistente (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Indice apt aggiornato (ambiente di test esplicito)
+        run: sudo apt-get update
+
+      - name: Utente 'odoo' già presente, senza home
+        run: |
+          sudo useradd --system --home-dir /opt/odoo --shell /bin/false odoo
+          id odoo
+          test ! -d /opt/odoo && echo "/opt/odoo non esiste: corretto per lo scenario 2"
+
+      # Scenario 1: la home c'è, è di root, e non l'abbiamo creata noi. Non la
+      # chowniamo (non è nostra) e l'installazione si deve fermare PRIMA di
+      # mutare, dicendo perché. Senza questa precondizione l'errore arrivava tre
+      # step dopo, come `mkdir: Permission denied`.
+      - name: Scenario 1 — home root-owned preesistente → rifiuto esplicito
+        run: |
+          sudo mkdir -p /opt/odoo
+          set +e
+          sudo ./target/release/odoo-installer --config configs/ci.env > refuse.log 2>&1
+          rc=$?
+          set -e
+          echo "exit code: $rc"; cat refuse.log
+
+          [ "$rc" -ne 0 ] || { echo "::error::l'installazione doveva essere rifiutata"; exit 1; }
+          grep -q "/opt/odoo" refuse.log || { echo "::error::il messaggio non nomina la home"; exit 1; }
+          grep -qi "root" refuse.log     || { echo "::error::il messaggio non dice di chi è la home"; exit 1; }
+          grep -q "chown"  refuse.log    || { echo "::error::il messaggio non dice cosa fare"; exit 1; }
+
+          # Precondizione, non undo: nessun artefatto creato.
+          #
+          # NON si pretende che il manifesto sia assente: la precondizione vive
+          # nello snapshot del secondo step, e il primo (`prepare-opt-root`) è
+          # già passato — senza mutare, perché la directory era preesistente — e
+          # il motore ha persistito quel record. Che il file esista è corretto;
+          # a contare è che non descriva nulla di creato da noi.
+          [ -z "$(sudo ls -A /opt/odoo)" ] || { echo "::error::ha mutato /opt/odoo prima di rifiutare"; exit 1; }
+          test ! -d /opt/odoo/odoo18 || { echo "::error::ha creato la install dir"; exit 1; }
+          test ! -f /etc/systemd/system/odoo18.service || { echo "::error::ha installato l'unit"; exit 1; }
+          if sudo test -f /var/lib/odoo-installer/state.json; then
+            if sudo grep -q '"CreatedByUs"' /var/lib/odoo-installer/state.json; then
+              echo "::error::il manifesto registra artefatti creati da noi: la precondizione non ha fermato nulla"
+              sudo cat /var/lib/odoo-installer/state.json
+              exit 1
+            fi
+            echo "  manifesto presente ma senza artefatti nostri: corretto"
+          fi
+          echo "✔ rifiutata prima di mutare, con un messaggio che dice cosa fare"
+
+          # Si consuma il manifesto parziale con il comando previsto, invece di
+          # cancellarlo a mano: altrimenti lo scenario 2 lo troverebbe e
+          # partirebbe come **resume**, saltando `prepare-opt-root` — cioè
+          # proprio lo step che deve creare e consegnare la home.
+          sudo ./target/release/odoo-installer rollback --yes || true
+          sudo rmdir /opt/odoo
+          sudo test ! -e /var/lib/odoo-installer/state.json \
+            || { echo "::error::il manifesto parziale non è stato consumato"; exit 1; }
+
+      # Scenario 2: la home la creiamo noi, e va consegnata subito all'utente che
+      # esiste già — altrimenti `setup-cache-dir` muore su un `mkdir` come odoo.
+      - name: Scenario 2 — installazione, consegna della home, rollback
+        env:
+          MODE: full
+        run: bash scripts/ci/integration-test.sh
+
+      # La verifica specifica di A-V3-4 vive qui e non nello script: lo script
+      # controlla lo stato finale, questo controlla che l'utente preesistente sia
+      # sopravvissuto a un rollback che ha rimosso tutto il resto.
+      - name: L'utente preesistente è sopravvissuto
+        run: |
+          id odoo || { echo "::error::il rollback ha rimosso un utente che non aveva creato"; exit 1; }
+          test ! -d /opt/odoo || { echo "::error::/opt/odoo doveva sparire: l'avevamo creata noi"; exit 1; }
+          echo "✔ utente preesistente intatto, home creata da noi rimossa"
+
+      - name: Log dell'installer, se presente
+        if: always()
+        run: sudo cp /var/log/odoo-installer.log installer-preexisting-user.log || true
+
+      - name: Carica il log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-preexisting-user
+          path: installer-*.log
+          if-no-files-found: ignore

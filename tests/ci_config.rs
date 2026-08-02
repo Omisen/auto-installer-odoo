@@ -14,6 +14,7 @@ use std::path::Path;
 use odoo_installer::config::{self, ResolvedConfig};
 
 const CI_ENV: &str = "configs/ci.env";
+const CI_NGINX_ENV: &str = "configs/ci-nginx.env";
 const CI_SCRIPT: &str = "scripts/ci/integration-test.sh";
 
 /// Le chiavi che `config::parse_env_file` riconosce.
@@ -49,7 +50,13 @@ fn resolve_ci_env() -> ResolvedConfig {
 
 #[test]
 fn every_key_in_ci_env_is_understood_by_the_parser() {
-    let content = std::fs::read_to_string(CI_ENV).expect("configs/ci.env");
+    for file in [CI_ENV, CI_NGINX_ENV] {
+        assert_keys_are_known(file);
+    }
+}
+
+fn assert_keys_are_known(file: &str) {
+    let content = std::fs::read_to_string(file).unwrap_or_else(|_| panic!("{file} deve esistere"));
     for (lineno, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -63,12 +70,51 @@ fn every_key_in_ci_env_is_understood_by_the_parser() {
             .unwrap_or_else(|| panic!("riga {} senza '=': {line}", lineno + 1));
         assert!(
             KNOWN_KEYS.contains(&key),
-            "riga {}: la chiave '{key}' non è riconosciuta dal parser .env. \
+            "{file} riga {}: la chiave '{key}' non è riconosciuta dal parser .env. \
              Verrebbe ignorata con un warning e l'installer userebbe il default, \
              falsando il test di integrazione.",
             lineno + 1
         );
     }
+}
+
+/// B-V3-7: la config con nginx differisce da quella base **solo** per nginx.
+///
+/// Se divergessero anche su altro, un fallimento che compare solo nel job nginx
+/// non sarebbe più attribuibile a nginx — e il valore di avere due job
+/// identici-tranne-uno starebbe tutto lì.
+#[test]
+fn the_nginx_ci_config_differs_only_by_nginx() {
+    let base = config::parse_env_file(Path::new(CI_ENV)).expect("ci.env");
+    let con_nginx = config::parse_env_file(Path::new(CI_NGINX_ENV)).expect("ci-nginx.env");
+
+    assert_eq!(base.version, con_nginx.version);
+    assert_eq!(base.odoo_user, con_nginx.odoo_user);
+    assert_eq!(base.db_name, con_nginx.db_name);
+    assert_eq!(base.db_user, con_nginx.db_user);
+    assert_eq!(base.port, con_nginx.port);
+    assert_eq!(base.admin_passwd, con_nginx.admin_passwd);
+    assert_eq!(base.logfile, con_nginx.logfile);
+
+    assert_eq!(
+        base.with_nginx,
+        Some(false),
+        "la config base resta senza nginx"
+    );
+    assert_eq!(
+        con_nginx.with_nginx,
+        Some(true),
+        "è l'unica ragione per cui questo file esiste"
+    );
+}
+
+/// Il flag che apre la 443 resta **fuori** dalla config di CI, e non per caso:
+/// su un runner `ufw` è installato ma inattivo, quindi lo step uscirebbe subito
+/// senza aggiungere copertura — e il flag comunque non tocca il vhost (A-V3-6).
+#[test]
+fn the_nginx_ci_config_does_not_ask_for_the_https_port() {
+    let con_nginx = config::parse_env_file(Path::new(CI_NGINX_ENV)).expect("ci-nginx.env");
+    assert_eq!(con_nginx.open_https_port, None);
 }
 
 #[test]

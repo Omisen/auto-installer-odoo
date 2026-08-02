@@ -381,7 +381,15 @@ fn run_environment_checks(ctx: &Context, port_is_ours: bool) -> Result<OsInfo> {
             "porta occupata dal servizio della stessa installazione: controllo saltato (resume)"
         );
     } else {
-        checks::check_ports(ctx.port, ctx.with_nginx).map_err(|e| anyhow!(e))?;
+        // Se nginx sta già servendo, la 80 è sua: non è un conflitto, è il
+        // programma che stiamo per configurare (A-V3-15). La domanda si fa solo
+        // quando serve davvero.
+        let nginx_already_serving = ctx.with_nginx && {
+            use odoo_installer::system_ops::SystemOps;
+            odoo_installer::system_ops::RealSystemOps::new().service_is_active("nginx")
+        };
+        checks::check_ports(ctx.port, ctx.with_nginx, nginx_already_serving)
+            .map_err(|e| anyhow!(e))?;
     }
     checks::check_commands().map_err(|e| anyhow!(e))?;
     Ok(os_info)

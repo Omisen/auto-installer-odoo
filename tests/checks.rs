@@ -4,7 +4,8 @@ use std::io::Write;
 use std::path::Path;
 
 use odoo_installer::checks::{
-    check_disk, check_os_from, ensure_root_euid, ensure_sudo_user, CheckError,
+    check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user, ports_to_check,
+    CheckError,
 };
 
 fn write_os_release(dir: &Path, body: &str) -> std::path::PathBuf {
@@ -117,4 +118,62 @@ fn root_and_sudo_pure_logic() {
         ensure_sudo_user(Some("")),
         Err(CheckError::NoSudoUser)
     ));
+}
+
+/// A-V3-15: con `--with-nginx` su una macchina dove **nginx sta già servendo**,
+/// la porta 80 non è un conflitto — è del programma che stiamo per configurare.
+///
+/// Il controllo pretendeva la 80 libera ogni volta che si chiedeva
+/// `--with-nginx`, e rendeva così impossibile il caso d'uso normale: aggiungere
+/// un vhost Odoo a un reverse proxy esistente. Gli step nginx lo gestiscono
+/// esplicitamente — `NginxInstall` marca `Preexisting` un nginx già attivo e non
+/// lo tocca — quindi il preflight rifiutava un'installazione che il resto del
+/// programma sa fare benissimo.
+///
+/// Trovato costruendo il job di CI con nginx (B-V3-7): la zona non era mai stata
+/// eseguita, e alla prima esecuzione reale si sarebbe fermata qui.
+///
+/// Si verifica la **decisione** — quali porte guardare — e non l'esito della
+/// sonda: l'esito dipende da cosa gira sulla macchina che esegue i test, e su
+/// una dove la 80 è libera un controllo sbagliato passerebbe lo stesso. La
+/// prima versione di questo test faceva esattamente quell'errore e la mutazione
+/// di prova gli è sopravvissuta.
+#[test]
+fn port_80_held_by_a_running_nginx_is_not_a_conflict() {
+    // nginx già in ascolto: 80 e 443 non si guardano affatto.
+    assert_eq!(
+        ports_to_check(8069, true, /* nginx_already_serving */ true),
+        vec![8069],
+        "un nginx che già serve non è un conflitto con sé stesso"
+    );
+
+    // nginx richiesto ma non ancora in ascolto: il conflitto sarebbe reale.
+    assert_eq!(ports_to_check(8069, true, false), vec![8069, 80, 443]);
+
+    // Senza nginx, la 80 non riguarda nessuno.
+    assert_eq!(ports_to_check(8069, false, false), vec![8069]);
+    assert_eq!(
+        ports_to_check(8069, false, true),
+        vec![8069],
+        "senza --with-nginx lo stato di nginx è irrilevante"
+    );
+}
+
+/// Ma se nginx **non** sta servendo, un conflitto sulla 80 resta un conflitto:
+/// lì nginx non riuscirebbe nemmeno a fare il bind, e dirlo al preflight è
+/// meglio che scoprirlo al reload.
+#[test]
+fn an_occupied_port_still_stops_the_installation() {
+    use std::net::TcpListener;
+
+    // Si occupa una porta davvero e la si passa come "porta Odoo": esercita la
+    // sonda senza dover fare il bind sulla 80, che in un test senza privilegi
+    // non si può.
+    let occupata = TcpListener::bind("127.0.0.1:0").expect("bind");
+    let porta = occupata.local_addr().expect("addr").port();
+
+    assert!(
+        check_ports(porta, false, false).is_err(),
+        "una porta occupata da terzi deve fermare l'installazione"
+    );
 }

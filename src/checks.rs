@@ -303,14 +303,12 @@ pub enum PortStatus {
 /// Verifica che le porte richieste siano libere: `odoo_port` e, se
 /// `with_nginx`, anche 80 e 443. Una porta `Unknown` è trattata come libera
 /// (warning non bloccante, come nel Bash).
-pub fn check_ports(odoo_port: u16, with_nginx: bool) -> Result<(), CheckError> {
-    let mut ports = vec![odoo_port];
-    if with_nginx {
-        ports.push(80);
-        ports.push(443);
-    }
-
-    for port in ports {
+pub fn check_ports(
+    odoo_port: u16,
+    with_nginx: bool,
+    nginx_already_serving: bool,
+) -> Result<(), CheckError> {
+    for port in ports_to_check(odoo_port, with_nginx, nginx_already_serving) {
         match probe_port(port) {
             PortStatus::Free => info!(port, "✔ porta disponibile"),
             PortStatus::Unknown => {
@@ -323,6 +321,41 @@ pub fn check_ports(odoo_port: u16, with_nginx: bool) -> Result<(), CheckError> {
         }
     }
     Ok(())
+}
+
+/// Quali porte vanno controllate. Decisione **pura**, separata dalla sonda.
+///
+/// Separata perché il caso interessante — «nginx già in ascolto sulla 80» — non
+/// è riproducibile in un test: dipende da cosa gira sulla macchina che esegue i
+/// test, e su una macchina dove la 80 è libera un controllo sbagliato passerebbe
+/// lo stesso. Con la scelta delle porte come valore di ritorno, la regola si
+/// verifica in entrambe le direzioni e senza dipendere dall'ambiente. Stesso
+/// motivo di `ensure_root_euid` e `state::trust_verdict`.
+pub fn ports_to_check(odoo_port: u16, with_nginx: bool, nginx_already_serving: bool) -> Vec<u16> {
+    let mut ports = vec![odoo_port];
+    // 80 e 443 si controllano solo se dovranno essere prese da un nginx che
+    // **non sta già servendo** (A-V3-15).
+    //
+    // Il controllo pretendeva la 80 libera ogni volta che si chiedeva
+    // `--with-nginx`. Ma lo scenario supportato — e quello che gli step nginx
+    // gestiscono esplicitamente, con `NginxInstall` che marca `Preexisting` un
+    // nginx già installato e attivo e non lo tocca — è proprio *aggiungere un
+    // vhost a un nginx che sta già girando*. Su quella macchina la 80 è occupata
+    // **da nginx**, cioè dal programma che stiamo per configurare, e rifiutare
+    // l'installazione significava rendere impossibile il caso d'uso normale:
+    // un reverse proxy esistente a cui si aggiunge Odoo.
+    //
+    // È la stessa distinzione di `InstallState::owns_the_http_port`: una porta
+    // occupata da noi non è un conflitto. Se invece nginx non sta servendo e la
+    // 80 è presa, il conflitto è reale (Apache, un altro proxy) e il controllo
+    // deve dire di no — perché lì nginx non riuscirebbe nemmeno a fare il bind.
+    if with_nginx && !nginx_already_serving {
+        ports.push(80);
+        ports.push(443);
+    } else if with_nginx {
+        info!("nginx è già in ascolto: le porte 80/443 sono sue, nessun conflitto da verificare");
+    }
+    ports
 }
 
 /// Sonda una porta con cascata `ss → netstat → lsof`.
