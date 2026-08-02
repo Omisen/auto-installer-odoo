@@ -565,6 +565,22 @@ impl Step for AptPackagesStep {
             risolti = resolved.len(),
             "snapshot delta apt"
         );
+        // I NOMI, non solo il conteggio: il log è il **diario** dell'esecuzione,
+        // il manifesto è lo **stato**. Sono due cose diverse, e confonderle è
+        // costato A-R8-1. Dopo un rollback il manifesto — correttamente — non
+        // elenca più nulla, ma «quali pacchetti abbiamo aggiunto» resta una
+        // domanda legittima: per il post-mortem di un cliente e per le
+        // asserzioni di pulizia della CI.
+        info!(
+            step = self.name,
+            pacchetti = %delta.join(" "),
+            "delta apt: pacchetti aggiunti da noi"
+        );
+        info!(
+            step = self.name,
+            pacchetti = %already_installed.join(" "),
+            "delta apt: pacchetti già presenti, mai toccati"
+        );
         self.resolved = resolved;
         self.snap = AptDeltaSnapshot {
             already_installed,

@@ -280,8 +280,18 @@ impl Installer {
 
         // Il manifesto aggiornato va su disco: se il processo muore ora, ciò che
         // resta scritto dev'essere ciò che è rimasto sul sistema.
+        //
+        // E se non resta **niente**, il manifesto non deve restare nemmeno lui:
+        // un file che descrive zero artefatti è un residuo che dice il falso —
+        // farebbe credere a `odoo-installer rollback` che ci sia qualcosa da
+        // consumare, e resterebbe sul disco a tempo indeterminato.
         if !ctx.dry_run {
-            if let Err(e) = self.state.save(&ctx.state_path) {
+            let esito = if self.state.completed.is_empty() {
+                InstallState::clear(&ctx.state_path)
+            } else {
+                self.state.save(&ctx.state_path)
+            };
+            if let Err(e) = esito {
                 warn!(
                     path = %ctx.state_path.display(),
                     error = %e,

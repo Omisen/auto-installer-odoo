@@ -146,6 +146,18 @@ else
 fi
 [ "$WITH_NGINX" = "true" ] && info "default site nginx prima dell'installazione: $DEFAULT_SITE_BEFORE"
 
+# Fotografia dei pacchetti installati PRIMA di mutare.
+#
+# Serve alla verifica finale più importante e senza contabilità: **nessun
+# pacchetto che c'era prima deve mancare dopo**. Non dipende da cosa abbiamo
+# registrato noi, quindi non può passare per il motivo sbagliato.
+pkgs_installed_now() {
+  dpkg-query -W -f='${Package}\t${Status}\n' 2>/dev/null \
+    | awk -F'\t' '$2=="install ok installed"{print $1}' | sort -u
+}
+pkgs_installed_now > "$WORK/pkgs-before.txt"
+info "pacchetti installati prima:     $(wc -l < "$WORK/pkgs-before.txt")"
+
 # ufw è ATTIVO? Solo allora `nginx-firewall` fa qualcosa: sui runner di default
 # ufw è installato ma inattivo, e lo step esce subito (A-V3-7 mai esercitato).
 if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
@@ -155,9 +167,12 @@ else
   UFW_ACTIVE=0
   [ "$WITH_NGINX" = "true" ] && info "ufw non attivo: le verifiche sul firewall verranno saltate"
 fi
+# L'output si cattura: da qui si legge il **diario** dell'esecuzione (quali step
+# sono stati raggiunti, quali pacchetti aggiunti). Il manifesto NON serve a
+# questo — dice cosa resta sul sistema, e dopo un rollback non resta nulla.
 set +e
-sudo "$BIN" --config "$ENV_FILE"
-INSTALL_RC=$?
+sudo "$BIN" --config "$ENV_FILE" 2>&1 | tee "$WORK/install.out"
+INSTALL_RC=${PIPESTATUS[0]}
 set -e
 echo "exit code installazione: $INSTALL_RC"
 endgroup
@@ -381,28 +396,38 @@ dell'installazione esistente, non la causa — l'utente viene mandato a fermare 
   endgroup
 fi
 
-# --- fase 3: fotografia del delta apt, PRIMA del rollback --------------------
+# --- fase 3: il diario dell'esecuzione, letto dal LOG ------------------------
 #
 # Il delta è l'insieme dei pacchetti che NON c'erano prima di noi: il rollback
-# deve purgare quelli e SOLO quelli. Leggerlo dal file di stato invece di
-# scriverlo a mano rende l'asserzione indipendente dall'immagine: su un runner
-# GitHub `git`/`curl`/`build-essential` sono già installati e finiscono in
-# `already_installed`, su un container Debian minimale no. Va letto prima del
-# rollback, che a pulizia completata rimuove il file.
+# deve purgare quelli e SOLO quelli. Leggerlo dall'output invece di scriverlo a
+# mano rende l'asserzione indipendente dall'immagine: su un runner GitHub
+# `git`/`curl`/`build-essential` sono già installati, su un container Debian
+# minimale no.
+#
+# **Dal log e non dal manifesto**, e la distinzione è il punto. Il manifesto dice
+# *cosa c'è ancora sul sistema*: quando un rollback annulla uno step, quel record
+# sparisce — è ciò che impedisce a un rilancio di saltare artefatti che non
+# esistono più (A-R8-1). Il diario di *cosa è stato fatto* vive invece nel log,
+# che non viene riscritto. In `MODE=probe` l'installazione fallisce e si annulla
+# da sé, quindi il manifesto è (giustamente) vuoto quando arriviamo qui: leggerlo
+# darebbe zero pacchetti e tutte le verifiche di pulizia passerebbero a vuoto.
 
-group "Stato registrato dall'installazione"
-state_json | jq -r '(.completed // [])[] | .name' > "$WORK/steps.txt" || true
-state_json | jq -r '
-  (.completed // [])[]
-  | select(.name == "install-system-dependencies")
-  | .snapshot.delta[]? ' > "$WORK/delta.txt" || true
-state_json | jq -r '
-  (.completed // [])[]
-  | select(.name == "install-system-dependencies")
-  | .snapshot.already_installed[]? ' > "$WORK/preexisting.txt" || true
+group "Diario dell'esecuzione (dal log)"
+# Gli step portati a termine: le righe di progresso «✔ <nome>».
+sed -n 's/.*progress: ✔ \([a-z0-9-]*\).*/\1/p' "$WORK/install.out" | sort -u > "$WORK/steps.txt"
+# I pacchetti, dalle due righe dedicate del log.
+sed -n 's/.*delta apt: pacchetti aggiunti da noi.*pacchetti="\([^"]*\)".*/\1/p' "$WORK/install.out" \
+  | tr ' ' '\n' | grep -v '^$' | sort -u > "$WORK/delta.txt" || true
+sed -n 's/.*delta apt: pacchetti già presenti.*pacchetti="\([^"]*\)".*/\1/p' "$WORK/install.out" \
+  | tr ' ' '\n' | grep -v '^$' | sort -u > "$WORK/preexisting.txt" || true
 info "step completati:                $(wc -l < "$WORK/steps.txt")"
 info "delta (installati da noi):      $(wc -l < "$WORK/delta.txt") pacchetti"
 info "preesistenti (mai toccati):     $(wc -l < "$WORK/preexisting.txt") pacchetti"
+
+if [ ! -s "$WORK/delta.txt" ] && [ "$MODE" = "full" ]; then
+  fail "nessun pacchetto nel delta: il diario non è stato letto correttamente, \
+e le verifiche di pulizia passerebbero a vuoto"
+fi
 
 # In MODE=probe l'installazione si ferma presto per costruzione (niente systemd
 # come PID 1 → `setup-postgres` non avvia il servizio). Senza questo controllo,
@@ -437,8 +462,23 @@ if [ "$ROLLBACK_RC" -eq 0 ]; then
 else
   fail "il rollback è uscito con $ROLLBACK_RC"
 fi
+# Due esiti sono entrambi corretti, e distinguerli conta.
+#
+# «Nessun residuo» = c'era un'installazione registrata e l'ha annullata tutta.
+# «Nessuna installazione da annullare» = non c'era nulla da fare — ed è il caso
+# NORMALE in `MODE=probe`, dove l'installazione fallisce e **si annulla da sé**
+# durante l'esecuzione: quando arriviamo qui il sistema è già pulito e il
+# manifesto è già sparito. Pretendere «Nessun residuo» significherebbe pretendere
+# che ci fosse ancora qualcosa da annullare.
 if grep -q "Nessun residuo" "$WORK/rollback.out"; then
   ok "il rollback dichiara nessun residuo"
+elif grep -q "Nessuna installazione da annullare" "$WORK/rollback.out"; then
+  if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
+    fail "non c'era nulla da annullare, ma l'installazione era riuscita: il manifesto \
+di disinstallazione è sparito quando invece doveva restare"
+  else
+    ok "niente da annullare: il rollback in-process aveva già ripulito tutto"
+  fi
 else
   fail "il rollback ha lasciato residui (vedi il report qui sopra)"
 fi
@@ -570,6 +610,18 @@ while read -r pkg; do
 done < "$WORK/preexisting.txt"
 if [ "$preexisting_lost" -eq 0 ]; then
   ok "nessun pacchetto preesistente è stato toccato"
+fi
+
+# La stessa promessa, verificata **senza contabilità**: si confronta l'insieme
+# dei pacchetti installati prima con quello di adesso. Non dipende da cosa
+# abbiamo registrato noi, quindi non può passare per il motivo sbagliato — è la
+# differenza fra «i pacchetti che dicevamo di aver aggiunto sono spariti» e
+# «niente di ciò che c'era è sparito».
+pkgs_installed_now > "$WORK/pkgs-after.txt"
+if perduti="$(comm -23 "$WORK/pkgs-before.txt" "$WORK/pkgs-after.txt")" && [ -z "$perduti" ]; then
+  ok "nessun pacchetto presente prima dell'installazione è stato rimosso"
+else
+  fail "il rollback ha rimosso pacchetti che c'erano già: $(echo "$perduti" | tr '\n' ' ')"
 fi
 
 # /opt/odoo: su macchina vergine, dopo il rollback NON deve esistere.

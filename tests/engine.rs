@@ -374,3 +374,55 @@ fn a_failed_undo_keeps_its_record() {
         "l'undo di alpha è fallito: il residuo resta registrato"
     );
 }
+
+/// Se dopo il rollback non resta **niente**, il manifesto non deve restare
+/// nemmeno lui.
+///
+/// Un file che descrive zero artefatti è un residuo che dice il falso: farebbe
+/// credere a `odoo-installer rollback` che ci sia qualcosa da consumare, e
+/// resterebbe sul disco a tempo indeterminato. Trovato dalla CI, che asseriva
+/// — giustamente — che il manifesto fosse stato consumato.
+#[test]
+fn an_empty_manifest_is_removed_not_left_behind() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha")),
+        Box::new(NoopStep::new("beta").fail_on_run()),
+    ];
+    let _ = Installer::new().execute(&mut steps, &ctx);
+
+    assert!(
+        !ctx.state_path.exists(),
+        "annullato tutto, il manifesto non descrive più niente: va rimosso, non svuotato"
+    );
+}
+
+/// Ma se qualcosa resta — un undo fallito — il manifesto **deve** restare: è
+/// l'unica traccia del residuo che `odoo-installer rollback` potrà ritentare.
+#[test]
+fn a_manifest_with_residue_stays_on_disk() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha").fail_on_undo()),
+        Box::new(NoopStep::new("beta").fail_on_run()),
+    ];
+    let _ = Installer::new().execute(&mut steps, &ctx);
+
+    assert!(
+        ctx.state_path.exists(),
+        "c'è un residuo: il manifesto resta"
+    );
+    let stato = InstallState::load(&ctx.state_path).expect("load");
+    assert_eq!(
+        stato
+            .completed
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["alpha"]
+    );
+}
