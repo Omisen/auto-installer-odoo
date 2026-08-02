@@ -58,3 +58,16 @@ jobs:
 
       - name: Build release (verifica che il binario compili)
         run: cargo build --release --locked
+
+      # Gli script di CI leggono il formato di log dell'installer, e un pattern
+      # che non combacia non dà errore: dà zero risultati — che in un test di
+      # pulizia si presenta come una verifica superata. Qui costa un secondo;
+      # scoprirlo dall'integrazione reale costa un giro intero.
+      - name: Self-test degli script di CI (lettura del diario)
+        run: bash scripts/ci/selftest-journal.sh
+
+      - name: Sintassi degli script di CI
+        run: |
+          for f in scripts/ci/*.sh; do
+            bash -n "$f" || exit 1
+          done

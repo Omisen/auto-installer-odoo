@@ -61,6 +61,9 @@ INSTALL_DIR="$ODOO_HOME/odoo${VER_SHORT}"
 UNIT="odoo${VER_SHORT}"
 UNIT_FILE="/etc/systemd/system/${UNIT}.service"
 STATE="/var/lib/odoo-installer/state.json"
+# shellcheck source=scripts/ci/journal.sh
+. "$(dirname "$0")/journal.sh"
+
 WORK="$(mktemp -d)"
 
 # Le asserzioni NON si fermano alla prima: un solo giro di CI (che dura decine
@@ -413,13 +416,19 @@ fi
 # darebbe zero pacchetti e tutte le verifiche di pulizia passerebbero a vuoto.
 
 group "Diario dell'esecuzione (dal log)"
-# Gli step portati a termine: le righe di progresso «✔ <nome>».
-sed -n 's/.*progress: ✔ \([a-z0-9-]*\).*/\1/p' "$WORK/install.out" | sort -u > "$WORK/steps.txt"
-# I pacchetti, dalle due righe dedicate del log.
-sed -n 's/.*delta apt: pacchetti aggiunti da noi.*pacchetti="\([^"]*\)".*/\1/p' "$WORK/install.out" \
-  | tr ' ' '\n' | grep -v '^$' | sort -u > "$WORK/delta.txt" || true
-sed -n 's/.*delta apt: pacchetti già presenti.*pacchetti="\([^"]*\)".*/\1/p' "$WORK/install.out" \
-  | tr ' ' '\n' | grep -v '^$' | sort -u > "$WORK/preexisting.txt" || true
+
+# Il parsing vive in journal.sh, esercitato da selftest-journal.sh nella CI
+# veloce: un pattern che non combacia non dà errore, dà zero risultati — e zero
+# pacchetti da verificare si presenta come una verifica superata.
+sed_out="$WORK/install.txt"
+journal_strip_ansi "$WORK/install.out" > "$sed_out"
+
+readonly DEP_STEP='install-system-dependencies'
+journal_steps "$sed_out" > "$WORK/steps.txt"
+journal_packages "$sed_out" 'pacchetti aggiunti da noi' "$DEP_STEP" > "$WORK/delta.txt"
+journal_packages "$sed_out" 'pacchetti già presenti, mai toccati' "$DEP_STEP" \
+  > "$WORK/preexisting.txt"
+
 info "step completati:                $(wc -l < "$WORK/steps.txt")"
 info "delta (installati da noi):      $(wc -l < "$WORK/delta.txt") pacchetti"
 info "preesistenti (mai toccati):     $(wc -l < "$WORK/preexisting.txt") pacchetti"
