@@ -545,23 +545,38 @@ jobs:
             sleep 2
           done
 
-          # Il segnale va al PROCESSO, non alla shell: `sudo` è un intermediario.
-          # `pkill -INT -f` colpisce l'installer vero, che è ciò che un Ctrl-C
-          # da terminale farebbe con l'intero process group.
-          sudo pkill -INT -f 'odoo-installer --config' \
-            || { echo "::error::nessun processo da interrompere"; exit 1; }
+          # UN solo segnale, e all'installer soltanto.
+          #
+          # `pkill -f 'odoo-installer --config'` matcherebbe **due** processi —
+          # il `sudo` e l'installer — quindi l'installer riceverebbe SIGINT due
+          # volte in rapida successione. Ma il secondo SIGINT è, per progetto,
+          # la via d'uscita d'emergenza: esce subito con 130 e NON annulla
+          # niente. Il test proverebbe la funzionalità sbagliata, e fallirebbe
+          # dicendo il vero («il processo è stato ucciso»).
+          #
+          # `-x` matcha il nome esatto del processo (`odoo-installer`), non la
+          # riga di comando: `sudo` non viene toccato. In un terminale vero il
+          # problema non si pone — Ctrl-C consegna al process group una volta
+          # sola, e sudo senza pty non rilancia il segnale.
+          sudo pkill -INT -x odoo-installer \
+            || { echo "::error::nessun processo odoo-installer da interrompere"; ps -ef | grep -i odoo; exit 1; }
 
           # Gli si dà il tempo di annullare: il rollback fa dropdb, purge apt,
-          # rimozioni. Non è istantaneo, ed è giusto così.
+          # rimozioni. Non è istantaneo, ed è giusto così. Si aspetta la fine
+          # dell'INSTALLER, non del `sudo` che lo avvolge: sono due processi e
+          # possono terminare in momenti diversi.
           for _ in $(seq 1 300); do
-            kill -0 "$shell_pid" 2>/dev/null || break
+            pgrep -x odoo-installer >/dev/null 2>&1 || break
             sleep 2
           done
-          if kill -0 "$shell_pid" 2>/dev/null; then
+          if pgrep -x odoo-installer >/dev/null 2>&1; then
             echo "::error::l'installer non è terminato dopo l'interruzione"
-            sudo pkill -KILL -f 'odoo-installer --config' || true
+            sudo pkill -KILL -x odoo-installer || true
             cat install.log; exit 1
           fi
+          # `sudo` esce subito dopo il figlio; se restasse appeso, non è un
+          # problema del prodotto ma lascerebbe il job in attesa.
+          wait "$shell_pid" 2>/dev/null || true
 
           echo "--- ultime righe del log ---"; tail -n 40 install.log
 
@@ -570,8 +585,14 @@ jobs:
       # sarebbero ancora tutti qui.
       - name: Il sistema è tornato pulito da solo
         run: |
-          grep -qi "interrot" install.log \
-            || { echo "::error::nessuna traccia dell'interruzione: il processo è stato ucciso"; exit 1; }
+          # Il log per intero PRIMA di giudicare: un'asserzione che fallisce
+          # senza mostrare l'evidenza costringe il prossimo a indovinare.
+          echo "::group::install.log"; cat install.log; echo "::endgroup::"
+
+          if ! grep -qi "interrot" install.log; then
+            echo "::error::nessuna traccia dell'interruzione nel log (vedi sopra): il processo è stato ucciso prima di annullare, o non ha mai ricevuto il segnale"
+            exit 1
+          fi
 
           fallito=0
           check() { # descrizione, comando che deve FALLIRE

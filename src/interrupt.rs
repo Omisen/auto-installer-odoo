@@ -34,6 +34,26 @@
 //! In quel caso il sistema resta a metà per davvero — ed è una scelta
 //! dell'utente, non un difetto: il manifesto è sul disco e
 //! `odoo-installer rollback` lo ripulisce.
+//!
+//! ## Attenzione a *come* si manda il segnale da script
+//!
+//! «Due Ctrl-C» significa **due segnali ricevuti**, non «due pressioni di
+//! tasti». Da un terminale la distinzione non si nota: Ctrl-C consegna al
+//! process group una volta sola, e `sudo` senza pty non rilancia il segnale.
+//! Ma un `sudo pkill -INT -f odoo-installer` colpisce **due** processi — il
+//! `sudo` e l'installer — e l'installer si vede arrivare due segnali in rapida
+//! successione: uscita immediata, nessun annullamento. L'opposto di ciò che chi
+//! ha lanciato quel comando voleva.
+//!
+//! Da script si manda un segnale al **solo** installer:
+//!
+//! ```text
+//! sudo pkill -INT -x odoo-installer    # -x: nome esatto del processo
+//! ```
+//!
+//! Non è un'ipotesi: è successo alla prima esecuzione del job di CI che verifica
+//! proprio questa funzionalità, che con `-f` provava la via d'uscita
+//! d'emergenza credendo di provare l'annullamento.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;

@@ -249,6 +249,12 @@ corso (`apt`, `git`, `pip`) termina da sé.
 Un **secondo Ctrl-C esce subito**, con codice 130. Lì il sistema resta a metà per tua scelta, e si
 ripulisce con `sudo odoo-installer rollback`.
 
+> **Da script, manda il segnale al solo installer.** «Due Ctrl-C» significa *due segnali ricevuti*.
+> Un `sudo pkill -INT -f odoo-installer` colpisce **due** processi — il `sudo` e l'installer — e vale
+> quindi come seconda pressione: uscita immediata, nessun annullamento. Usa invece
+> `sudo pkill -INT -x odoo-installer` (`-x` = nome esatto del processo). Da terminale il problema non
+> si pone.
+
 Usa **`--dry-run`** per vedere il piano prima di eseguire davvero.
 
 ---
