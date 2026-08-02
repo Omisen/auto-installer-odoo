@@ -158,6 +158,13 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     print_interrupt_notice(&ctx.state_path);
 
+    // Da qui in poi un Ctrl-C non uccide più il processo: alza un flag che il
+    // motore osserva fra uno step e l'altro, e l'installazione si annulla da
+    // sé (B-V3-5). Registrato **dopo** la conferma e prima delle mutazioni:
+    // prima non servirebbe — non c'è niente da annullare — e il comportamento
+    // di default (uscita immediata) è quello che l'utente si aspetta.
+    let interrupted = odoo_installer::interrupt::install();
+
     // Lock esclusivo: impedisce due installazioni simultanee. Il guard rilascia
     // il lock al Drop (successo, errore o panic). Acquisito dopo i check e prima
     // di ogni mutazione.
@@ -197,7 +204,8 @@ fn run_install(cli: &Cli) -> Result<()> {
             );
             Installer::new()
         }
-    };
+    }
+    .watching_interrupt(interrupted);
     installer
         .execute_with_reporter(&mut steps, &ctx, reporter.as_ref())
         .map_err(|e| {
@@ -481,10 +489,18 @@ fn print_install_summary(ctx: &Context) {
 /// pianificato a parte (vedi audit R4).
 fn print_interrupt_notice(state_path: &Path) {
     println!(
-        "Nota: se interrompi l'installazione (Ctrl-C) o la macchina si spegne, il sistema \n\
-         resta a metà. Per ripulirlo esegui:\n\
+        "Nota: puoi interrompere con Ctrl-C. L'installer **annulla da sé** quello che ha \n\
+         già fatto e il sistema torna come prima.\n\
+     \n\
+         L'interruzione ha effetto fra uno step e il successivo: lo step in corso viene \n\
+         portato a termine, perché fermare a metà un `apt` o l'inizializzazione di un \n\
+         database lascerebbe qualcosa di peggio di ciò che si voleva evitare.\n\
+     \n\
+         Un secondo Ctrl-C esce **subito**: in quel caso il sistema resta a metà e si \n\
+         ripulisce con\n\
      \n    sudo odoo-installer rollback\n\n\
-         Lo stato necessario è registrato in {} dopo ogni step.\n",
+         Lo stato necessario è registrato in {} dopo ogni step — vale anche se la \n\
+         macchina si spegne.\n",
         state_path.display()
     );
 }

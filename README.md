@@ -232,8 +232,22 @@ Il rollback esiste in **due forme**, con le stesse regole:
 - **automatico (in-process)** — uno step fallisce e l'installazione si ritira da sola;
 - **esplicito (`odoo-installer rollback`)** — rilegge lo stato persistito in
   `/var/lib/odoo-installer/state.json` e annulla ciò che quell'installazione aveva creato. Serve sia a
-  **disinstallare** un'istanza funzionante, sia a **ripulire** dopo un Ctrl-C, un `kill -9` o uno
-  spegnimento — i casi in cui il processo muore prima di poter fare il rollback da sé.
+  **disinstallare** un'istanza funzionante, sia a **ripulire** dopo un `kill -9` o uno spegnimento —
+  i casi in cui il processo muore prima di poter fare il rollback da sé.
+
+### Ctrl-C
+
+Un **Ctrl-C** (o un `kill`/`systemctl stop`) non uccide più l'installer: l'installazione **si annulla
+da sé** e il sistema torna come prima, senza che tu debba lanciare nulla.
+
+L'interruzione ha effetto **fra uno step e il successivo**: lo step in corso viene portato a termine.
+Non è una limitazione da nascondere — fermare a metà un `apt` lascerebbe `dpkg` inconsistente, e
+troncare l'inizializzazione di un database lascerebbe qualcosa di peggio di ciò che si voleva evitare.
+In pratica l'attesa è breve: il segnale arriva a tutto il gruppo di processi, quindi il comando in
+corso (`apt`, `git`, `pip`) termina da sé.
+
+Un **secondo Ctrl-C esce subito**, con codice 130. Lì il sistema resta a metà per tua scelta, e si
+ripulisce con `sudo odoo-installer rollback`.
 
 Usa **`--dry-run`** per vedere il piano prima di eseguire davvero.
 

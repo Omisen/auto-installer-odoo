@@ -17,6 +17,9 @@
 //! invariate (delegano a un [`NoopReporter`]); le varianti `*_with_reporter`
 //! accettano l'observer.
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use tracing::{error, info, warn};
 
 use crate::context::Context;
@@ -29,12 +32,42 @@ use crate::step::Step;
 #[derive(Debug, Default)]
 pub struct Installer {
     state: InstallState,
+    /// Alzato da fuori quando arriva `SIGINT`/`SIGTERM` (B-V3-5).
+    ///
+    /// Il motore **non** conosce i segnali: osserva un booleano. Chi glielo
+    /// alza — `crate::interrupt` in produzione, un test altrove — è affare di
+    /// chi costruisce l'installer. Di default è un flag mai alzato, quindi il
+    /// comportamento senza `watching_interrupt` è identico a prima.
+    interrupted: Arc<AtomicBool>,
 }
 
 impl Installer {
     /// Crea un installer con stato vuoto.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// Collega il flag d'interruzione osservato **fra uno step e l'altro**.
+    ///
+    /// # Perché fra uno step e l'altro, e non «subito»
+    ///
+    /// Interrompere uno step a metà non è una cosa che si possa fare in modo
+    /// sicuro: `apt` a metà lascia `dpkg` inconsistente, un `initdb` troncato
+    /// lascia un database inutilizzabile. Il confine sicuro è quello che il
+    /// motore già conosce — uno step è un'unità che o è completa o non è
+    /// iniziata — ed è lì che si guarda.
+    ///
+    /// In pratica l'attesa è breve e spesso nulla: il segnale arriva a **tutto
+    /// il process group**, quindi il comando esterno in corso (`apt`, `git`,
+    /// `pip`) muore da sé e lo step fallisce subito dopo. Il flag serve per i
+    /// casi in cui lo step è nostro e non ha figli da uccidere.
+    ///
+    /// Questo va **detto** all'utente e non lasciato intendere: chi preme
+    /// Ctrl-C durante `pip install` non deve credere che l'interruzione sia
+    /// istantanea.
+    pub fn watching_interrupt(mut self, flag: Arc<AtomicBool>) -> Self {
+        self.interrupted = flag;
+        self
     }
 
     /// Crea un installer che **riprende** da un manifesto parziale (A-V3-1).
@@ -62,7 +95,10 @@ impl Installer {
     /// eredita è il fatto che lo step **è già stato eseguito**, non solo il suo
     /// esito.
     pub fn resuming_from(state: InstallState) -> Self {
-        Self { state }
+        Self {
+            state,
+            ..Default::default()
+        }
     }
 
     /// Accesso in sola lettura allo stato accumulato (utile per test/ispezione).
@@ -104,6 +140,16 @@ impl Installer {
         }
 
         for idx in 0..steps.len() {
+            // Interruzione richiesta: si annulla ciò che è stato fatto e si
+            // esce. Il controllo sta **prima** dello step, non dopo: così
+            // l'ultimo step completato è davvero completo, e il rollback parte
+            // da uno stato che il motore sa descrivere.
+            if self.interrupted.load(Ordering::SeqCst) {
+                warn!("interruzione richiesta: annullo gli step già eseguiti");
+                self.rollback_with_reporter(steps, &completed, ctx, reporter);
+                return Err(crate::interrupt::interrupted_error());
+            }
+
             let name = steps[idx].name().to_string();
             reporter.step_start(&name, idx, total);
 

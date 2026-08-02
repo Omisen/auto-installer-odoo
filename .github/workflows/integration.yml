@@ -489,3 +489,128 @@ jobs:
           name: installer-log-preexisting-user
           path: installer-*.log
           if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
+  # Ctrl-C a metà installazione (B-V3-5).
+  #
+  # Fino alla R18 l'azione di default di SIGINT valeva anche per noi: il processo
+  # moriva all'istante e il rollback in-process non partiva mai. Era l'unico
+  # scenario che nessun test poteva riprodurre — su mock si può alzare un flag,
+  # ma non si può provare che un segnale reale non uccida il processo prima che
+  # il flag venga letto.
+  #
+  # Il momento dell'interruzione non è casuale: si aspetta che il manifesto
+  # registri `create-database`. Da lì c'è un artefatto vero e costoso da
+  # annullare — un database — quindi «il sistema è tornato pulito» significa
+  # qualcosa. Un `sleep` fisso avrebbe colpito un punto diverso a ogni giro.
+  # ---------------------------------------------------------------------------
+  interrupt:
+    name: Ctrl-C a metà installazione (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Indice apt aggiornato (ambiente di test esplicito)
+        run: sudo apt-get update
+
+      - name: Installazione, interrotta appena il database esiste
+        run: |
+          set -x
+          sudo ./target/release/odoo-installer --config configs/ci.env > install.log 2>&1 &
+          shell_pid=$!
+
+          # Si aspetta un artefatto REALE nel manifesto, non un tempo.
+          manifesto=/var/lib/odoo-installer/state.json
+          for _ in $(seq 1 240); do
+            if sudo test -f "$manifesto" && \
+               sudo grep -q '"create-database"' "$manifesto"; then
+              echo "database creato: interrompo"
+              break
+            fi
+            if ! kill -0 "$shell_pid" 2>/dev/null; then
+              echo "::error::l'installazione è terminata prima di poterla interrompere"
+              cat install.log; exit 1
+            fi
+            sleep 2
+          done
+
+          # Il segnale va al PROCESSO, non alla shell: `sudo` è un intermediario.
+          # `pkill -INT -f` colpisce l'installer vero, che è ciò che un Ctrl-C
+          # da terminale farebbe con l'intero process group.
+          sudo pkill -INT -f 'odoo-installer --config' \
+            || { echo "::error::nessun processo da interrompere"; exit 1; }
+
+          # Gli si dà il tempo di annullare: il rollback fa dropdb, purge apt,
+          # rimozioni. Non è istantaneo, ed è giusto così.
+          for _ in $(seq 1 300); do
+            kill -0 "$shell_pid" 2>/dev/null || break
+            sleep 2
+          done
+          if kill -0 "$shell_pid" 2>/dev/null; then
+            echo "::error::l'installer non è terminato dopo l'interruzione"
+            sudo pkill -KILL -f 'odoo-installer --config' || true
+            cat install.log; exit 1
+          fi
+
+          echo "--- ultime righe del log ---"; tail -n 40 install.log
+
+      # La prova vera: il segnale non ha ucciso il processo, e l'installer ha
+      # annullato da sé. Se il rollback non fosse partito, gli artefatti
+      # sarebbero ancora tutti qui.
+      - name: Il sistema è tornato pulito da solo
+        run: |
+          grep -qi "interrot" install.log \
+            || { echo "::error::nessuna traccia dell'interruzione: il processo è stato ucciso"; exit 1; }
+
+          fallito=0
+          check() { # descrizione, comando che deve FALLIRE
+            if eval "$2" >/dev/null 2>&1; then
+              echo "::error::$1"; fallito=1
+            else
+              echo "  ✔ $1"
+            fi
+          }
+          check "l'utente odoo non è rimasto"        "id odoo"
+          check "/opt/odoo non è rimasta"            "test -d /opt/odoo"
+          check "l'unit systemd non è rimasta"       "test -f /etc/systemd/system/odoo18.service"
+
+          # Il database si verifica SOLO se PostgreSQL risponde. Se il rollback
+          # l'ha rifermato — perché l'avevamo avviato noi — un `psql` che
+          # fallisce non dimostra che il database non c'è: dimostra che non
+          # possiamo saperlo. Dichiararlo è meglio di un ✔ che non ha guardato.
+          if sudo -u postgres psql -tAc 'select 1' >/dev/null 2>&1; then
+            check "il database citest non è rimasto" \
+              "sudo -u postgres psql -tAc \"select 1 from pg_database where datname='citest'\" | grep -q 1"
+            check "il ruolo odoo non è rimasto" \
+              "sudo -u postgres psql -tAc \"select 1 from pg_roles where rolname='odoo'\" | grep -q 1"
+          else
+            echo "  · PostgreSQL non raggiungibile (rifermato dal rollback): verifiche su DB/ruolo non eseguite"
+          fi
+
+          [ "$fallito" -eq 0 ] || exit 1
+          echo "✔ un Ctrl-C reale ha prodotto un sistema pulito, senza intervento manuale"
+
+      - name: Log dell'installer, se presente
+        if: always()
+        run: sudo cp /var/log/odoo-installer.log installer-interrupt.log || true
+
+      - name: Carica il log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-interrupt
+          path: |
+            installer-*.log
+            install.log
+          if-no-files-found: ignore

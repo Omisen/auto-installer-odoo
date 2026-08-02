@@ -33,6 +33,14 @@ pub struct NoopStep {
     undo_calls: Arc<AtomicUsize>,
     /// Log condiviso delle azioni di undo effettivamente compiute.
     undo_log: Option<UndoLog>,
+    /// Azione arbitraria eseguita **dentro** il `run`.
+    ///
+    /// Serve a modellare qualcosa che accade *mentre* uno step è in corso —
+    /// il caso vero è un segnale che arriva a metà installazione (B-V3-5). Senza
+    /// questo gancio si potrebbe solo alzare il flag prima o dopo, cioè provare
+    /// tutto tranne il momento che conta.
+    #[allow(clippy::type_complexity)]
+    on_run: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl NoopStep {
@@ -47,6 +55,7 @@ impl NoopStep {
             fail_on_undo: false,
             undo_calls: Arc::new(AtomicUsize::new(0)),
             undo_log: None,
+            on_run: None,
         }
     }
 
@@ -76,6 +85,12 @@ impl NoopStep {
     /// Fa fallire `undo` (per testare il comportamento best-effort).
     pub fn fail_on_undo(mut self) -> Self {
         self.fail_on_undo = true;
+        self
+    }
+
+    /// Esegue `f` dentro il `run`, prima che lo step si dichiari completato.
+    pub fn on_run(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
+        self.on_run = Some(Box::new(f));
         self
     }
 
@@ -119,6 +134,9 @@ impl Step for NoopStep {
         if ctx.dry_run {
             info!(step = %self.name, "run (dry-run, nessuna mutazione)");
             return Ok(());
+        }
+        if let Some(f) = &self.on_run {
+            f();
         }
         if self.fail_on_run {
             return Err(StepError::CommandFailed {

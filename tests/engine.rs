@@ -180,3 +180,110 @@ fn successful_run_persists_all_steps() {
     assert_eq!(persisted.completed[0].name, "alpha");
     assert_eq!(persisted.completed[1].name, "beta");
 }
+
+// --- B-V3-5: interruzione dall'esterno --------------------------------------
+
+use std::sync::atomic::{AtomicBool, Ordering};
+
+/// **Il difetto che chiude.** Un Ctrl-C uccideva il processo all'istante, quindi
+/// il rollback in-process non partiva mai e il sistema restava a metà. Ora
+/// l'interruzione è una richiesta che il motore osserva: gli step già eseguiti
+/// vengono annullati, in ordine inverso, come per un fallimento.
+#[test]
+fn an_interrupt_rolls_back_what_was_already_done() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+    let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
+    let interrupted = Arc::new(AtomicBool::new(false));
+
+    // `beta` alza il flag mentre gira: è ciò che fa un Ctrl-C durante uno step.
+    let flag_per_beta = Arc::clone(&interrupted);
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha").with_undo_log(Arc::clone(&log))),
+        Box::new(
+            NoopStep::new("beta")
+                .with_undo_log(Arc::clone(&log))
+                .on_run(move || flag_per_beta.store(true, Ordering::SeqCst)),
+        ),
+        Box::new(NoopStep::new("gamma").with_undo_log(Arc::clone(&log))),
+    ];
+
+    let mut installer = Installer::new().watching_interrupt(Arc::clone(&interrupted));
+    let err = installer
+        .execute(&mut steps, &ctx)
+        .expect_err("un'interruzione deve fermare l'esecuzione");
+    assert!(
+        err.to_string().contains("interrotta"),
+        "il messaggio deve dire cosa è successo: {err}"
+    );
+
+    // `gamma` non è mai partito, e i due precedenti sono stati annullati in
+    // ordine inverso — esattamente come per un fallimento.
+    let azioni = log.lock().expect("log").clone();
+    assert_eq!(
+        azioni,
+        vec!["beta".to_string(), "alpha".to_string()],
+        "gli step già eseguiti vanno annullati dall'ultimo al primo: {azioni:?}"
+    );
+}
+
+/// Lo step in corso viene **portato a termine**: fermarlo a metà lascerebbe
+/// `dpkg` inconsistente o un database inizializzato a metà. Il confine sicuro è
+/// quello che il motore già conosce — uno step o è completo o non è iniziato.
+#[test]
+fn the_step_in_flight_is_allowed_to_finish() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+    let interrupted = Arc::new(AtomicBool::new(false));
+
+    let flag = Arc::clone(&interrupted);
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha").on_run(move || flag.store(true, Ordering::SeqCst))),
+        Box::new(NoopStep::new("beta")),
+    ];
+
+    let mut installer = Installer::new().watching_interrupt(Arc::clone(&interrupted));
+    let _ = installer.execute(&mut steps, &ctx);
+
+    // alpha risulta completato e persistito: il manifesto descrive uno stato
+    // che il rollback da disco saprebbe leggere.
+    let nomi: Vec<&str> = installer
+        .state()
+        .completed
+        .iter()
+        .map(|r| r.name.as_str())
+        .collect();
+    assert_eq!(
+        nomi,
+        vec!["alpha"],
+        "lo step interrotto a metà corsa dev'essere completo, non troncato"
+    );
+}
+
+/// Senza interruzione il comportamento è quello di sempre: il flag di default
+/// non è alzato da nessuno, e `watching_interrupt` è opzionale.
+#[test]
+fn without_an_interrupt_nothing_changes() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha")),
+        Box::new(NoopStep::new("beta")),
+    ];
+
+    // Senza `watching_interrupt`.
+    Installer::new()
+        .execute(&mut steps, &ctx)
+        .expect("nessuna interruzione: l'esecuzione arriva in fondo");
+
+    // E con un flag mai alzato.
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha")),
+        Box::new(NoopStep::new("beta")),
+    ];
+    Installer::new()
+        .watching_interrupt(Arc::new(AtomicBool::new(false)))
+        .execute(&mut steps, &ctx)
+        .expect("flag mai alzato: nessun effetto");
+}

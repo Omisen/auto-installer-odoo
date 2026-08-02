@@ -50,6 +50,11 @@ tracing-appender = "0.2"
 # Non ancora usato in Fase 0: riservato per chiamate POSIX tipizzate (uid/gid,
 # permessi) nelle fasi successive con gli step di sistema reali.
 nix = { version = "0.29", features = ["user", "fs"] }
+# Gestione dei segnali (B-V3-5), con API **safe**: il crate incapsula la parte
+# async-signal-safe, che a mano richiederebbe `unsafe` — in un programma che
+# gira come root si evita quando si puo'. Costo reale zero: era gia' nell'albero
+# come dipendenza transitiva di `crossterm` (via `inquire`).
+signal-hook = "0.3"
 # Verifica checksum SHA-256 dei download (gap G3).
 sha2 = "0.10"
 # UI interattiva (Fase 11), dietro il confine prompt.rs / progress.rs.
