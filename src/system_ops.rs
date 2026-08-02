@@ -1126,7 +1126,7 @@ impl SystemOps for RealSystemOps {
 
     fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError> {
         let status = capture_command("ufw", &["status"])?;
-        Ok(status.contains(rule))
+        Ok(ufw_rule_in_status(&status, rule))
     }
 
     fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
@@ -1569,6 +1569,56 @@ impl Downloader for RealDownloader {
         // rimuove il file parziale.
         run_network_command("wget", &["-q", "-O", &rendered, url])
     }
+}
+
+/// La regola compare in `ufw status`? Confronto per **token**, non per
+/// sottostringa (A-V3-7).
+///
+/// # Il difetto che chiude
+///
+/// `status.contains("80/tcp")` risponde `true` su una macchina che ha soltanto
+/// una regola `8080/tcp` — un'altra app web, un reverse proxy, un runner. Da lì:
+/// la regola per la porta 80 non entra nel delta, il `run` non la apre, e nginx
+/// viene configurato e ricaricato correttamente ma resta **irraggiungibile
+/// dall'esterno**. Nel report non c'è niente di anomalo da leggere.
+///
+/// # Come si legge `ufw status`
+///
+/// ```text
+/// Status: active
+///
+/// To                         Action      From
+/// --                         ------      ----
+/// 80/tcp                     ALLOW       Anywhere
+/// 8080/tcp                   ALLOW       Anywhere
+/// 80/tcp (v6)                ALLOW       Anywhere (v6)
+/// ```
+///
+/// La regola è il **primo token** della riga (colonna `To`). Il suffisso
+/// `(v6)` è un token a parte, quindi la variante IPv6 della stessa porta
+/// combacia — ed è giusto: è la stessa regola.
+///
+/// # Cosa non distingue, dichiarato
+///
+/// Un profilo applicativo (`Nginx Full`) ha uno spazio nella colonna `To` e non
+/// verrà riconosciuto come `80/tcp`, anche se apre quella porta. La conseguenza
+/// è che aggiungeremmo `80/tcp` al delta e l'undo la rimuoverebbe: rimuoviamo
+/// solo ciò che abbiamo aggiunto noi, quindi la promessa chirurgica regge.
+pub fn ufw_rule_in_status(status: &str, rule: &str) -> bool {
+    /// I token che compaiono in prima colonna senza essere regole.
+    const INTESTAZIONI: [&str; 3] = ["To", "--", "Status:"];
+
+    // Si escludono le intestazioni per nome invece di saltare tutto ciò che
+    // precede la riga `--`. Ancorarsi al separatore sarebbe più elegante ma più
+    // fragile: se un giorno quel formato cambiasse, leggeremmo «nessuna regola»
+    // e finiremmo per mettere nel delta regole che il cliente aveva già — e
+    // l'undo le rimuoverebbe. Fra i due modi di sbagliare, quello che tocca la
+    // configurazione altrui è il peggiore.
+    status
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|token| !INTESTAZIONI.contains(token))
+        .any(|to| to == rule)
 }
 
 /// Crea un file privato (`0600`) fail-closed: `O_CREAT | O_EXCL | O_NOFOLLOW`.

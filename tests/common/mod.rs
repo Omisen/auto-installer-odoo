@@ -575,8 +575,24 @@ impl SystemOps for MockSystemOps {
     fn ufw_is_active(&self) -> bool {
         self.cfg.ufw_active
     }
+    /// Risponde **come il vero `ufw`**: rende un output in stile `ufw status` a
+    /// partire dalle regole configurate e lo interroga con la stessa funzione
+    /// che usa la produzione.
+    ///
+    /// Prima era `existing_ufw_rules.contains(rule)`, cioè un'appartenenza a un
+    /// insieme: una semantica ideale che il comando reale non ha. È il motivo
+    /// per cui nessun test poteva accorgersi di A-V3-7 — il confronto per
+    /// sottostringa sbagliava su `8080/tcp`, ma il mock non lo riproduceva.
     fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError> {
-        Ok(self.cfg.existing_ufw_rules.contains(rule))
+        let mut status = String::from("Status: active\n\nTo   Action   From\n--   ------   ----\n");
+        for existing in &self.cfg.existing_ufw_rules {
+            status.push_str(&format!(
+                "{existing}                   ALLOW       Anywhere\n"
+            ));
+        }
+        Ok(odoo_installer::system_ops::ufw_rule_in_status(
+            &status, rule,
+        ))
     }
     fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
         self.record(Op::UfwAllow(rule.to_string()));

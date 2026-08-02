@@ -518,6 +518,23 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         );
     };
 
+    // Il manifesto descrive un'installazione di QUESTO installer? (A-V3-8)
+    //
+    // Da qui in poi ogni percorso che guiderà un `rm -rf`, un `dropdb` o un
+    // `userdel` arriva da questo file, e `--state` accetta qualunque percorso.
+    // L'unico ancoraggio possibile è un valore che dal file NON arriva:
+    // `ODOO_HOME`, che è costante e non sovrascrivibile. Prima di ogni altra
+    // cosa, e prima di stampare un riepilogo che darebbe per buono ciò che
+    // c'è scritto.
+    config.validate_perimeter().map_err(|e| anyhow!(e))?;
+
+    // E il file stesso è una fonte fidata? Solo per un rollback reale: il
+    // dry-run stampa soltanto, e poter ispezionare un manifesto copiato altrove
+    // è comodo.
+    if !args.dry_run {
+        state::ensure_trustworthy(&state_path).map_err(|e| anyhow!(e))?;
+    }
+
     print_rollback_summary(&state, &state_path, &config, args);
 
     let interactive = prompt::is_interactive();

@@ -570,3 +570,46 @@ fn opening_the_https_port_opens_443_on_the_firewall() {
         "l'unico effetto del flag deve esserci davvero"
     );
 }
+
+/// A-V3-7, la conseguenza: su una macchina che ha già una regola `8080/tcp`, la
+/// porta 80 **deve comunque essere aperta**.
+///
+/// Il difetto non si vedeva come un errore: nginx veniva installato,
+/// configurato e ricaricato senza un intoppo, e restava irraggiungibile
+/// dall'esterno. Nessuna riga anomala nel report — il sintomo era assente,
+/// non oscuro.
+///
+/// Questo test è la metà comportamentale della guardia: quella pura
+/// (`ufw_rule_in_status`) prova il predicato, questa prova cosa ne consegue.
+/// Poterla scrivere è costato rendere il mock fedele: prima rispondeva con
+/// un'appartenenza a un insieme, semantica che il vero `ufw` non ha.
+#[test]
+fn port_80_is_opened_even_when_8080_is_already_allowed() {
+    let cfg = MockConfig {
+        ufw_available: true,
+        ufw_active: true,
+        existing_ufw_rules: rules(&["8080/tcp"]),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = NginxFirewall::with_ops(Box::new(mock));
+    let c = ctx(true, false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let ops = ops_of(&log);
+    assert!(
+        ops.contains(&Op::UfwAllow("80/tcp".to_string())),
+        "80/tcp non è presente solo perché lo è 8080/tcp: senza questa apertura \
+         nginx resta irraggiungibile e nulla lo segnala (A-V3-7): {ops:?}"
+    );
+
+    // E resta vero il contrario: una regola davvero presente non si ritocca.
+    step.undo(&c).expect("undo");
+    let ops = ops_of(&log);
+    assert!(
+        !ops.contains(&Op::UfwDelete("8080/tcp".to_string())),
+        "mai toccare una regola preesistente del cliente: {ops:?}"
+    );
+}

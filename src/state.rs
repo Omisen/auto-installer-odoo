@@ -81,6 +81,70 @@ pub const DEFAULT_STATE_PATH: &str = "/var/lib/odoo-installer/state.json";
 /// Vedi [`resolve_state_path`].
 pub const LEGACY_STATE_PATH: &str = "/opt/odoo/.installer-state.json";
 
+/// Il file di stato è **affidabile** come sorgente di un'operazione distruttiva?
+///
+/// Il manifesto guida dei `rm -rf`, dei `dropdb` e dei `userdel`. Prima di
+/// eseguirli va stabilito che quel file non sia sotto il controllo di qualcun
+/// altro (A-V3-8): dev'essere di **root**, non scrivibile da gruppo o altri, e
+/// deve stare in una directory a sua volta non scrivibile da terzi — altrimenti
+/// chiunque potrebbe sostituirlo e scegliere lui cosa faremo sparire.
+///
+/// Non si applica al `--dry-run`, che stampa soltanto: lì poter ispezionare un
+/// manifesto copiato altrove è comodo e non fa danni.
+pub fn ensure_trustworthy(path: &Path) -> Result<(), StepError> {
+    use std::os::unix::fs::MetadataExt;
+
+    let meta = fs::metadata(path).map_err(|e| StepError::io(path, e))?;
+    let parent_mode = path
+        .parent()
+        .and_then(|p| fs::metadata(p).ok())
+        .map(|m| m.mode());
+
+    trust_verdict(meta.uid(), meta.mode(), parent_mode).map_err(|reason| {
+        StepError::Precondition(format!(
+            "il file di stato {} non è una fonte affidabile: {reason}.\n\
+             \n\
+             Guida `rm -rf`, `dropdb` e `userdel`: non lo consumo da qualcosa che un \
+             altro utente potrebbe riscrivere o sostituire.",
+            path.display()
+        ))
+    })
+}
+
+/// La regola di [`ensure_trustworthy`], sui soli numeri.
+///
+/// Separata perché il caso **positivo** — file di root, `0600`, in una directory
+/// non scrivibile da terzi — non è riproducibile in un test che gira senza
+/// privilegi: un file creato in una tempdir appartiene all'utente che esegue i
+/// test. Con i permessi come parametri la regola si verifica per intero, in
+/// entrambe le direzioni. Stesso motivo per cui esistono `checks::ensure_root_euid`
+/// e `checks::ensure_sudo_user`.
+pub fn trust_verdict(uid: u32, mode: u32, parent_mode: Option<u32>) -> Result<(), String> {
+    if uid != 0 {
+        return Err(format!("non appartiene a root (uid {uid})"));
+    }
+    if mode & 0o022 != 0 {
+        return Err(format!(
+            "è scrivibile da gruppo o altri (mode {:o})",
+            mode & 0o777
+        ));
+    }
+    // La directory conta quanto il file: in una directory scrivibile da terzi il
+    // file si sostituisce senza bisogno di poterlo modificare. Lo sticky bit —
+    // `/tmp` — toglie proprio quella possibilità, quindi non è un problema.
+    if let Some(dir_mode) = parent_mode {
+        let sticky = dir_mode & 0o1000 != 0;
+        if dir_mode & 0o022 != 0 && !sticky {
+            return Err(format!(
+                "sta in una directory scrivibile da terzi (mode {:o}), dove chiunque \
+                 potrebbe sostituirlo",
+                dir_mode & 0o777
+            ));
+        }
+    }
+    Ok(())
+}
+
 /// Sceglie il manifesto da consumare quando l'utente non passa `--state`.
 ///
 /// Ordine: il percorso corrente se esiste, altrimenti quello storico se esiste,
@@ -220,6 +284,49 @@ impl InstallConfig {
                 self.install_dir.display().to_string(),
             ),
         ]
+    }
+
+    /// Il manifesto descrive un'installazione **di questo installer**?
+    ///
+    /// # Perché serve, e perché sta qui (A-V3-8)
+    ///
+    /// Gli `undo` cancellano alberi a partire da percorsi che arrivano dal file
+    /// di stato, e `--state <FILE>` accetta qualunque percorso. La rete che
+    /// c'era — `steps::remove_created_root`, che pretende `target` sotto `home`
+    /// — non proteggeva da nulla, perché **`home` e `target` vengono entrambi
+    /// dallo stesso file**: con `odoo_home: "/"` e `created_root: "/etc"` la
+    /// guardia passava senza obiezioni.
+    ///
+    /// La correzione non è irrigidire quella guardia ma **ancorarla a un valore
+    /// che non arriva dal file**: `ODOO_HOME` è dichiarata costante
+    /// architetturale e non sovrascrivibile (`config.rs`), quindi un manifesto
+    /// che ne dichiara un'altra non descrive un'installazione fatta da questo
+    /// programma. Validare qui — al confine, quando i dati non fidati entrano —
+    /// copre in un colpo solo *tutti* gli undo che usano `odoo_home`, non solo
+    /// quell'unica funzione: la rimozione della home, il `chown` di ripristino,
+    /// il filestore e la cache.
+    pub fn validate_perimeter(&self) -> Result<(), StepError> {
+        let atteso = Path::new(crate::config::ODOO_HOME);
+        if self.odoo_home != atteso {
+            return Err(StepError::Precondition(format!(
+                "il manifesto dichiara come home '{}', ma questo installer usa solo '{}' \
+                 (costante architetturale).\n\
+                 \n\
+                 Non descrive un'installazione fatta da questo programma, e gli undo \
+                 agirebbero su percorsi che non conosciamo: mi fermo senza toccare nulla.",
+                self.odoo_home.display(),
+                atteso.display()
+            )));
+        }
+        if !self.install_dir.starts_with(atteso) || self.install_dir == atteso {
+            return Err(StepError::Precondition(format!(
+                "il manifesto dichiara come directory di installazione '{}', che non sta \
+                 sotto '{}': mi fermo senza toccare nulla.",
+                self.install_dir.display(),
+                atteso.display()
+            )));
+        }
+        Ok(())
     }
 
     /// Ricostruisce il [`Context`] per il rollback da disco.
