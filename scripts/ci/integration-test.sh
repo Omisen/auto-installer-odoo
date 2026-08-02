@@ -192,6 +192,55 @@ rimuovere (regressione A-R4-1)"
   endgroup
 fi
 
+# --- fase 2-bis: una seconda installazione NON deve toccare il manifesto -----
+#
+# A-V3-1. Prima, rilanciare l'installer su un'istanza già installata riscriveva
+# il manifesto con ogni artefatto marcato `Preexisting` — perché è ciò che gli
+# snapshot vedono, correttamente — e da lì `rollback` faceva 24 undo NO-OP,
+# dichiarava «nessun residuo», cancellava lo stato e lasciava Odoo installato
+# per sempre. Lo scenario finiva con il test **verde**: è il motivo per cui
+# serve provarlo qui e non solo su mock.
+#
+# Si verificano tre cose, in ordine di importanza: che la seconda esecuzione
+# fallisca; che il manifesto sia rimasto **identico**; e che il messaggio
+# indirizzi l'utente da qualche parte invece di lasciarlo a indovinare.
+
+if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
+  group "Seconda installazione: deve essere rifiutata (A-V3-1)"
+
+  sudo cp "$STATE" "$WORK/manifest-before.json"
+
+  set +e
+  sudo "$BIN" --config "$ENV_FILE" > "$WORK/second-install.log" 2>&1
+  SECOND_RC=$?
+  set -e
+  echo "exit code seconda installazione: $SECOND_RC"
+
+  if [ "$SECOND_RC" -ne 0 ]; then
+    ok "la seconda installazione è stata rifiutata (exit $SECOND_RC)"
+  else
+    fail "la seconda installazione è stata ACCETTATA: il manifesto è a rischio (A-V3-1)"
+  fi
+
+  sudo cp "$STATE" "$WORK/manifest-after.json"
+  if sudo cmp -s "$WORK/manifest-before.json" "$WORK/manifest-after.json"; then
+    ok "il manifesto è rimasto identico byte-per-byte"
+  else
+    fail "il manifesto è cambiato dopo un'installazione rifiutata: \
+l'istanza potrebbe non essere più disinstallabile (A-V3-1)"
+    sudo diff "$WORK/manifest-before.json" "$WORK/manifest-after.json" || true
+  fi
+
+  if grep -q -e 'rollback' -e '--force' "$WORK/second-install.log"; then
+    ok "il rifiuto indica come procedere (rollback o --force)"
+  else
+    fail "il rifiuto non dice all'utente cosa fare"
+    tail -n 20 "$WORK/second-install.log" || true
+  fi
+
+  endgroup
+fi
+
 # --- fase 3: fotografia del delta apt, PRIMA del rollback --------------------
 #
 # Il delta è l'insieme dei pacchetti che NON c'erano prima di noi: il rollback

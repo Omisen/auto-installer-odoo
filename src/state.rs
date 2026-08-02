@@ -186,6 +186,42 @@ impl InstallConfig {
         }
     }
 
+    /// Le due configurazioni nominano gli **stessi artefatti**?
+    ///
+    /// Serve al resume (A-V3-1): riprendere un'installazione interrotta con
+    /// parametri diversi produrrebbe un manifesto che descrive un'istanza mai
+    /// esistita — metà artefatti con un nome, metà con un altro — e gli undo
+    /// punterebbero in parte altrove. Nel caso del database è la violazione
+    /// diretta dell'anti-drop: si riprenderebbe con `--db-name` diverso e il
+    /// rollback droppererebbe un database che non abbiamo creato.
+    ///
+    /// Si confrontano solo i campi che **identificano** un artefatto. Restano
+    /// fuori, di proposito: `port` e `odoo_logfile` (nessun undo li usa per
+    /// nominare qualcosa — il logfile è coperto dalla directory, che è un
+    /// artefatto proprio di `SetupLogDir`), `with_nginx` (aggiunge step, non
+    /// rinomina i precedenti) e `sudo_user` (chi riprende può legittimamente
+    /// essere un altro amministratore).
+    pub fn same_identity(&self, other: &Self) -> bool {
+        self.identity() == other.identity()
+    }
+
+    /// I campi confrontati da [`same_identity`](InstallConfig::same_identity),
+    /// etichettati, per poter **dire all'utente cosa** non coincide invece di
+    /// un generico "parametri diversi".
+    pub fn identity(&self) -> Vec<(&'static str, String)> {
+        vec![
+            ("versione Odoo", self.odoo_version.clone()),
+            ("utente di sistema", self.odoo_user.clone()),
+            ("ruolo database", self.db_user.clone()),
+            ("nome database", self.db_name.clone()),
+            ("home", self.odoo_home.display().to_string()),
+            (
+                "directory di installazione",
+                self.install_dir.display().to_string(),
+            ),
+        ]
+    }
+
     /// Ricostruisce il [`Context`] per il rollback da disco.
     ///
     /// I campi non persistiti restano ai default: le password sono vuote
@@ -213,6 +249,83 @@ impl InstallConfig {
             state_path,
             ..Default::default()
         }
+    }
+}
+
+/// Esito della decisione presa all'avvio di un'installazione (A-V3-1).
+///
+/// È una **politica pura**, come `rollback::confirmation_gate`: `main` la
+/// applica e ne formatta i messaggi, ma la regola sta qui e si verifica senza
+/// filesystem, senza root e senza terminale. Non è un vezzo — il difetto che
+/// questa decisione chiude viveva in `main`, fra pezzi che i test coprivano
+/// singolarmente, ed è precisamente il tipo di codice che questo progetto ha
+/// imparato a non lasciare fuori dalla libreria.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StartDecision {
+    /// Nessun manifesto utile: prima installazione.
+    Fresh,
+    /// Manifesto parziale e compatibile: si riprende.
+    Resume,
+    /// `--force` su un manifesto esistente: si archivia e si riparte da capo.
+    Replace,
+    /// Manifesto di un'installazione **conclusa**: si rifiuta.
+    RefuseFinished,
+    /// Manifesto parziale che nomina artefatti diversi da quelli richiesti.
+    /// Porta le differenze (campo, valore registrato, valore richiesto).
+    RefuseIdentityMismatch(Vec<(&'static str, String, String)>),
+    /// Manifesto parziale senza configurazione (formato pre-R4): non si può
+    /// stabilire se descriva gli stessi artefatti, quindi non si riprende.
+    RefuseUnknownIdentity,
+}
+
+/// La regola di avvio: installare, riprendere o rifiutare.
+///
+/// # Perché un manifesto non si sovrascrive mai in silenzio
+///
+/// Prima di R8 il percorso di installazione non apriva mai il manifesto:
+/// `Installer::new()` e, al primo step, `save` che tronca. Su un'installazione
+/// già conclusa il risultato era un manifesto in cui **niente è nostro** — gli
+/// snapshot vedono correttamente ogni artefatto già presente — e da lì il
+/// rollback eseguiva ventiquattro undo NO-OP, dichiarava «nessun residuo» e
+/// cancellava lo stato: Odoo installato per sempre, senza più traccia di cosa
+/// rimuovere.
+///
+/// Il caso **parziale** è la stessa perdita in forma più insidiosa, perché
+/// colpisce il flusso che il progetto dichiara supportato («rilancia e
+/// prosegui»): gli step del primo giro tornerebbero `Preexisting` e il database
+/// creato allora finirebbe protetto dall'anti-drop. Per questo si riprende
+/// invece di rifiutare — ma solo a parità di identità degli artefatti.
+pub fn start_decision(
+    state: &InstallState,
+    requested: &InstallConfig,
+    force: bool,
+) -> StartDecision {
+    if state.completed.is_empty() {
+        return StartDecision::Fresh;
+    }
+    if force {
+        return StartDecision::Replace;
+    }
+    if state.finished {
+        return StartDecision::RefuseFinished;
+    }
+
+    let Some(precedente) = &state.config else {
+        return StartDecision::RefuseUnknownIdentity;
+    };
+
+    let differenze: Vec<(&'static str, String, String)> = precedente
+        .identity()
+        .into_iter()
+        .zip(requested.identity())
+        .filter(|((_, prima), (_, ora))| prima != ora)
+        .map(|((campo, prima), (_, ora))| (campo, prima, ora))
+        .collect();
+
+    if differenze.is_empty() {
+        StartDecision::Resume
+    } else {
+        StartDecision::RefuseIdentityMismatch(differenze)
     }
 }
 
@@ -355,5 +468,17 @@ impl InstallState {
     /// artefatti annullare.
     pub fn set_config(&mut self, config: InstallConfig) {
         self.config = Some(config);
+    }
+
+    /// Il record di uno step già completato, se c'è. È il punto d'appoggio del
+    /// resume (A-V3-1): il motore lo usa per sapere che quello step **è già
+    /// stato eseguito**, e ne reidrata lo snapshot invece di rifarlo.
+    ///
+    /// La ricerca è per **nome**, non per posizione: la sequenza canonica può
+    /// cambiare fra versioni dell'installer, e un manifesto scritto da una
+    /// versione con meno step non deve essere riletto per indice — è lo stesso
+    /// motivo per cui esiste il flag `finished`.
+    pub fn record_for(&self, name: &str) -> Option<&StepRecord> {
+        self.completed.iter().find(|r| r.name == name)
     }
 }

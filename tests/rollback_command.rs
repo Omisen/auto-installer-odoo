@@ -690,6 +690,20 @@ fn the_bare_command_still_installs() {
     assert_eq!(cli.db_name.as_deref(), Some("fatturazione"));
     assert!(cli.with_nginx);
     assert!(cli.dry_run);
+    assert!(!cli.force, "--force è disattivo se non passato");
+}
+
+/// `--force` è la via d'uscita esplicita dal rifiuto su manifesto esistente
+/// (A-V3-1), e non deve aver spostato nulla del parsing preesistente.
+#[test]
+fn force_is_an_install_flag_and_defaults_to_off() {
+    let cli = Cli::parse_from(["odoo-installer", "--force"]);
+    assert!(
+        cli.command.is_none(),
+        "resta un'installazione, non un sottocomando"
+    );
+    assert!(cli.force);
+    assert!(!cli.dry_run && !cli.aggressive_rollback);
 }
 
 #[test]

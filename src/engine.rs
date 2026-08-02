@@ -37,6 +37,34 @@ impl Installer {
         Self::default()
     }
 
+    /// Crea un installer che **riprende** da un manifesto parziale (A-V3-1).
+    ///
+    /// Gli step già registrati in `state` non vengono rieseguiti: il motore ne
+    /// reidrata lo snapshot e li considera completati. È l'unico modo di
+    /// mantenere la promessa «rilancia e prosegui» senza perdere la
+    /// **proprietà** degli artefatti.
+    ///
+    /// # Perché non basta rieseguire
+    ///
+    /// Rilanciare da zero è idempotente negli *effetti* — ogni snapshot vede il
+    /// proprio artefatto già presente e il `run` non fa nulla — ma è amnesico
+    /// sulla *proprietà*: quegli artefatti li avevamo creati **noi**, e il nuovo
+    /// manifesto li dichiarerebbe `Preexisting`. Il database creato dal primo
+    /// giro finirebbe protetto dall'anti-drop e non verrebbe rimosso mai più.
+    /// La proprietà, come per il rollback da disco, si **rilegge** — non si
+    /// rideduce.
+    ///
+    /// # Perché non basta ereditare il `PreState`
+    ///
+    /// Reidratare lo step e poi eseguirne comunque il `run` è peggio che
+    /// inutile: `PrepareOptRoot::run` con `CreatedByUs` ereditato chiamerebbe
+    /// `create_dir` su una directory che esiste già e fallirebbe. Ciò che si
+    /// eredita è il fatto che lo step **è già stato eseguito**, non solo il suo
+    /// esito.
+    pub fn resuming_from(state: InstallState) -> Self {
+        Self { state }
+    }
+
     /// Accesso in sola lettura allo stato accumulato (utile per test/ispezione).
     pub fn state(&self) -> &InstallState {
         &self.state
@@ -65,11 +93,45 @@ impl Installer {
         // permette a `odoo-installer rollback` di sapere quali artefatti
         // annullare se questo processo non arriva mai alla fine (vedi
         // `crate::state::InstallConfig`). Nessuna password vi entra.
-        self.state.set_config(InstallConfig::from_context(ctx));
+        //
+        // In un resume la configurazione è già nello stato e **non** viene
+        // toccata: `main` ha già verificato che quella richiesta coincida
+        // sull'identità degli artefatti (vedi `InstallConfig::same_identity`).
+        // Sovrascriverla qui significherebbe poter rinominare gli artefatti di
+        // un'installazione in corso — cioè far puntare gli undo altrove.
+        if self.state.config.is_none() {
+            self.state.set_config(InstallConfig::from_context(ctx));
+        }
 
         for idx in 0..steps.len() {
             let name = steps[idx].name().to_string();
             reporter.step_start(&name, idx, total);
+
+            // Resume: lo step risulta già eseguito in un'esecuzione precedente.
+            // Si reidrata il suo snapshot e lo si considera completato, senza
+            // rieseguire né `snapshot` (fotograferebbe il sistema DOPO le nostre
+            // mutazioni) né `run` (che su un artefatto già creato fallirebbe).
+            if let Some(record) = self.state.record_for(&name) {
+                let snapshot = record.snapshot.clone();
+                if let Err(e) = steps[idx].rehydrate(&snapshot) {
+                    // Fail-closed, come nel rollback da disco: senza uno
+                    // snapshot leggibile non sappiamo di chi sia l'artefatto, e
+                    // proseguire significherebbe costruire un manifesto che
+                    // mente. Meglio fermarsi prima di mutare altro.
+                    error!(
+                        step = %name,
+                        error = %e,
+                        "resume: snapshot persistito illeggibile, non posso riprendere"
+                    );
+                    reporter.step_failed(&name);
+                    self.rollback_with_reporter(steps, &completed, ctx, reporter);
+                    return Err(e);
+                }
+                info!(step = %name, "resume: già eseguito, salto snapshot e run");
+                completed.push(idx);
+                reporter.step_done(&name);
+                continue;
+            }
 
             info!(step = %name, "snapshot");
             if let Err(e) = steps[idx].snapshot(ctx) {

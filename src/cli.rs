@@ -91,6 +91,13 @@ pub struct Cli {
     /// pacchetti pesanti. Di default il rollback le lascia installate.
     #[arg(long)]
     pub aggressive_rollback: bool,
+
+    /// Installa anche se esiste già un manifesto, mettendolo da parte invece di
+    /// sovrascriverlo. Serve a reinstallare sopra un'istanza esistente: il
+    /// manifesto precedente viene rinominato, mai cancellato, perché resta
+    /// l'unica traccia di quali artefatti quell'installazione aveva creato.
+    #[arg(long)]
+    pub force: bool,
 }
 
 /// I sottocomandi disponibili.

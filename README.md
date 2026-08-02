@@ -126,6 +126,7 @@ default**.
 | `--config <FILE>` | carica un file `.env` (dichiarativo) | — |
 | `--dry-run` | mostra il piano senza mutare nulla | disattivo |
 | `--aggressive-rollback` | in rollback purga anche pacchetti che di norma resterebbero | disattivo |
+| `--force` | installa anche se esiste già un manifesto, mettendolo da parte invece di sovrascriverlo | disattivo |
 | `--help` | messaggio d'aiuto | — |
 
 Sottocomandi: `odoo-installer rollback` (alias `uninstall`) — vedi
@@ -211,6 +212,20 @@ chiave è sulle **risorse preesistenti**, che non vengono mai toccate da un roll
 - **PostgreSQL** già installato **resta** (di default stop/disable, mai purge senza flag);
 - **`/opt/odoo`** già presente **resta**;
 - il **`~/.bashrc`** dell'utente torna **byte-per-byte** com'era (solo la nostra riga viene rimossa).
+
+### Rilanciare l'installer
+
+L'installer **non sovrascrive mai** un'installazione già registrata. Al rilancio:
+
+- se l'installazione precedente era **conclusa**, si ferma e ti dice cosa fare — `odoo-installer
+  rollback` per rimuoverla, `--force` per reinstallare sopra. Con `--force` il manifesto precedente
+  viene *archiviato*, mai cancellato: se quell'installazione aveva creato qualcosa, quel file è
+  l'unica traccia di cosa;
+- se era **interrotta** (Ctrl-C, crash, spegnimento), riprende da dove si era fermata: gli step già
+  eseguiti non vengono rifatti, e resta registrato che quegli artefatti sono **nostri**. È ciò che
+  permette al rollback di rimuoverli anche mesi dopo. Per riprendere servono gli **stessi parametri**:
+  con un nome di database diverso l'installer si ferma e dice quale campo non coincide, perché un
+  manifesto a metà fra due istanze farebbe agire il rollback sugli artefatti sbagliati.
 
 Il rollback esiste in **due forme**, con le stesse regole:
 

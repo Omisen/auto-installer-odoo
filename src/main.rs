@@ -22,7 +22,7 @@ use odoo_installer::prompt;
 use odoo_installer::rollback::{
     self, ConfirmationGate, InstallStatus, RollbackReport, UndoOutcome,
 };
-use odoo_installer::state::{InstallState, DEFAULT_STATE_PATH};
+use odoo_installer::state::{self, InstallConfig, InstallState, StartDecision};
 use odoo_installer::steps;
 
 fn main() -> Result<()> {
@@ -79,7 +79,9 @@ fn run_install(cli: &Cli) -> Result<()> {
         }
     }
 
-    let state_path = PathBuf::from(DEFAULT_STATE_PATH);
+    // Si lavora sul manifesto che si **trova**: quello corrente, o quello al
+    // percorso storico se è l'unico presente (istanza installata prima di R7).
+    let state_path = odoo_installer::state::resolve_state_path();
     let mut ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
     ctx.aggressive_rollback = cli.aggressive_rollback;
     ctx.sudo_user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty());
@@ -97,16 +99,35 @@ fn run_install(cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
+    // Preflight checks NON mutanti: falliscono prima di ogni mutazione.
+    //
+    // Girano **prima** della decisione sul manifesto e prima della conferma, e
+    // l'ordine conta: il manifesto è `0600 root`, quindi senza `check_root` un
+    // utente non privilegiato leggerebbe «permission denied» su un file di cui
+    // non sa nulla, invece del messaggio che gli dice di usare sudo. Più in
+    // generale: tutto ciò che può dire di no senza toccare niente viene prima
+    // della domanda, così all'utente non si chiede di confermare qualcosa che
+    // stiamo per rifiutare comunque.
+    let os_info = run_preflight_checks(&ctx)?;
+    ctx.os_info = Some(os_info);
+
+    // Manifesto già sul disco: decide se questa esecuzione è una prima
+    // installazione, un resume o un rifiuto (A-V3-1). Legge il disco e basta:
+    // l'eventuale mutazione (archiviare il manifesto per `--force`) avviene dopo
+    // la conferma e dopo il lock, con tutte le altre.
+    let start = decide_start(&ctx, cli.force)?;
+
     // Conferma finale interattiva prima di mutare il sistema.
-    if interactive && !prompt::confirm("Procedere con l'installazione?")? {
+    let question = match &start {
+        Start::Fresh => "Procedere con l'installazione?",
+        Start::Resume(_) => "Riprendere l'installazione interrotta?",
+        Start::Replace => "Reinstallare da capo, mettendo da parte il manifesto esistente?",
+    };
+    if interactive && !prompt::confirm(question)? {
         bail!("Installazione annullata dall'utente.");
     }
 
     print_interrupt_notice(&ctx.state_path);
-
-    // Preflight checks NON mutanti: falliscono prima di ogni mutazione.
-    let os_info = run_preflight_checks(&ctx)?;
-    ctx.os_info = Some(os_info);
 
     // Lock esclusivo: impedisce due installazioni simultanee. Il guard rilascia
     // il lock al Drop (successo, errore o panic). Acquisito dopo i check e prima
@@ -127,7 +148,27 @@ fn run_install(cli: &Cli) -> Result<()> {
         Box::new(LogReporter)
     };
 
-    let mut installer = Installer::new();
+    // `--force`: il manifesto precedente si sposta di lato, mai si cancella. Qui
+    // e non prima: è una mutazione, e le mutazioni stanno dopo la conferma e
+    // dopo il lock.
+    let mut installer = match start {
+        Start::Fresh => Installer::new(),
+        Start::Resume(state) => Installer::resuming_from(*state),
+        Start::Replace => {
+            let saved = archive_manifest(&ctx.state_path)?;
+            tracing::warn!(
+                archiviato = %saved.display(),
+                "--force: manifesto precedente messo da parte, non cancellato"
+            );
+            println!(
+                "--force: manifesto precedente archiviato in {}.\n\
+                 Se quell'installazione aveva creato artefatti, resta l'unica traccia di \
+                 cosa rimuovere: conservalo (`odoo-installer rollback --state <file>`).",
+                saved.display()
+            );
+            Installer::new()
+        }
+    };
     installer
         .execute_with_reporter(&mut steps, &ctx, reporter.as_ref())
         .map_err(|e| {
@@ -154,6 +195,134 @@ fn run_install(cli: &Cli) -> Result<()> {
     print_install_summary(&ctx);
     tracing::info!("preparazione completata");
     Ok(())
+}
+
+/// Da dove parte questa esecuzione.
+///
+/// È una **decisione**, non un'azione: `decide_start` la calcola leggendo il
+/// disco e nient'altro, così può essere presa prima della conferma interattiva
+/// e prima del lock. L'unica mutazione che ne discende — archiviare il manifesto
+/// per `--force` — avviene dopo entrambi, insieme a tutte le altre.
+enum Start {
+    /// Nessun manifesto utile: prima installazione.
+    Fresh,
+    /// Manifesto parziale compatibile: si riprende da dove si era arrivati.
+    /// `Box` perché [`InstallState`] porta l'intero elenco degli step: senza,
+    /// ogni variante dell'enum peserebbe quanto il manifesto.
+    Resume(Box<InstallState>),
+    /// `--force` su un manifesto esistente: si reinstalla da capo dopo averlo
+    /// messo da parte.
+    Replace,
+}
+
+/// Applica la politica di avvio (A-V3-1) e ne formatta l'esito per l'utente.
+///
+/// La **regola** non sta qui: sta in [`odoo_installer::state::start_decision`],
+/// pura e verificabile senza filesystem. Qui restano le due cose che sono
+/// davvero di `main`: leggere il manifesto dal disco e trasformare un rifiuto in
+/// un messaggio che dica all'utente cosa fare. La separazione è deliberata —
+/// A-V3-1 è nato proprio da una decisione che viveva in `main`, dove nessun test
+/// arriva.
+fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
+    let state = InstallState::load(&ctx.state_path).map_err(|e| anyhow!(e))?;
+    let richiesta = InstallConfig::from_context(ctx);
+
+    match state::start_decision(&state, &richiesta, force) {
+        StartDecision::Fresh => Ok(Start::Fresh),
+        StartDecision::Replace => Ok(Start::Replace),
+
+        StartDecision::Resume => {
+            println!(
+                "Installazione interrotta trovata in {}: {} step gia' completati, si riprende.\n\
+                 Gli step gia' eseguiti non vengono rifatti e la proprieta' degli artefatti \n\
+                 registrata allora viene conservata.\n\
+                 (Per ricominciare da capo: `sudo odoo-installer rollback`, oppure `--force`.)",
+                ctx.state_path.display(),
+                state.completed.len()
+            );
+            Ok(Start::Resume(Box::new(state)))
+        }
+
+        StartDecision::RefuseFinished => {
+            let istanza = state
+                .config
+                .as_ref()
+                .map(|c| {
+                    format!(
+                        "Odoo {}, utente '{}', database '{}', in {}",
+                        c.odoo_version,
+                        c.odoo_user,
+                        c.db_name,
+                        c.install_dir.display()
+                    )
+                })
+                .unwrap_or_else(|| "configurazione non registrata".to_string());
+            bail!(
+                "Risulta gia' un'installazione completata su questa macchina.\n\
+                 \n  Manifesto : {}\n  Istanza   : {}\n  Step      : {} registrati\n\
+                 \n\
+                 Per rimuoverla:                        sudo odoo-installer rollback\n\
+                 Per reinstallare sopra (manifesto messo da parte):  --force\n\
+                 \n\
+                 Proseguire senza una scelta esplicita sovrascriverebbe il manifesto con \
+                 artefatti tutti marcati come preesistenti, e questa istanza non sarebbe \
+                 piu' disinstallabile automaticamente.",
+                ctx.state_path.display(),
+                istanza,
+                state.completed.len()
+            )
+        }
+
+        StartDecision::RefuseIdentityMismatch(differenze) => {
+            let elenco: Vec<String> = differenze
+                .iter()
+                .map(|(campo, prima, ora)| format!("  {campo}: '{prima}' -> '{ora}'"))
+                .collect();
+            bail!(
+                "C'e' un'installazione interrotta ({} step) in {}, ma i parametri richiesti \
+                 nominano artefatti diversi:\n{}\n\
+                 \n\
+                 Riprendere cosi' produrrebbe un manifesto a meta' fra due istanze, e il \
+                 rollback agirebbe in parte sugli artefatti sbagliati.\n\
+                 \n\
+                 Rilancia con gli stessi parametri per riprendere, oppure \
+                 `sudo odoo-installer rollback` per ripulire prima.",
+                state.completed.len(),
+                ctx.state_path.display(),
+                elenco.join("\n")
+            )
+        }
+
+        StartDecision::RefuseUnknownIdentity => bail!(
+            "C'e' un'installazione interrotta ({} step) in {}, ma il manifesto non registra \
+             la configurazione (formato precedente alla R4): non posso verificare che \
+             descriva gli stessi artefatti, quindi non la riprendo.\n\
+             \n\
+             Usa `sudo odoo-installer rollback --state {}` per ripulire, oppure `--force` \
+             per ricominciare mettendo da parte il manifesto.",
+            state.completed.len(),
+            ctx.state_path.display(),
+            ctx.state_path.display()
+        ),
+    }
+}
+
+/// Sposta il manifesto di lato invece di lasciarlo sovrascrivere (`--force`).
+///
+/// Non si cancella mai: se quell'installazione aveva creato artefatti, questo
+/// file è l'**unica** traccia di quali fossero. Il nome porta l'istante per non
+/// sovrascrivere un archivio precedente.
+fn archive_manifest(path: &Path) -> Result<PathBuf> {
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(format!(".superseded-{stamp}"));
+    let target = path.with_file_name(name);
+    std::fs::rename(path, &target)
+        .map_err(|e| anyhow!("impossibile archiviare {}: {e}", path.display()))?;
+    Ok(target)
 }
 
 /// Esegue i preflight checks non mutanti nell'ordine del Bash. Ritorna le info
