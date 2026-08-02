@@ -235,28 +235,34 @@ fn the_step_in_flight_is_allowed_to_finish() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx_with_state(&dir);
     let interrupted = Arc::new(AtomicBool::new(false));
+    let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
 
     let flag = Arc::clone(&interrupted);
     let mut steps: Vec<Box<dyn Step>> = vec![
-        Box::new(NoopStep::new("alpha").on_run(move || flag.store(true, Ordering::SeqCst))),
-        Box::new(NoopStep::new("beta")),
+        Box::new(
+            NoopStep::new("alpha")
+                .with_undo_log(Arc::clone(&log))
+                .on_run(move || flag.store(true, Ordering::SeqCst)),
+        ),
+        Box::new(NoopStep::new("beta").with_undo_log(Arc::clone(&log))),
     ];
 
     let mut installer = Installer::new().watching_interrupt(Arc::clone(&interrupted));
     let _ = installer.execute(&mut steps, &ctx);
 
-    // alpha risulta completato e persistito: il manifesto descrive uno stato
-    // che il rollback da disco saprebbe leggere.
-    let nomi: Vec<&str> = installer
-        .state()
-        .completed
-        .iter()
-        .map(|r| r.name.as_str())
-        .collect();
+    // La prova che alpha è stato portato a termine è che il rollback lo
+    // **annulla**: un undo viene invocato solo su uno step completato. Non la
+    // si cerca nel manifesto, perché lì — giustamente — dopo il rollback alpha
+    // non c'è più: il manifesto dice cosa resta, non cosa è stato fatto.
+    let azioni = log.lock().expect("log").clone();
     assert_eq!(
-        nomi,
-        vec!["alpha"],
-        "lo step interrotto a metà corsa dev'essere completo, non troncato"
+        azioni,
+        vec!["alpha".to_string()],
+        "lo step in corso va completato (e quindi annullato); beta non è mai partito"
+    );
+    assert!(
+        installer.state().completed.is_empty(),
+        "annullato alpha, sul sistema non resta nulla: il manifesto deve dirlo"
     );
 }
 
@@ -286,4 +292,85 @@ fn without_an_interrupt_nothing_changes() {
         .watching_interrupt(Arc::new(AtomicBool::new(false)))
         .execute(&mut steps, &ctx)
         .expect("flag mai alzato: nessun effetto");
+}
+
+/// **A-R8-1.** Dopo un fallimento, il rollback automatico annulla gli step già
+/// eseguiti — e il manifesto **non deve continuare a elencarli**.
+///
+/// È il flusso che README e wiki descrivono da sempre: «se fallisce, correggi la
+/// causa e rilancia». Con il resume introdotto in R8, un manifesto che elencava
+/// step già annullati faceva saltare al rilancio proprio quelli: l'installazione
+/// proseguiva dando per esistenti `/opt/odoo`, l'utente e il database che il
+/// rollback aveva appena rimosso.
+///
+/// La regola che lo chiude: **il manifesto dice cosa c'è ancora sul sistema**,
+/// non cosa è stato fatto a un certo punto.
+#[test]
+fn a_rolled_back_step_is_re_executed_on_the_next_run() {
+    use std::sync::atomic::AtomicUsize;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+
+    // Giro 1: alpha riesce, beta fallisce → il rollback annulla alpha.
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha")),
+        Box::new(NoopStep::new("beta").fail_on_run()),
+    ];
+    let _ = Installer::new().execute(&mut steps, &ctx);
+
+    let dopo_rollback = InstallState::load(&ctx.state_path).expect("load");
+    assert!(
+        dopo_rollback.completed.is_empty(),
+        "alpha è stato annullato: il manifesto non deve più elencarlo, trovato {:?}",
+        dopo_rollback
+            .completed
+            .iter()
+            .map(|r| r.name.as_str())
+            .collect::<Vec<_>>()
+    );
+
+    // Giro 2: si rilancia. alpha dev'essere RIESEGUITO, non saltato.
+    let esecuzioni = Arc::new(AtomicUsize::new(0));
+    let contatore = Arc::clone(&esecuzioni);
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha").on_run(move || {
+            contatore.fetch_add(1, Ordering::SeqCst);
+        })),
+        Box::new(NoopStep::new("beta")),
+    ];
+    Installer::resuming_from(dopo_rollback)
+        .execute(&mut steps, &ctx)
+        .expect("il secondo giro deve arrivare in fondo");
+
+    assert_eq!(
+        esecuzioni.load(Ordering::SeqCst),
+        1,
+        "alpha era stato annullato: saltarlo lascerebbe l'installazione a costruire \
+         su artefatti che non esistono"
+    );
+}
+
+/// Ma un undo **fallito** lascia il record: lì l'artefatto è (forse) ancora sul
+/// sistema, e quel record è l'unica traccia del residuo che
+/// `odoo-installer rollback` potrà ritentare. Dimenticarlo sarebbe perdere
+/// l'informazione proprio nel caso in cui serve.
+#[test]
+fn a_failed_undo_keeps_its_record() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+
+    let mut steps: Vec<Box<dyn Step>> = vec![
+        Box::new(NoopStep::new("alpha").fail_on_undo()),
+        Box::new(NoopStep::new("beta").fail_on_run()),
+    ];
+    let _ = Installer::new().execute(&mut steps, &ctx);
+
+    let stato = InstallState::load(&ctx.state_path).expect("load");
+    let nomi: Vec<&str> = stato.completed.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(
+        nomi,
+        vec!["alpha"],
+        "l'undo di alpha è fallito: il residuo resta registrato"
+    );
 }

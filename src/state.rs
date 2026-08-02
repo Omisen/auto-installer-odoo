@@ -577,6 +577,21 @@ impl InstallState {
         self.config = Some(config);
     }
 
+    /// Dimentica uno step: il suo artefatto non esiste più.
+    ///
+    /// Chiamata dal rollback in-process dopo un `undo` **riuscito** (A-R8-1). Il
+    /// manifesto descrive *cosa c'è ancora sul sistema*, non *cosa è stato fatto
+    /// a un certo punto*: se continuasse a elencare uno step annullato, un
+    /// rilancio lo salterebbe credendolo già fatto — e l'installazione
+    /// proseguirebbe su artefatti che non esistono.
+    ///
+    /// Un `undo` **fallito** non chiama questa funzione, di proposito: lì
+    /// l'artefatto è (forse) ancora lì, e il record è l'unica traccia del
+    /// residuo che `odoo-installer rollback` potrà ritentare.
+    pub fn forget(&mut self, name: &str) {
+        self.completed.retain(|r| r.name != name);
+    }
+
     /// Il record di uno step già completato, se c'è. È il punto d'appoggio del
     /// resume (A-V3-1): il motore lo usa per sapere che quello step **è già
     /// stato eseguito**, e ne reidrata lo snapshot invece di rifarlo.

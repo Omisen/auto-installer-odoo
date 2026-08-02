@@ -238,14 +238,14 @@ impl Installer {
     }
 
     /// Rollback senza progresso (delega a [`NoopReporter`]).
-    pub fn rollback(&self, steps: &[Box<dyn Step>], completed: &[usize], ctx: &Context) {
+    pub fn rollback(&mut self, steps: &[Box<dyn Step>], completed: &[usize], ctx: &Context) {
         self.rollback_with_reporter(steps, completed, ctx, &NoopReporter);
     }
 
     /// Esegue l'`undo` degli step indicati in **ordine inverso** (invariante 2),
     /// best-effort (invariante 3), notificando il `reporter`.
     pub fn rollback_with_reporter(
-        &self,
+        &mut self,
         steps: &[Box<dyn Step>],
         completed: &[usize],
         ctx: &Context,
@@ -264,14 +264,31 @@ impl Installer {
             let name = step.name();
             reporter.undo_start(name);
             info!(step = %name, "undo");
-            if let Err(e) = step.undo(ctx) {
-                warn!(
+            match step.undo(ctx) {
+                // Annullato: l'artefatto non c'è più, e il manifesto non deve
+                // continuare a dire il contrario (A-R8-1, vedi sotto).
+                Ok(()) => self.state.forget(name),
+                Err(e) => warn!(
                     step = %name,
                     error = %e,
-                    "undo fallito, proseguo con la pulizia (best-effort)"
-                );
+                    "undo fallito, proseguo con la pulizia (best-effort). Lo step resta \
+                     nel manifesto: e' l'unica traccia del residuo"
+                ),
             }
             reporter.undo_done(name);
+        }
+
+        // Il manifesto aggiornato va su disco: se il processo muore ora, ciò che
+        // resta scritto dev'essere ciò che è rimasto sul sistema.
+        if !ctx.dry_run {
+            if let Err(e) = self.state.save(&ctx.state_path) {
+                warn!(
+                    path = %ctx.state_path.display(),
+                    error = %e,
+                    "impossibile aggiornare il manifesto dopo il rollback: potrebbe elencare \
+                     step gia' annullati"
+                );
+            }
         }
     }
 }

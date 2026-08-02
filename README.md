@@ -15,8 +15,10 @@ servizio systemd e (opzionale) Nginx.
   ordine inverso; le risorse **preesistenti** del cliente non vengono toccate. È una proprietà provata
   con test end-to-end, non una promessa.
 - **Binario unico, senza runtime** — un eseguibile nativo; git/apt/psql/venv restano comandi esterni.
-- **Idempotente e sicuro** — rileva ciò che esiste già e non lo ricrea; il file `.env` è **parsato in
+- **Riprendibile, e mai distruttivo con sé stesso** — un'installazione interrotta si riprende da dove
+  si era fermata; una già completata non viene sovrascritta per sbaglio. Il file `.env` è **parsato in
   modo dichiarativo**, mai eseguito come codice.
+- **Interrompibile** — Ctrl-C annulla e riporta il sistema com'era, invece di lasciarlo a metà.
 - **Un solo flusso, due modi** — guidato (prompt interattivi) oppure non-interattivo
   (`--config`/flag/CI), con la stessa logica.
 
@@ -48,7 +50,7 @@ Scarica l'ultimo binario dalla pagina **[Releases](../../releases/latest)**. Due
 Ogni archivio ha un file `.sha256` per **verificare l'integrità** del download.
 
 ```bash
-VER=v2.1.0                       # sostituisci con l'ultima versione
+VER=v2.2.0                       # sostituisci con l'ultima versione
 file=odoo-installer-x86_64-unknown-linux-musl.tar.gz
 base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
 
@@ -69,8 +71,8 @@ finisce nel `PATH` ed è rimovibile con `apt remove odoo-installer`. Il `.deb` �
 servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
 
 ```bash
-VER=v2.1.0                       # sostituisci con l'ultima versione
-deb=odoo-installer_2.1.0_amd64.deb
+VER=v2.2.0                       # sostituisci con l'ultima versione
+deb=odoo-installer_2.2.0_amd64.deb
 base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
 
 curl -fsSL -O "${base}/${deb}" -O "${base}/${deb}.sha256"
@@ -402,8 +404,10 @@ AutoInstallerOdoo/
 │   ├── prompt.rs            # input interattivo (inquire)
 │   ├── logging.rs           # tracing TTY + file
 │   ├── lockfile.rs          # lock anti-concorrenza (RAII)
+│   ├── interrupt.rs         # Ctrl-C/SIGTERM: alza un flag, il motore lo osserva
 │   └── steps/               # gli step reali (uno per file)
 │       ├── prepare_opt_root.rs   create_odoo_user.rs   setup_log_dir.rs
+│       ├── setup_cache_dir.rs    setup_data_dir.rs
 │       ├── apt_packages.rs       install_wkhtmltopdf.rs
 │       ├── setup_postgres.rs     create_db_role.rs     create_database.rs
 │       ├── clone_odoo_repo.rs    create_virtualenv.rs  install_python_requirements.rs
@@ -411,9 +415,20 @@ AutoInstallerOdoo/
 │       ├── nginx_*.rs (install/write_config/enable_site/firewall/reload)
 │       └── write_control_script.rs   patch_bashrc.rs
 ├── templates/              # odoo.conf.tpl · odoo.service.tpl · nginx.conf.tpl (embedded nel binario)
-├── configs/               # esempi .env (dev.env, production.env)
+├── configs/               # esempi .env (dev, production) + i preset della CI (ci, ci-nginx)
+├── scripts/ci/            # integration-test.sh: installazione reale + verifica della pulizia
+├── .github/workflows/     # test.yml (rapido, mock) · integration.yml (reale) · release.yml
 └── tests/                 # test per-step + coordinamenti + rollback end-to-end
 ```
+
+I **percorsi che l'installer usa per sé** — manifesto, lock, log — vivono fuori da `/opt/odoo`, che è
+il perimetro che il rollback deve poter rimuovere per intero:
+
+| File | Percorso | A cosa serve |
+|---|---|---|
+| Manifesto | `/var/lib/odoo-installer/state.json` | dice cosa è stato creato e cosa era già presente: è ciò che rende disinstallabile un'istanza |
+| Lock | `/run/odoo-installer.lock` | impedisce due installazioni simultanee; sparisce al reboot |
+| Log | `/var/log/odoo-installer.log` | post-mortem; sopravvive al rollback, di proposito |
 
 ---
 
@@ -440,10 +455,13 @@ pulito — pacchetto per pacchetto, confrontando il delta apt registrato nel fil
 Gira su richiesta (`workflow_dispatch`) e sui rami `main`/`dev`, non su ogni push: sono decine di
 minuti per job. Copertura e limiti:
 
-| Ambiente | Come | Cosa copre |
+| Scenario | Come | Cosa copre |
 |---|---|---|
-| Ubuntu 22.04 / 24.04 | runner nativi (VM con systemd) | ciclo di vita completo: installazione, servizio attivo, Odoo che risponde, disinstallazione, sistema pulito |
+| Ubuntu 22.04 / 24.04 | runner nativi (VM con systemd) | ciclo di vita completo: installazione, servizio attivo, Odoo che risponde, seconda installazione rifiutata, disinstallazione, sistema pulito |
 | Debian 12 / 11 | container | portabilità: nomi dei pacchetti apt, pin wkhtmltopdf per codename, e la pulizia. **Non** l'avvio del servizio: in un container systemd non è PID 1 |
+| Con Nginx | runner nativo, `ufw` attivo | i cinque step Nginx: vhost, `nginx -t`, la porta 80 che serve Odoo, le regole firewall. In matrice sulle **due nature** del default site (symlink e file regolare), perché il rollback deve ripristinare entrambe |
+| Utente `odoo` preesistente | runner nativo | la home consegnata a un utente che c'è già, e il rifiuto esplicito quando `/opt/odoo` preesiste di root. Al rollback l'utente **sopravvive**: non era nostro |
+| Ctrl-C reale | runner nativo | un `SIGINT` mandato a metà installazione: l'installer deve annullare da sé e lasciare il sistema pulito |
 
 Lo script (`scripts/ci/integration-test.sh`) è eseguibile anche a mano su una VM usa-e-getta:
 
