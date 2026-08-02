@@ -73,10 +73,14 @@ fn created_by_us_runs_useradd_and_undo_userdel_without_r() {
 #[test]
 fn preexisting_user_is_never_touched() {
     // Utente già presente: niente useradd in run, niente userdel in undo.
+    //
+    // La home appartiene già all'utente (uid non-root): è la situazione sana, ed
+    // è quella in cui questo step non ha davvero nulla da fare. Se la home fosse
+    // di root scatterebbe la precondizione di A-V3-4 — che è un altro test.
     let cfg = MockConfig {
         user_exists: true,
         path_exists: true,
-        owner: OwnerId { uid: 0, gid: 0 },
+        owner: OwnerId { uid: 999, gid: 999 },
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
@@ -155,4 +159,70 @@ fn dry_run_creates_nothing() {
         ops_of(&log).is_empty(),
         "dry-run non deve eseguire alcuna operazione"
     );
+}
+
+// --- A-V3-4: utente preesistente e home non usabile --------------------------
+
+/// Utente `odoo` già presente **e** `/opt/odoo` preesistente di proprietà di
+/// root: l'installazione è impossibile, e lo si deve dire **prima** di mutare.
+///
+/// Senza questa precondizione l'errore arrivava tre step più avanti, come
+/// *Permission denied* su un `sudo -u odoo mkdir -p /opt/odoo/.cache`: un
+/// sintomo che non nomina né la causa (la home è di root) né la condizione che
+/// la rende un problema (l'utente esiste già, quindi nessuno gliela consegna).
+#[test]
+fn a_preexisting_user_with_a_root_owned_home_is_refused_before_mutating() {
+    let cfg = MockConfig {
+        user_exists: true,
+        path_exists: true,
+        owner: OwnerId { uid: 0, gid: 0 },
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = CreateOdooUser::with_ops(Box::new(mock));
+    let c = ctx();
+
+    let err = step
+        .snapshot(&c)
+        .expect_err("una home di root con l'utente già esistente deve fermare l'installazione");
+
+    let msg = err.to_string();
+    assert!(
+        msg.contains("/opt/odoo") && msg.contains("root"),
+        "il messaggio deve nominare la home e il suo proprietario: {msg}"
+    );
+    assert!(
+        msg.contains("chown") || msg.contains("rimuovila"),
+        "il messaggio deve dire all'utente cosa può fare: {msg}"
+    );
+
+    // Precondizione, non undo: si fallisce senza aver toccato nulla.
+    assert!(
+        ops_of(&log).iter().all(|op| !matches!(
+            op,
+            Op::CreateUser(_) | Op::ChownNamed { .. } | Op::Chmod { .. }
+        )),
+        "nessuna mutazione prima del rifiuto: {:?}",
+        ops_of(&log)
+    );
+}
+
+/// La precondizione riguarda **solo** l'utente preesistente: se lo creiamo noi,
+/// una home root-owned è la norma — l'abbiamo appena creata con `PrepareOptRoot`
+/// e stiamo per consegnargliela.
+#[test]
+fn a_root_owned_home_is_fine_when_we_create_the_user() {
+    let cfg = MockConfig {
+        user_exists: false,
+        path_exists: true,
+        owner: OwnerId { uid: 0, gid: 0 },
+        ..Default::default()
+    };
+    let (mock, _log) = MockSystemOps::new(cfg);
+    let mut step = CreateOdooUser::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c)
+        .expect("con l'utente da creare, una home di root è lo stato normale");
+    step.run(&c).expect("run");
 }

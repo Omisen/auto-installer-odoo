@@ -213,7 +213,7 @@ pub fn build_steps() -> Vec<Box<dyn Step>> {
 /// ragione per la tabella dei checksum, presa dai pin di produzione.
 pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step>> {
     let step: Box<dyn Step> = match name {
-        "prepare-opt-root" => Box::new(prepare_opt_root::PrepareOptRoot::new()),
+        "prepare-opt-root" => Box::new(prepare_opt_root::PrepareOptRoot::with_ops(make_ops())),
         "create-odoo-user" => Box::new(create_odoo_user::CreateOdooUser::with_ops(make_ops())),
         "setup-log-dir" => Box::new(setup_log_dir::SetupLogDir::with_ops(make_ops())),
         "setup-cache-dir" => Box::new(setup_cache_dir::SetupCacheDir::with_ops(make_ops())),

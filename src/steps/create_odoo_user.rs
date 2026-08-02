@@ -66,6 +66,67 @@ impl CreateOdooUser {
     }
 }
 
+impl CreateOdooUser {
+    /// Precondizione: se l'utente esiste già, la sua home dev'essere usabile da
+    /// lui (A-V3-4).
+    ///
+    /// # Il caso che intercetta
+    ///
+    /// Utente `odoo` preesistente **e** `/opt/odoo` preesistente di proprietà di
+    /// root. Da qui l'installazione è impossibile: questo step non fa il `chown`
+    /// (scelta deliberata — la directory non è nostra), e tre step più avanti
+    /// `SetupCacheDir` esegue `sudo -u odoo mkdir -p /opt/odoo/.cache` su una
+    /// directory di root. Il risultato era un *Permission denied* su un `mkdir`,
+    /// senza alcun indizio sulla causa vera, che sta due step prima e in una
+    /// combinazione di condizioni che l'utente non ha modo di indovinare.
+    ///
+    /// Fermarsi **qui** e con un messaggio esplicito è meglio: è una
+    /// precondizione, come l'hard-stop sull'init del database. Non è un `undo`
+    /// da scrivere, è una mutazione da non iniziare.
+    ///
+    /// # Cosa NON copre, dichiarato
+    ///
+    /// Il controllo guarda se la home è di **root** (`uid 0`), non se appartiene
+    /// a un terzo utente qualsiasi: quello richiederebbe di risolvere l'uid del
+    /// nostro utente, e il caso realistico — una directory di sistema creata da
+    /// root — è questo. Il messaggio dice cosa ha trovato, non di più.
+    ///
+    /// # Perché il caso "home creata da noi" non arriva qui
+    ///
+    /// Se `/opt/odoo` la crea [`PrepareOptRoot`](crate::steps::prepare_opt_root)
+    /// e l'utente esiste già, è quello step a consegnargliela subito. Quando
+    /// arriviamo qui la home è già dell'utente e la precondizione passa. La
+    /// distinzione fra "creata da noi" e "preesistente" vive lì perché è lì che
+    /// l'informazione esiste.
+    fn refuse_unusable_home(&self, ctx: &Context) -> Result<(), StepError> {
+        if self.snap.user_prestate != PreState::Preexisting {
+            return Ok(());
+        }
+        let Some(owner) = self.snap.home_original_owner else {
+            // Home assente: siamo in dry-run (in un'esecuzione reale
+            // `PrepareOptRoot` l'ha appena creata). Niente da verificare.
+            return Ok(());
+        };
+        if owner.uid != 0 {
+            return Ok(());
+        }
+
+        Err(StepError::Precondition(format!(
+            "l'utente di sistema '{user}' esiste già, ma la sua home {home} appartiene a root \
+             e non è stata creata da questa installazione.\n\
+             \n\
+             Così com'è, l'utente '{user}' non può scrivere nella propria home e \
+             l'installazione fallirebbe più avanti con un errore poco chiaro.\n\
+             \n\
+             Sistemala a mano scegliendo tu cosa è giusto per questa macchina:\n\
+               sudo chown -R {user}:{user} {home}     (se quella directory è destinata a Odoo)\n\
+             oppure rimuovila, se è un residuo, e rilancia l'installer.",
+            user = ctx.odoo_user,
+            home = ctx.odoo_home.display()
+        )))
+    }
+}
+
 impl Default for CreateOdooUser {
     fn default() -> Self {
         Self::new()
@@ -100,6 +161,8 @@ impl Step for CreateOdooUser {
             home_owner = ?self.snap.home_original_owner,
             "snapshot create-odoo-user"
         );
+
+        self.refuse_unusable_home(ctx)?;
         Ok(())
     }
 
