@@ -112,19 +112,37 @@ fn preexisting_artifacts_are_not_recreated_or_removed() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
+
+    // A-V3-9: lo script si riscrive SEMPRE. Il suo contenuto lo generiamo noi e
+    // porta dentro il nome del servizio: saltarlo perché "esiste già" lasciava
+    // l'helper `odoo` a pilotare il servizio di un'installazione precedente
+    // (`SERVICE_NAME=odoo17` mentre gira `odoo18`).
     assert!(
-        !ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
-        "script preesistente: non riscritto"
+        ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
+        "lo script va riscritto: il suo contenuto dipende dalla versione installata"
     );
+    // Ma non si distrugge quello che c'era: prima si mette da parte.
+    assert!(
+        ops.iter()
+            .any(|o| matches!(o, Op::CopyFile { src, .. } if src.ends_with(".scripts/odoo.sh"))),
+        "uno script preesistente va salvato in un backup prima di riscriverlo: {ops:?}"
+    );
+
     assert!(
         !ops.iter().any(|o| matches!(o, Op::CreateSymlink { .. })),
-        "symlink preesistente: non ricreato"
+        "symlink preesistente: non ricreato (punta comunque allo stesso script)"
     );
+    // L'undo non rimuove ciò che non era nostro: lo rimette com'era.
     assert!(
         !ops.iter().any(|o| matches!(o, Op::RemoveFile(_))),
         "non rimuoviamo artefatti non nostri"
     );
     assert!(!ops.iter().any(|o| matches!(o, Op::RemoveSymlink(_))));
+    assert!(
+        ops.iter()
+            .any(|o| matches!(o, Op::MoveFile { dst, .. } if dst.ends_with(".scripts/odoo.sh"))),
+        "l'undo deve rimettere al suo posto lo script preesistente: {ops:?}"
+    );
 }
 
 #[test]

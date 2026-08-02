@@ -168,10 +168,11 @@ pub fn render_vhost(ctx: &Context) -> String {
     // Nessun placeholder per i certificati: il vhost non ha un blocco 443, e
     // i due che c'erano venivano sostituiti dentro righe commentate — davano
     // l'impressione che TLS fosse configurato da qui (A-V3-6).
-    let replacements: [(&str, &str); 3] = [
+    let replacements: [(&str, &str); 4] = [
         ("{{NGINX_SERVER_NAME}}", ctx.nginx_server_name.as_str()),
         ("{{ODOO_PORT}}", port.as_str()),
         ("{{NGINX_CLIENT_MAX}}", DEFAULT_CLIENT_MAX),
+        ("{{ODOO_VERSION_SHORT}}", ctx.odoo_version_short.as_str()),
     ];
     let mut out = VHOST_TEMPLATE.to_string();
     for (token, value) in replacements {

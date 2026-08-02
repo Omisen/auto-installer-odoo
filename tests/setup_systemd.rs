@@ -152,3 +152,62 @@ fn rendering_has_no_residue_and_keeps_hardening() {
     assert!(unit.contains("/opt/odoo/odoo18/odoo/odoo-bin"));
     assert!(unit.contains("/opt/odoo/odoo18/odoo18.conf"));
 }
+
+/// A-V3-13: l'intestazione «Security hardening» copriva una direttiva **inerte**.
+///
+/// `PermissionsStartOnly=true` è deprecata da systemd 231 (2016) e viene
+/// ignorata con un warning; serviva a far girare gli `ExecStartPre` come root, e
+/// di `ExecStartPre` non ce n'è nessuno. Sotto quel titolo non c'era quindi
+/// nulla che facesse hardening.
+#[test]
+fn the_unit_makes_no_hollow_hardening_promises() {
+    let unit = render_unit(&ctx());
+
+    // Si guardano le righe **attive**, non il testo: il commento che spiega
+    // perché la direttiva è stata tolta la nomina, ed è giusto che lo faccia.
+    let attive: Vec<&str> = unit
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty() && !l.starts_with('#'))
+        .collect();
+    assert!(
+        !attive.iter().any(|l| l.starts_with("PermissionsStartOnly")),
+        "direttiva deprecata e ignorata da systemd: non deve essere attiva"
+    );
+
+    // Le direttive che spostano l'ago davvero, per un processo che gira da rete.
+    for direttiva in [
+        "ProtectSystem=full",
+        "ProtectHome=true",
+        "PrivateDevices=true",
+        "ProtectKernelTunables=true",
+        "ProtectKernelModules=true",
+        "ProtectControlGroups=true",
+        "RestrictSUIDSGID=true",
+        "LockPersonality=true",
+    ] {
+        assert!(unit.contains(direttiva), "manca {direttiva}");
+    }
+
+    // AF_UNIX non è opzionale: è il socket di PostgreSQL. Senza, il servizio
+    // parte e non riesce a collegarsi al database — un fallimento che
+    // sembrerebbe tutt'altro.
+    let famiglie = attive
+        .iter()
+        .find(|l| l.starts_with("RestrictAddressFamilies="))
+        .expect("RestrictAddressFamilies presente");
+    for famiglia in ["AF_UNIX", "AF_INET", "AF_INET6"] {
+        assert!(
+            famiglie.contains(famiglia),
+            "manca {famiglia} in: {famiglie}"
+        );
+    }
+
+    // `strict` è deliberatamente escluso: richiederebbe un elenco esatto di
+    // ReadWritePaths, e sbagliarne uno rompe il servizio su una macchina
+    // cliente. Se un giorno lo si vuole, va insieme a quell'elenco.
+    assert!(
+        !attive.iter().any(|l| l.starts_with("ProtectSystem=strict")),
+        "ProtectSystem=strict senza ReadWritePaths impedirebbe a Odoo di scrivere"
+    );
+}

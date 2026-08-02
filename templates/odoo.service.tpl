@@ -13,15 +13,37 @@ StartLimitBurst=3
 Type=simple
 SyslogIdentifier=odoo{{ODOO_VERSION_SHORT}}
 
-# Security hardening
+# ── Identità e isolamento ────────────────────────────────────────────────────
 User={{ODOO_USER}}
 Group={{ODOO_USER}}
 WorkingDirectory={{ODOO_INSTALL_DIR}}
-PermissionsStartOnly=true
 NoNewPrivileges=true
 PrivateTmp=true
 RuntimeDirectory=odoo
 RuntimeDirectoryMode=0750
+
+# ── Hardening (A-V3-13) ──────────────────────────────────────────────────────
+# Prima qui c'era `PermissionsStartOnly=true`, deprecato da systemd 231 (2016) e
+# ignorato con un warning: serviva a far girare gli ExecStartPre come root, e di
+# ExecStartPre non ce n'è nessuno. Sotto un'intestazione "Security hardening"
+# c'era quindi una direttiva inerte e nient'altro.
+#
+# ProtectSystem=full monta /usr e /boot in sola lettura; /opt — dove vive Odoo —
+# resta scrivibile. NON si usa `strict`, che renderebbe l'intero filesystem in
+# sola lettura e richiederebbe un elenco esatto di ReadWritePaths (install dir,
+# filestore, cache, sessioni): sbagliarne uno rompe il servizio su una macchina
+# cliente, e il guadagno rispetto a `full` è marginale per un processo che gira
+# già senza privilegi.
+ProtectSystem=full
+ProtectHome=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+# AF_UNIX serve al socket di PostgreSQL, non solo la rete.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 
 # Binary & config
 ExecStart={{ODOO_INSTALL_DIR}}/{{ODOO_VENV_DIR}}/bin/python3 \

@@ -18,6 +18,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
+use crate::steps::unix_timestamp;
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// Template `odoo.conf`, incorporato nel binario.
@@ -199,14 +200,6 @@ impl Step for GenerateConfig {
 /// solo posto.
 pub fn data_dir(ctx: &Context) -> std::path::PathBuf {
     ctx.odoo_home.join(".local").join("share").join("Odoo")
-}
-
-/// Secondi dall'epoch (per il nome del backup). In codice normale è lecito.
-fn unix_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }
 
 /// Renderizza il template sostituendo i `${VAR}` con i valori del Context, poi

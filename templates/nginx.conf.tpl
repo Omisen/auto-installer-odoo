@@ -4,6 +4,7 @@
 #   {{NGINX_SERVER_NAME}}   nome di dominio o IP (es. odoo.example.com)
 #   {{ODOO_PORT}}           porta locale di Odoo (default 8069)
 #   {{NGINX_CLIENT_MAX}}    dimensione massima body upload (default 100m)
+#   {{ODOO_VERSION_SHORT}}  versione breve (es. 18), per i nomi dei log
 # =============================================================================
 #
 # TLS: questo vhost ascolta **solo sulla porta 80**, di proposito.
@@ -39,8 +40,11 @@ server {
     # Commentare o rimuovere questo blocco per servire Odoo solo in HTTP.
     # return 301 https://$host$request_uri;
 
-    access_log  /var/log/nginx/odoo18.access.log;
-    error_log   /var/log/nginx/odoo18.error.log;
+    # Un file per versione: due istanze sulla stessa macchina non devono
+    # scriversi addosso (A-V3-12). Restano dopo il rollback — sono log, come
+    # quelli di sistema — ma almeno si sa a quale istanza appartengono.
+    access_log  /var/log/nginx/odoo{{ODOO_VERSION_SHORT}}.access.log;
+    error_log   /var/log/nginx/odoo{{ODOO_VERSION_SHORT}}.error.log;
 
     # Dimensione massima dei file caricati (fatture, allegati, ecc.)
     client_max_body_size {{NGINX_CLIENT_MAX}};

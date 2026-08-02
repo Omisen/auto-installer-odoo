@@ -142,7 +142,7 @@ sudo ./target/release/odoo-installer --version 17 --with-nginx
 # Tutto da CLI
 sudo ./target/release/odoo-installer --version 18 --odoo-user odoo --db-name odoo --port 8069
 
-# Anteprima (nessuna modifica, non serve nemmeno sudo)
+# Anteprima (nessuna modifica; senza sudo il piano è più scarno, vedi sotto)
 ./target/release/odoo-installer --config configs/production.env --dry-run
 ```
 
@@ -288,8 +288,14 @@ può essere rieseguito (gli `undo` sono idempotenti).
 ## Anteprima con `--dry-run`
 
 `--dry-run` esegue solo gli snapshot (in sola lettura) e mostra il **piano** di ciò che verrebbe fatto,
-distinguendo "agirebbe" da "no-op (già presente)". Non muta nulla, non persiste stato, non serve `sudo`.
-Utile per validare un `.env` o capire cosa succederà su una macchina.
+distinguendo "agirebbe" da "no-op (già presente)". Non muta nulla e non persiste stato. Utile per
+validare un `.env` o capire cosa succederà su una macchina.
+
+**Con o senza `sudo`, ma non è la stessa cosa.** Gli snapshot *interrogano* il sistema, e alcuni lo
+fanno passando da `sudo` (lo stato di PostgreSQL, i pacchetti installati). Senza privilegi quelle
+domande non ottengono risposta: gli step interessati compaiono come «snapshot non disponibile» e il
+piano, pur vero, è incompleto. L'installer lo dice prima di stamparlo. Per il piano completo:
+`sudo odoo-installer --dry-run …`.
 
 ```bash
 ./target/release/odoo-installer --config configs/production.env --dry-run

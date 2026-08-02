@@ -212,9 +212,14 @@ pub fn rollback_from_state(
                 "rollback: step sconosciuto a questo binario, non annullabile (proseguo)"
             );
             report.outcomes.push(StepOutcome {
-                name,
+                name: name.clone(),
                 outcome: UndoOutcome::Unknown,
             });
+            // Anche uno step non annullabile è uno step **esaminato**: la barra
+            // deve avanzare (A-V3-10). Ometterlo lasciava il progresso fermo
+            // proprio nello scenario degradato, che è quello in cui l'utente la
+            // guarda — e faceva sembrare bloccato un rollback che stava andando.
+            reporter.undo_done(&name);
             continue;
         };
 
@@ -225,9 +230,10 @@ pub fn rollback_from_state(
                 "rollback: snapshot persistito illeggibile, undo saltato per sicurezza (proseguo)"
             );
             report.outcomes.push(StepOutcome {
-                name,
+                name: name.clone(),
                 outcome: UndoOutcome::NotRehydrated(e.to_string()),
             });
+            reporter.undo_done(&name);
             continue;
         }
 

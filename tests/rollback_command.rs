@@ -796,3 +796,50 @@ fn the_https_port_flag_keeps_its_historical_alias() {
     let assente = Cli::parse_from(["odoo-installer"]);
     assert!(!assente.open_https_port);
 }
+
+/// A-V3-10: la barra di progresso deve avanzare **anche** sugli step che non si
+/// possono annullare.
+///
+/// I due rami che rinunciano — step sconosciuto a questo binario, snapshot
+/// illeggibile — segnalavano l'inizio e non la fine: il progresso restava fermo
+/// proprio nello scenario degradato, che è l'unico in cui l'utente la guarda. Un
+/// rollback che sta procedendo sembrava bloccato.
+#[test]
+fn the_progress_advances_even_on_steps_that_cannot_be_undone() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let state_path = dir.path().join("state.json");
+    let model = SystemModel::new(fresh_state());
+
+    let mut state = InstallState::default();
+    state.set_config(InstallConfig::from_context(&ctx(state_path.clone())));
+    // Uno step che questo binario non conosce…
+    state.record(StepRecord {
+        name: "passo-di-una-versione-futura".to_string(),
+        snapshot: serde_json::Value::Null,
+    });
+    // …e uno il cui snapshot è illeggibile.
+    state.record(StepRecord {
+        name: "create-database".to_string(),
+        snapshot: serde_json::json!({"non": "un PreState"}),
+    });
+
+    let (reporter, events) = common::RecordingReporter::new();
+    let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
+    let report = rollback::rollback_from_state(&state, &ctx(state_path), &make_ops, &reporter);
+
+    let eventi = common::events_of(&events);
+    for step in ["passo-di-una-versione-futura", "create-database"] {
+        assert!(
+            eventi.contains(&format!("undo:{step}")),
+            "l'inizio va segnalato: {eventi:?}"
+        );
+        assert!(
+            eventi.contains(&format!("undo-done:{step}")),
+            "anche uno step non annullabile è uno step esaminato: la barra deve avanzare \
+             (A-V3-10): {eventi:?}"
+        );
+    }
+
+    // Il report resta onesto: nessuno dei due è stato annullato.
+    assert!(!report.is_clean(), "due step non annullati vanno riportati");
+}

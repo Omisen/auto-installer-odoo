@@ -139,6 +139,19 @@ pub fn remove_created_root(
     }
 }
 
+/// Secondi dall'epoch, per i nomi dei file di backup.
+///
+/// Vive qui perché la usano quattro step (`patch-bashrc`, `generate-config`,
+/// `nginx-enable-site`, `write-control-script`) e la convenzione dei backup —
+/// `<file>.bak.<epoch>` — è una sola: quattro copie della stessa funzione erano
+/// quattro occasioni di farle divergere.
+pub fn unix_timestamp() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
+}
+
 /// Fabbrica di [`SystemOps`]: ogni step ne riceve una propria istanza.
 ///
 /// È un `Fn` e non un singolo `Box<dyn SystemOps>` perché gli step possiedono le

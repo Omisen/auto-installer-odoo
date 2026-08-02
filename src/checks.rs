@@ -82,6 +82,14 @@ pub fn ensure_root_euid(euid: u32) -> Result<(), CheckError> {
     }
 }
 
+/// Stiamo girando come root? Domanda, non verifica: nessun errore, nessun log.
+///
+/// Serve al `--dry-run`, che è lecito lanciare senza privilegi ma che in quel
+/// caso vede meno (A-V3-11).
+pub fn running_as_root() -> bool {
+    nix::unistd::geteuid().is_root()
+}
+
 /// Verifica che l'installer giri come root.
 pub fn check_root() -> Result<(), CheckError> {
     let euid = nix::unistd::geteuid().as_raw();

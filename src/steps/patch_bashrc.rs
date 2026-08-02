@@ -18,6 +18,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
+use crate::steps::unix_timestamp;
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// La riga esatta che aggiungiamo (match `grep -Fqx`).
@@ -197,11 +198,4 @@ impl Step for PatchBashrc {
         self.snap = snap;
         Ok(())
     }
-}
-
-fn unix_timestamp() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }

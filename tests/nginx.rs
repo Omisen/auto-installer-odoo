@@ -613,3 +613,27 @@ fn port_80_is_opened_even_when_8080_is_already_allowed() {
         "mai toccare una regola preesistente del cliente: {ops:?}"
     );
 }
+
+/// A-V3-12: i log del vhost portano la **versione** nel nome.
+///
+/// Erano cablati a `odoo18`: due istanze sulla stessa macchina — 17 e 18, il
+/// caso di una migrazione — si scrivevano nello stesso file, e nessuna delle due
+/// aveva un log leggibile. I file restano dopo il rollback (sono log, come
+/// quelli di sistema), ma almeno si sa a quale istanza appartengono.
+#[test]
+fn the_vhost_logs_carry_the_version_in_their_name() {
+    let mut c = ctx(true, false);
+    c.odoo_version_short = "17".to_string();
+    let reso = render_vhost(&c);
+
+    assert!(
+        reso.contains("/var/log/nginx/odoo17.access.log"),
+        "il nome del log deve seguire la versione installata"
+    );
+    assert!(reso.contains("/var/log/nginx/odoo17.error.log"));
+    assert!(
+        !reso.contains("odoo18"),
+        "nessun riferimento cablato a una versione diversa da quella installata"
+    );
+    validate_vhost(&reso).expect("nessun placeholder residuo");
+}

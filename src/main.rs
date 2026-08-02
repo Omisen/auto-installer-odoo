@@ -94,6 +94,18 @@ fn run_install(cli: &Cli) -> Result<()> {
     // Il piano non ha progresso da mostrare: solo log.
     if ctx.dry_run {
         println!("=== PIANO (dry-run) — nessuna modifica al sistema ===");
+        // Il piano **interroga** il sistema: ogni step fa il proprio snapshot, e
+        // alcuni chiedono a PostgreSQL passando da `sudo`. Senza privilegi
+        // quelle domande non ottengono risposta e lo step viene saltato, quindi
+        // il piano è vero ma incompleto — meglio dirlo prima che l'utente lo
+        // scopra da una riga di warning in mezzo all'output (A-V3-11).
+        if !checks::running_as_root() {
+            println!(
+                "Nota: senza sudo alcuni step non possono ispezionare il sistema (PostgreSQL, \n\
+                 pacchetti installati) e verranno elencati come «snapshot non disponibile».\n\
+                 Per il piano completo: sudo odoo-installer --dry-run …\n"
+            );
+        }
         dry_run_plan(&mut steps, &ctx, &LogReporter);
         println!("=== fine piano (dry-run) ===");
         return Ok(());

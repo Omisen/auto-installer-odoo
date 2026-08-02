@@ -902,6 +902,9 @@ impl ProgressReporter for RecordingReporter {
     fn undo_start(&self, name: &str) {
         self.push(format!("undo:{name}"));
     }
+    fn undo_done(&self, name: &str) {
+        self.push(format!("undo-done:{name}"));
+    }
 }
 
 pub fn events_of(log: &EventLog) -> Vec<String> {

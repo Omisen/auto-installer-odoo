@@ -11,6 +11,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
+use crate::steps::unix_timestamp;
 use crate::system_ops::{RealSystemOps, SystemOps};
 
 /// Template dello script di controllo (segnaposto sostituiti senza `format!`).
@@ -56,6 +57,10 @@ pub struct ControlScriptSnapshot {
     /// Le directory esistevano prima di noi? (rimozione solo se create da noi).
     pub scripts_dir_existed: bool,
     pub localbin_dir_existed: bool,
+    /// Backup di uno script **preesistente**, se ce n'era uno da mettere da
+    /// parte prima di riscriverlo (A-V3-9). `None` in ogni altro caso.
+    #[serde(default)]
+    pub script_backup: Option<String>,
 }
 
 pub struct WriteControlScript {
@@ -154,12 +159,31 @@ impl Step for WriteControlScript {
         self.ops.mkdir_p_as_user(&user, &scripts_dir)?;
         self.ops.mkdir_p_as_user(&user, &localbin)?;
 
-        // Script (se non già nostro).
-        if self.snap.script != PreState::Preexisting {
-            let service = format!("odoo{}", ctx.odoo_version_short);
-            let content = control_script_content(&service, &ctx.odoo_user);
-            self.ops.write_private_file(&script, &content)?;
-            self.ops.chmod(&script, SCRIPT_MODE)?;
+        // Lo script si riscrive **sempre** (A-V3-9).
+        //
+        // Il suo contenuto è generato da noi e porta dentro il nome del servizio:
+        // saltarlo perché "esiste già" significava che, reinstallando una
+        // versione diversa di Odoo, l'helper `odoo` continuava a pilotare il
+        // servizio **vecchio** — `SERVICE_NAME=odoo17` mentre gira `odoo18` — e
+        // l'utente lo scopriva solo quando `odoo restart` non faceva quello che
+        // doveva. Il `PreState` qui non protegge un contenuto altrui: protegge
+        // la *decisione di rimuoverlo all'undo*, ed è per quello che resta.
+        //
+        // Se però quel file c'era già, non lo si distrugge: si mette da parte e
+        // l'undo lo rimette. Stesso trattamento del vhost nginx e dell'odoo.conf
+        // — un file preesistente con quel nome potrebbe essere di qualcun altro,
+        // e non abbiamo modo di saperlo.
+        if self.snap.script == PreState::Preexisting && self.snap.script_backup.is_none() {
+            let backup = format!("{}.bak.{}", script.display(), unix_timestamp());
+            self.ops.copy_file(&script, std::path::Path::new(&backup))?;
+            self.snap.script_backup = Some(backup.clone());
+            warn!(backup = %backup, "run: control-script esistente, backup creato");
+        }
+        let service = format!("odoo{}", ctx.odoo_version_short);
+        let content = control_script_content(&service, &ctx.odoo_user);
+        self.ops.write_private_file(&script, &content)?;
+        self.ops.chmod(&script, SCRIPT_MODE)?;
+        if self.snap.script == PreState::Untracked {
             self.snap.script = PreState::CreatedByUs;
         }
 
@@ -194,10 +218,27 @@ impl Step for WriteControlScript {
                 warn!(error = %e, "undo: rimozione symlink fallita, proseguo (best-effort)");
             }
         }
-        if self.snap.script == PreState::CreatedByUs {
-            if let Err(e) = self.ops.remove_file(&script) {
-                warn!(error = %e, "undo: rimozione script fallita, proseguo (best-effort)");
+        match (&self.snap.script, &self.snap.script_backup) {
+            // Nostro: si rimuove.
+            (PreState::CreatedByUs, _) => {
+                if let Err(e) = self.ops.remove_file(&script) {
+                    warn!(error = %e, "undo: rimozione script fallita, proseguo (best-effort)");
+                }
             }
+            // C'era già e l'abbiamo riscritto: torna quello di prima.
+            (PreState::Preexisting, Some(backup)) => {
+                let backup_path = std::path::Path::new(backup);
+                if self.ops.path_exists(backup_path) {
+                    if let Err(e) = self.ops.move_file(backup_path, &script) {
+                        warn!(error = %e, "undo: ripristino del control-script fallito, proseguo (best-effort)");
+                    } else {
+                        info!("undo: control-script preesistente ripristinato dal backup");
+                    }
+                } else {
+                    warn!(backup = %backup, "undo: backup del control-script non trovato");
+                }
+            }
+            _ => {}
         }
 
         // Directory: rimuovi solo se create da noi e vuote.

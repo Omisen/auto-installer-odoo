@@ -307,6 +307,7 @@ pub mod argv {
     /// `sudo -Hiu postgres -- createdb --owner <owner> -- <db>`.
     pub fn createdb(owner: &str, db: &str) -> Vec<String> {
         vec![
+            "-n".to_string(),
             "-Hiu".to_string(),
             "postgres".to_string(),
             "--".to_string(),
@@ -321,6 +322,7 @@ pub mod argv {
     /// `sudo -Hiu postgres -- dropdb --if-exists --force -- <db>`.
     pub fn dropdb(db: &str) -> Vec<String> {
         vec![
+            "-n".to_string(),
             "-Hiu".to_string(),
             "postgres".to_string(),
             "--".to_string(),
@@ -1150,7 +1152,10 @@ impl SystemOps for RealSystemOps {
             "SELECT 1 FROM pg_roles WHERE rolname = '{}';",
             escape_sql_literal(role)
         );
-        let out = capture_command("sudo", &["-Hiu", "postgres", "--", "psql", "-tAc", &sql])?;
+        let out = capture_command(
+            "sudo",
+            &["-n", "-Hiu", "postgres", "--", "psql", "-tAc", &sql],
+        )?;
         Ok(!out.trim().is_empty())
     }
 
@@ -1159,7 +1164,10 @@ impl SystemOps for RealSystemOps {
             "SELECT 1 FROM pg_database WHERE datname = '{}';",
             escape_sql_literal(db)
         );
-        let out = capture_command("sudo", &["-Hiu", "postgres", "--", "psql", "-tAc", &sql])?;
+        let out = capture_command(
+            "sudo",
+            &["-n", "-Hiu", "postgres", "--", "psql", "-tAc", &sql],
+        )?;
         Ok(!out.trim().is_empty())
     }
 
@@ -1175,7 +1183,15 @@ impl SystemOps for RealSystemOps {
         };
         run_command_stdin(
             "sudo",
-            &["-Hiu", "postgres", "--", "psql", "-v", "ON_ERROR_STOP=1"],
+            &[
+                "-n",
+                "-Hiu",
+                "postgres",
+                "--",
+                "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
+            ],
             &sql,
             /* secret */ true,
         )
@@ -1186,6 +1202,7 @@ impl SystemOps for RealSystemOps {
         run_command(
             "sudo",
             &[
+                "-n",
                 "-Hiu",
                 "postgres",
                 "--",
@@ -1210,6 +1227,7 @@ impl SystemOps for RealSystemOps {
         let out = capture_command(
             "sudo",
             &[
+                "-n",
                 "-Hiu",
                 "postgres",
                 "--",
@@ -1226,14 +1244,14 @@ impl SystemOps for RealSystemOps {
     }
 
     fn run_as_user(&self, user: &str, program: &str, args: &[&str]) -> Result<(), StepError> {
-        let mut full = vec!["-u", user, "--", program];
+        let mut full = vec!["-n", "-u", user, "--", program];
         full.extend_from_slice(args);
         run_command("sudo", &full)
     }
 
     fn mkdir_p_as_user(&self, user: &str, path: &Path) -> Result<(), StepError> {
         let p = path.to_string_lossy();
-        run_command("sudo", &["-u", user, "--", "mkdir", "-p", &p])
+        run_command("sudo", &["-n", "-u", user, "--", "mkdir", "-p", &p])
     }
 
     fn remove_dir_all(&self, path: &Path) -> Result<(), StepError> {
@@ -1250,6 +1268,7 @@ impl SystemOps for RealSystemOps {
             let branch = capture_command(
                 "sudo",
                 &[
+                    "-n",
                     "-u",
                     user,
                     "--",
@@ -1290,6 +1309,7 @@ impl SystemOps for RealSystemOps {
         run_network_command(
             "sudo",
             &[
+                "-n",
                 "-u",
                 user,
                 "--",
@@ -1339,10 +1359,14 @@ impl SystemOps for RealSystemOps {
         // macchina lenta può durare parecchio in modo del tutto legittimo.
         let outcome = (|| {
             run_network_command("wget", &["-qO", &tmp_str, url])?;
-            run_command("sudo", &["-u", user, "--", "mkdir", "-p", &target_str])?;
+            run_command(
+                "sudo",
+                &["-n", "-u", user, "--", "mkdir", "-p", &target_str],
+            )?;
             run_command(
                 "sudo",
                 &[
+                    "-n",
                     "-u",
                     user,
                     "--",
@@ -1396,7 +1420,7 @@ impl SystemOps for RealSystemOps {
         let venv_str = venv.to_string_lossy();
         run_command(
             "sudo",
-            &["-u", user, "--", "python3", "-m", "venv", &venv_str],
+            &["-n", "-u", user, "--", "python3", "-m", "venv", &venv_str],
         )
     }
 
@@ -1450,7 +1474,9 @@ impl SystemOps for RealSystemOps {
                    WHERE table_schema='public' AND table_name='ir_module_module';";
         let out = capture_command(
             "sudo",
-            &["-Hiu", "postgres", "--", "psql", "-d", db, "-tAc", sql],
+            &[
+                "-n", "-Hiu", "postgres", "--", "psql", "-d", db, "-tAc", sql,
+            ],
         )?;
         Ok(!out.trim().is_empty())
     }
@@ -1469,6 +1495,7 @@ impl SystemOps for RealSystemOps {
         run_command(
             "sudo",
             &[
+                "-n",
                 "-u",
                 user,
                 "--",
