@@ -10,7 +10,9 @@ use std::path::{Path, PathBuf};
 
 use tracing::{info, warn};
 
+use crate::checks::OsInfo;
 use crate::context::Context;
+use crate::distro::OsFamily;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
@@ -23,63 +25,109 @@ const WK_INSTALLED_MARKER: &str = "0.12.6.1";
 /// Nome del pacchetto per il purge in undo.
 const WK_PACKAGE: &str = "wkhtmltox";
 
-/// Mappa un codename OS al suffisso di pacchetto wkhtmltopdf.
+/// Il suffisso di pacchetto wkhtmltopdf scelto per questo sistema.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CodenameMapping {
+pub struct PackageMapping {
     pub suffix: String,
-    /// `true` se il codename non è mappato e si usa il fallback `jammy`.
+    /// `true` se il sistema non è mappato e si usa il ripiego della sua famiglia.
     pub fallback: bool,
 }
 
-/// Mappa codename → suffisso pacchetto, con **fallback per famiglia** (A5.2).
+/// Sceglie il suffisso del pacchetto wkhtmltopdf, con **ripiego per famiglia**
+/// (A5.2).
 ///
-/// I suffissi ammessi sono **solo** quelli per cui la release `0.12.6.1-3`
-/// pubblica davvero un `.deb` amd64: `jammy`, `bullseye`, `bookworm`. In
-/// particolare **non** esiste un `focal_amd64.deb` in questa release, e
-/// `focal` (Ubuntu 20.04) è comunque già rifiutato a monte da
-/// [`crate::checks::validate_os`] (richiede Ubuntu ≥ 22.04).
+/// # La chiave cambia natura fra le due famiglie
 ///
-/// # Il fallback segue la famiglia dell'OS, non un default unico
+/// Su Debian/Ubuntu è il **codename** (`jammy`, `bookworm`, `bullseye`), che è
+/// come upstream nomina i suoi `.deb`. Su Fedora il codename **non esiste**: il
+/// campo `VERSION_CODENAME` di `/etc/os-release` è vuoto — verificato in campo,
+/// il dry-run su Fedora 41 riporta `codename=Some("")` — e i `.rpm` upstream
+/// sono nominati per distribuzione RHEL-like. La chiave lì è quindi la
+/// **versione**.
+///
+/// Per questo la funzione prende l'`OsInfo` intero invece di due stringhe: la
+/// domanda «quale pacchetto scarico» ha bisogno di informazioni diverse a seconda
+/// della famiglia, e passare solo il codename avrebbe costretto a chiamarla con
+/// un valore che su metà dei casi non significa nulla.
+///
+/// # Il ripiego segue la famiglia, non un default unico
 ///
 /// Prima **ogni** codename sconosciuto ricadeva su `jammy`, che è un pacchetto
-/// *Ubuntu*. Il caso non era teorico come sembrava: Debian 13 (`trixie`) supera
-/// il controllo di versione — le soglie sono aperte verso l'alto — e sarebbe
-/// arrivato qui a prendersi un `.deb` costruito per Ubuntu 22.04, con le
-/// librerie di sistema di un'altra distribuzione. Un fallback che ignora la
-/// famiglia non è un ripiego prudente: è la scelta sbagliata travestita da
-/// default.
-///
-/// Ora un codename Ubuntu ignoto ricade su `jammy` e uno Debian su `bookworm`
-/// — in entrambi i casi il pacchetto più recente che abbiamo *per quella
-/// famiglia*. Se nemmeno la famiglia è nota, resta `jammy`: è l'unico ripiego
-/// possibile, e il `fallback: true` lo rende visibile nel log.
+/// *Ubuntu*: Debian 13 (`trixie`) supera il controllo di versione — le soglie
+/// sono aperte verso l'alto — e sarebbe arrivato qui a prendersi un `.deb`
+/// costruito per Ubuntu 22.04. Un ripiego che ignora la famiglia non è prudente:
+/// è la scelta sbagliata travestita da default.
 ///
 /// **Perché un ripiego e non un rifiuto.** È la lezione di A5.1-bis: un rifiuto
-/// senza prova blocca il caso buono, e un'installazione impedita è un danno
-/// certo mentre quello evitato è ipotetico. Il pin TOFU resta comunque
-/// fail-closed sul contenuto — quello che scarichiamo è verificato, quale che
-/// sia il suffisso scelto.
-pub fn map_codename(os_id: Option<&str>, codename: Option<&str>) -> CodenameMapping {
-    let mapped = |s: &str| CodenameMapping {
+/// senza prova blocca il caso buono. Il pin TOFU resta comunque fail-closed sul
+/// contenuto — quello che scarichiamo è verificato, quale che sia il suffisso.
+pub fn map_package_suffix(os: &OsInfo) -> PackageMapping {
+    let mapped = |s: &str| PackageMapping {
         suffix: s.to_string(),
         fallback: false,
     };
-    let fallback = |s: &str| CodenameMapping {
+    let fallback = |s: &str| PackageMapping {
         suffix: s.to_string(),
         fallback: true,
     };
-    match codename {
-        // Nessun pacchetto nativo: jammy è compatibile (mapping esplicito).
-        Some("noble") | Some("mantic") | Some("lunar") | Some("jammy") => mapped("jammy"),
-        Some("bookworm") => mapped("bookworm"),
-        Some("bullseye") => mapped("bullseye"),
-        // Codename ignoto: si sceglie il pacchetto più recente della **sua**
-        // famiglia. `validate_os` ha già escluso le distribuzioni che non
-        // sappiamo trattare, quindi qui `os_id` è ubuntu o debian.
-        _ => match os_id {
-            Some("debian") => fallback("bookworm"),
-            _ => fallback("jammy"),
+
+    match os.family {
+        OsFamily::Debian => match os.codename.as_deref() {
+            // Nessun pacchetto nativo: jammy è compatibile (mapping esplicito).
+            Some("noble") | Some("mantic") | Some("lunar") | Some("jammy") => mapped("jammy"),
+            Some("bookworm") => mapped("bookworm"),
+            Some("bullseye") => mapped("bullseye"),
+            // Codename ignoto: il pacchetto più recente della **sua** famiglia.
+            _ => {
+                if os.id == "debian" {
+                    fallback("bookworm")
+                } else {
+                    fallback("jammy")
+                }
+            }
         },
+        OsFamily::Fedora => fedora_suffix(&os.version, mapped, fallback),
+    }
+}
+
+/// Il suffisso `.rpm` per una versione di Fedora.
+///
+/// # Cosa pubblica davvero la release (verificato)
+///
+/// Gli `.rpm` x86_64 di `0.12.6.1-3` sono tre: `almalinux8`, `almalinux9` e
+/// **`fedora37`**. L'ultimo è quello che riguarda questa famiglia — un pacchetto
+/// costruito *per Fedora*, non per una RHEL-like — ed è l'unico che questa
+/// funzione può produrre. Gli altri due esistono ma non li scegliamo mai:
+/// pinnarli sarebbe pinnare file che nessun percorso può scaricare.
+///
+/// # Perché una Fedora ≥ 38 prende comunque `fedora37`
+///
+/// Perché è **il più recente che upstream abbia costruito per questa famiglia**,
+/// ed è la stessa regola di A5.2: il ripiego segue la famiglia, non un default
+/// unico. Il `fallback: true` lo rende visibile nel log — quattro release di
+/// distanza sono tante, e chi installa ha diritto di sapere che il pacchetto non
+/// è stato costruito per la sua.
+///
+/// **Perché un ripiego e non un rifiuto**, anche a quella distanza: se le
+/// librerie non tornassero, sarebbe `dnf` a rifiutare l'installazione — un
+/// `.rpm` dichiara i propri `Requires`, quindi un pacchetto incompatibile viene
+/// respinto **prima** di essere installato, con un errore che nomina la
+/// dipendenza mancante. Il fallimento sarebbe rumoroso, non silenzioso: è la
+/// condizione che rende accettabile il ripiego.
+fn fedora_suffix(
+    version: &str,
+    mapped: impl Fn(&str) -> PackageMapping,
+    fallback: impl Fn(&str) -> PackageMapping,
+) -> PackageMapping {
+    let major: u32 = version
+        .split('.')
+        .next()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    if major == 37 {
+        mapped("fedora37")
+    } else {
+        fallback("fedora37")
     }
 }
 
@@ -87,6 +135,13 @@ pub fn map_codename(os_id: Option<&str>, codename: Option<&str>) -> CodenameMapp
 const PIN_JAMMY: &str = "4f723b2691ad8638a9df960e0421d346d7315083e3583a334f33362280ddba15";
 /// Pin TOFU: SHA-256 di `wkhtmltox_0.12.6.1-3.bullseye_amd64.deb`.
 const PIN_BULLSEYE: &str = "9c687f0c58cf50e01f2a6375d2e34372f8feeec56a84690ea113d298fccadd98";
+/// Pin TOFU: SHA-256 di `wkhtmltox-0.12.6.1-3.fedora37.x86_64.rpm`.
+///
+/// L'unico `.rpm` della release costruito per questa famiglia. Gli altri due
+/// pubblicati (`almalinux8`, `almalinux9`) non compaiono qui perché
+/// `fedora_suffix` non li produce mai: un pin per un file che nessun percorso
+/// scarica sarebbe una riga che nessuno può verificare.
+const PIN_FEDORA37: &str = "59782f518e50ed074ef41356452f5229a72e6659c3afc2b352c20c916da63d3f";
 /// Pin TOFU: SHA-256 di `wkhtmltox_0.12.6.1-3.bookworm_amd64.deb`.
 const PIN_BOOKWORM: &str = "98ba0d157b50d36f23bd0dedf4c0aa28c7b0c50fcdcdc54aa5b6bbba81a3941d";
 
@@ -129,10 +184,22 @@ pub fn default_checksums() -> BTreeMap<String, String> {
         ("jammy", PIN_JAMMY),
         ("bullseye", PIN_BULLSEYE),
         ("bookworm", PIN_BOOKWORM),
+        ("fedora37", PIN_FEDORA37),
     ]
     .into_iter()
     .map(|(k, v)| (k.to_string(), v.to_string()))
     .collect()
+}
+
+/// I suffissi per cui esistono pacchetti di questa famiglia.
+///
+/// Serve solo a distinguere «suffisso ignoto» da «famiglia mai tarata» nel
+/// messaggio d'errore: sono due situazioni che portano ad azioni diverse.
+fn known_suffixes_for(family: OsFamily) -> &'static [&'static str] {
+    match family {
+        OsFamily::Debian => &["jammy", "bullseye", "bookworm"],
+        OsFamily::Fedora => &["fedora37"],
+    }
 }
 
 /// Installa wkhtmltopdf con verifica checksum, in modo reversibile.
@@ -163,29 +230,60 @@ impl InstallWkhtmltopdf {
 
     /// Scarica, **verifica il checksum**, installa. Pulisce sempre il temp.
     fn download_verify_install(&self, ctx: &Context) -> Result<(), StepError> {
-        let codename = ctx.os_info.as_ref().and_then(|os| os.codename.as_deref());
-        let os_id = ctx.os_info.as_ref().map(|os| os.id.as_str());
-        let mapping = map_codename(os_id, codename);
+        // Senza `os_info` non si può scegliere il pacchetto: succede solo nel
+        // rollback da disco, dove però questo metodo non viene mai chiamato
+        // (l'undo rimuove, non scarica). Fermarsi è comunque meglio che
+        // indovinare un suffisso.
+        let os = ctx.os_info.as_ref().ok_or_else(|| {
+            StepError::Precondition(
+                "informazioni sull'OS non disponibili: impossibile scegliere il pacchetto \
+                 wkhtmltopdf per questo sistema"
+                    .to_string(),
+            )
+        })?;
+
+        let mapping = map_package_suffix(os);
         if mapping.fallback {
             warn!(
-                codename = ?codename,
-                os = ?os_id,
+                os = %os.id,
+                versione = %os.version,
+                codename = ?os.codename,
                 pacchetto = %mapping.suffix,
-                "codename non mappato: uso il pacchetto più recente della stessa famiglia. \
+                "sistema non mappato: uso il pacchetto più recente della stessa famiglia. \
                  Se wkhtmltopdf non funziona su questa release, è il primo posto dove guardare."
             );
         }
         let suffix = &mapping.suffix;
 
         // G3: senza un checksum atteso non si installa (verifica non bypassabile).
+        //
+        // Il messaggio distingue i due casi, perché portano a due azioni diverse:
+        // un suffisso ignoto per una famiglia che ha già dei pin è un caso da
+        // mappare; una famiglia **senza alcun pin** è una taratura che non è
+        // ancora stata fatta, e nessuno deve poterla aggirare installando alla
+        // cieca un binario di terze parti.
         let expected = self.checksums.get(suffix).ok_or_else(|| {
-            StepError::Precondition(format!(
-                "checksum wkhtmltopdf non disponibile per '{suffix}' (G3): \
-                 impossibile verificare l'integrità, installazione rifiutata"
-            ))
+            let famiglia_senza_pin = !self
+                .checksums
+                .keys()
+                .any(|k| known_suffixes_for(os.family).contains(&k.as_str()));
+            if famiglia_senza_pin {
+                StepError::Precondition(format!(
+                    "i pin TOFU di wkhtmltopdf per la famiglia '{}' non sono ancora stati \
+                     generati (G3): l'installazione si ferma invece di scaricare un binario \
+                     non verificabile. La procedura per generarli è nel doc di \
+                     `default_checksums`.",
+                    os.family
+                ))
+            } else {
+                StepError::Precondition(format!(
+                    "checksum wkhtmltopdf non disponibile per '{suffix}' (G3): \
+                     impossibile verificare l'integrità, installazione rifiutata"
+                ))
+            }
         })?;
 
-        let pkg = format!("wkhtmltox_{WK_VERSION}.{suffix}_amd64.deb");
+        let pkg = self.ops.packages().local_package_name(WK_VERSION, suffix);
         let url = format!(
             "https://github.com/wkhtmltopdf/packaging/releases/download/{WK_VERSION}/{pkg}"
         );

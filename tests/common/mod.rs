@@ -68,6 +68,7 @@ pub enum Op {
     },
     RemoveSymlink(PathBuf),
     UfwAllow(String),
+    InitPostgresCluster,
     UfwDelete(String),
     ChownToUser {
         path: PathBuf,
@@ -211,6 +212,12 @@ pub struct MockConfig {
     /// parti irraggiungibile (l'indice resta popolato); insieme a
     /// `apt_index_populated: false` modella il fallimento vero, senza rete.
     pub apt_update_fails: bool,
+    /// Il cluster PostgreSQL è già inizializzato? (`<PGDATA>/PG_VERSION` esiste)
+    ///
+    /// Campo a sé e non `path_exists`: quello è un bool globale che risponde per
+    /// **tutti** i percorsi, e un test che accendesse quello per il cluster
+    /// direbbe che esiste anche `/opt/odoo`.
+    pub pg_cluster_initialized: bool,
     /// La famiglia della distribuzione modellata: decide **quale catalogo** il
     /// gestore di pacchetti risponde.
     ///
@@ -260,6 +267,7 @@ impl Default for MockConfig {
             dpkg_configure_fails: false,
             apt_install_deb_fails: false,
             apt_update_fails: false,
+            pg_cluster_initialized: false,
             family: OsFamily::Debian,
         }
     }
@@ -324,6 +332,8 @@ impl MockSystemOps {
                 log: Arc::clone(&log),
                 cfg: cfg.clone(),
             },
+            family: cfg.family,
+            log: Arc::clone(&log),
         };
         MockSystemOps {
             log,
@@ -469,6 +479,17 @@ impl PackageManager for MockPackageManager {
     /// Il comando della famiglia modellata, come in produzione: un mock che
     /// rispondesse sempre "apt-get update" renderebbe verde un messaggio che in
     /// campo manderebbe l'utente Fedora a digitare un comando inesistente.
+    fn local_package_name(&self, version: &str, suffix: &str) -> String {
+        match self.cfg.family {
+            OsFamily::Debian => {
+                odoo_installer::packaging::apt::AptBackend.local_package_name(version, suffix)
+            }
+            OsFamily::Fedora => {
+                odoo_installer::packaging::dnf::DnfBackend.local_package_name(version, suffix)
+            }
+        }
+    }
+
     fn refresh_command(&self) -> &'static str {
         match self.cfg.family {
             OsFamily::Debian => odoo_installer::packaging::apt::AptBackend.refresh_command(),
@@ -538,11 +559,38 @@ impl Firewall for MockFirewall {
 /// Le convenzioni di distribuzione del mock.
 pub struct MockDistro {
     firewall: MockFirewall,
+    family: OsFamily,
+    log: OpLog,
+}
+
+impl MockDistro {
+    fn record(&self, op: Op) {
+        if let Ok(mut entries) = self.log.lock() {
+            entries.push(op);
+        }
+    }
 }
 
 impl Distro for MockDistro {
     fn firewall(&self) -> &dyn Firewall {
         &self.firewall
+    }
+
+    /// Segue la famiglia modellata, come in produzione: un mock che rispondesse
+    /// sempre `Some` farebbe inizializzare un cluster anche su Debian, dove il
+    /// pacchetto lo crea da sé.
+    fn postgres_data_dir(&self) -> Option<std::path::PathBuf> {
+        match self.family {
+            OsFamily::Debian => None,
+            OsFamily::Fedora => Some(std::path::PathBuf::from(
+                odoo_installer::distro::fedora::POSTGRES_DATA_DIR,
+            )),
+        }
+    }
+
+    fn init_postgres_cluster(&self) -> Result<(), StepError> {
+        self.record(Op::InitPostgresCluster);
+        Ok(())
     }
 }
 
@@ -551,6 +599,11 @@ impl SystemOps for MockSystemOps {
         self.cfg.user_exists
     }
     fn path_exists(&self, path: &Path) -> bool {
+        // Il marcatore del cluster ha una risposta sua: `path_exists` è un bool
+        // globale, e usarlo per il cluster legherebbe due domande scollegate.
+        if path.ends_with("PG_VERSION") {
+            return self.cfg.pg_cluster_initialized;
+        }
         if self.cfg.real_fs {
             path.exists()
         } else {

@@ -13,7 +13,7 @@ use odoo_installer::distro::OsFamily;
 use odoo_installer::state::PreState;
 use odoo_installer::step::Step;
 use odoo_installer::steps::install_wkhtmltopdf::{
-    default_checksums, map_codename, InstallWkhtmltopdf,
+    default_checksums, map_package_suffix, InstallWkhtmltopdf,
 };
 use odoo_installer::system_ops::sha256_hex;
 
@@ -235,7 +235,7 @@ fn production_pins_reject_a_deb_that_is_not_the_pinned_one() {
     }
 }
 
-/// La tabella di produzione deve coprire **ogni** suffisso che `map_codename`
+/// La tabella di produzione deve coprire **ogni** suffisso che `map_package_suffix`
 /// può produrre: un buco qui rimetterebbe lo step nello stato "fallisce sempre".
 #[test]
 fn production_pins_cover_every_mapped_suffix() {
@@ -245,9 +245,12 @@ fn production_pins_cover_every_mapped_suffix() {
         vec![
             "bookworm".to_string(),
             "bullseye".to_string(),
+            "fedora37".to_string(),
             "jammy".to_string()
         ],
-        "i .deb amd64 pubblicati da 0.12.6.1-3 sono esattamente questi tre"
+        "tre .deb amd64 e un .rpm x86_64: sono i pacchetti che 0.12.6.1-3 \
+         pubblica e che una delle due famiglie può scegliere. Gli altri due rpm \
+         (almalinux8/9) esistono ma nessun percorso li scarica"
     );
 
     for codename in [
@@ -261,7 +264,7 @@ fn production_pins_cover_every_mapped_suffix() {
         Some("chimera"),
         None,
     ] {
-        let suffix = map_codename(Some("ubuntu"), codename).suffix;
+        let suffix = map_package_suffix(&os_debian("ubuntu", codename)).suffix;
         let pin = pins
             .get(&suffix)
             .unwrap_or_else(|| panic!("pin mancante per il suffisso '{suffix}' ({codename:?})"));
@@ -337,10 +340,20 @@ fn preexisting_correct_version_is_skipped() {
     );
 }
 
+/// Costruisce un `OsInfo` della famiglia Debian per i test di mappatura.
+fn os_debian(id: &str, codename: Option<&str>) -> OsInfo {
+    OsInfo {
+        id: id.to_string(),
+        version: "22.04".to_string(),
+        codename: codename.map(|c| c.to_string()),
+        family: OsFamily::Debian,
+    }
+}
+
 #[test]
 fn codename_mapping() {
-    let ubuntu = |c| map_codename(Some("ubuntu"), Some(c));
-    let debian = |c| map_codename(Some("debian"), Some(c));
+    let ubuntu = |c| map_package_suffix(&os_debian("ubuntu", Some(c)));
+    let debian = |c| map_package_suffix(&os_debian("debian", Some(c)));
 
     assert_eq!(ubuntu("noble").suffix, "jammy");
     assert!(!ubuntu("noble").fallback);
@@ -368,7 +381,7 @@ fn codename_mapping() {
 /// default.
 #[test]
 fn an_unknown_codename_falls_back_within_its_own_family() {
-    let debian_futura = map_codename(Some("debian"), Some("trixie"));
+    let debian_futura = map_package_suffix(&os_debian("debian", Some("trixie")));
     assert_eq!(
         debian_futura.suffix, "bookworm",
         "una Debian ignota deve prendere il pacchetto Debian più recente, non uno Ubuntu"
@@ -378,19 +391,136 @@ fn an_unknown_codename_falls_back_within_its_own_family() {
         "resta un ripiego, e va detto nel log"
     );
 
-    let ubuntu_futura = map_codename(Some("ubuntu"), Some("questing"));
+    let ubuntu_futura = map_package_suffix(&os_debian("ubuntu", Some("questing")));
     assert_eq!(ubuntu_futura.suffix, "jammy");
     assert!(ubuntu_futura.fallback);
 
-    // Famiglia ignota o assente: resta `jammy`, l'unico ripiego possibile.
-    for id in [None, Some("chimeraos")] {
-        let m = map_codename(id, Some("qualcosa"));
-        assert_eq!(m.suffix, "jammy");
-        assert!(m.fallback);
+    // Dentro la famiglia Debian, un `id` che non è "debian" ricade su `jammy`:
+    // è il ripiego Ubuntu, e Ubuntu è l'altra metà di quella famiglia.
+    let senza_codename = map_package_suffix(&os_debian("ubuntu", None));
+    assert_eq!(senza_codename.suffix, "jammy");
+    assert!(senza_codename.fallback);
+}
+
+/// Costruisce un `OsInfo` Fedora. Il codename è la **stringa vuota**, com'è in
+/// campo: `/etc/os-release` di Fedora 41 dichiara `VERSION_CODENAME=""`, quindi
+/// non è assenza — è un valore che non significa nulla, e il codice non deve
+/// poggiarci sopra.
+fn os_fedora(version: &str) -> OsInfo {
+    OsInfo {
+        id: "fedora".to_string(),
+        version: version.to_string(),
+        codename: Some(String::new()),
+        family: OsFamily::Fedora,
     }
-    let senza_nulla = map_codename(None, None);
-    assert_eq!(senza_nulla.suffix, "jammy");
-    assert!(senza_nulla.fallback);
+}
+
+/// **Su Fedora la chiave cambia natura.** Il codename lì non esiste, quindi la
+/// scelta del pacchetto passa dalla **versione**.
+#[test]
+fn on_fedora_the_suffix_comes_from_the_version_not_the_codename() {
+    let m = map_package_suffix(&os_fedora("41"));
+    assert_eq!(
+        m.suffix, "fedora37",
+        "il codename vuoto non deve diventare il suffisso: la chiave è la versione"
+    );
+    assert!(
+        !m.suffix.is_empty(),
+        "un suffisso vuoto produrrebbe un URL che non esiste"
+    );
+}
+
+/// **A5.2 sulla seconda famiglia.** Una Fedora diversa dalla 37 prende comunque
+/// `fedora37` — l'unico `.rpm` che upstream costruisce per questa famiglia — ma
+/// come **ripiego dichiarato**.
+///
+/// Il `fallback: true` non è un dettaglio: quattro release di distanza sono
+/// tante, e chi installa ha diritto di sapere dal log che il pacchetto non è
+/// stato costruito per la sua. Se le librerie non tornassero sarebbe comunque
+/// `dnf` a rifiutare — un `.rpm` dichiara i propri `Requires` — quindi il
+/// fallimento sarebbe rumoroso, non silenzioso.
+#[test]
+fn any_other_fedora_falls_back_to_the_only_package_built_for_its_family() {
+    let esatta = map_package_suffix(&os_fedora("37"));
+    assert_eq!(esatta.suffix, "fedora37");
+    assert!(
+        !esatta.fallback,
+        "sulla 37 il pacchetto è proprio il suo: non è un ripiego"
+    );
+
+    for version in ["38", "40", "41", "99"] {
+        let m = map_package_suffix(&os_fedora(version));
+        assert_eq!(m.suffix, "fedora37");
+        assert!(
+            m.fallback,
+            "Fedora {version} non ha un pacchetto suo: è un ripiego, e va detto nel log"
+        );
+    }
+}
+
+/// Il nome del file segue lo schema **rpm**, non quello deb.
+///
+/// Sono due convenzioni diverse di upstream (`wkhtmltox_{v}.{s}_amd64.deb`
+/// contro `wkhtmltox-{v}.{s}.x86_64.rpm`), e sbagliarla darebbe un 404 al
+/// download. Verificato contro gli asset realmente pubblicati.
+#[test]
+fn the_package_file_name_follows_the_format_of_its_family() {
+    use odoo_installer::packaging::{apt::AptBackend, dnf::DnfBackend, PackageManager};
+
+    assert_eq!(
+        AptBackend.local_package_name("0.12.6.1-3", "jammy"),
+        "wkhtmltox_0.12.6.1-3.jammy_amd64.deb"
+    );
+    assert_eq!(
+        DnfBackend.local_package_name("0.12.6.1-3", "fedora37"),
+        "wkhtmltox-0.12.6.1-3.fedora37.x86_64.rpm"
+    );
+}
+
+/// **Fail-closed su una famiglia senza pin.** Finché i pin `.rpm` non sono stati
+/// generati, l'installazione su Fedora si ferma **prima di scaricare**.
+///
+/// È G3 applicato a una famiglia intera: installare un binario di terze parti
+/// senza sapere cosa si sta installando è precisamente ciò che il pin esiste per
+/// impedire, e «funziona lo stesso» non è una ragione per aggirarlo.
+#[test]
+fn a_family_without_pins_refuses_to_install_anything() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let (mock, log) = MockSystemOps::new(MockConfig {
+        family: OsFamily::Fedora,
+        ..MockConfig::default()
+    });
+    let downloader = MockDownloader::new(b"qualsiasi cosa".to_vec(), log.clone());
+
+    // Tabella **vuota** di proposito: il caso di produzione non è più questo —
+    // i pin ci sono per entrambe le famiglie — ma la difesa va provata comunque,
+    // perché è quella che scatterebbe alla terza famiglia.
+    let mut step = InstallWkhtmltopdf::with_parts(
+        Box::new(mock),
+        Box::new(downloader),
+        BTreeMap::new(),
+        dir.path().to_path_buf(),
+    );
+    let c = Context {
+        dry_run: false,
+        os_info: Some(os_fedora("41")),
+        ..Default::default()
+    };
+
+    step.snapshot(&c).expect("snapshot");
+    let err = step.run(&c).expect_err("senza pin non si installa");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("pin TOFU") && msg.contains("fedora"),
+        "il messaggio deve dire che la famiglia non è tarata, non che manca un \
+         suffisso: sono due azioni diverse. Trovato: {msg}"
+    );
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::Download { .. })),
+        "il rifiuto arriva PRIMA del download: non si scarica ciò che non si sa verificare"
+    );
 }
 
 /// A-V3-3: il `.deb` non deve nascere a un percorso che chiunque legga il
@@ -458,5 +588,29 @@ fn the_downloaded_deb_has_an_unpredictable_path() {
         ops.iter()
             .any(|op| matches!(op, Op::PkgInstallLocalFile(p) if *p == dest)),
         "apt deve installare esattamente il file verificato: {ops:?}"
+    );
+}
+
+/// I pin sono tutti **distinti**.
+///
+/// Il valore di un pin non è verificabile offline — bisognerebbe scaricare il
+/// file, e i test girano senza rete — quindi «questo pin è quello giusto» resta
+/// fuori dalla portata della suite: se ne accorgerebbe il campo, dove uno sha
+/// che non combacia ferma lo step con «checksum non valido (G3)» prima di
+/// installare. Rumoroso, non silenzioso: il fail-closed protegge anche
+/// dall'errore di trascrizione.
+///
+/// Una forma di quell'errore però si prende: il copia-incolla che duplica la
+/// riga sopra e dimentica di cambiare il valore. Due pacchetti diversi non hanno
+/// lo stesso SHA-256.
+#[test]
+fn every_pin_is_distinct() {
+    let pins = default_checksums();
+    let unici: std::collections::HashSet<&String> = pins.values().collect();
+    assert_eq!(
+        unici.len(),
+        pins.len(),
+        "due suffissi condividono lo stesso pin: file diversi non hanno lo stesso \
+         SHA-256, quindi uno dei due è stato copiato dall'altro. Pin: {pins:?}"
     );
 }

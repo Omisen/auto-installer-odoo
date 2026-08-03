@@ -263,6 +263,10 @@ impl PackageManager for AptBackend {
         run_apt(&["install", "-y", "--", &rendered])
     }
 
+    fn local_package_name(&self, version: &str, suffix: &str) -> String {
+        format!("wkhtmltox_{version}.{suffix}_amd64.deb")
+    }
+
     fn refresh_command(&self) -> &'static str {
         "apt-get update"
     }

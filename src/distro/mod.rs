@@ -43,6 +43,8 @@ pub mod fedora;
 pub mod firewalld;
 pub mod ufw;
 
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 
 use crate::error::StepError;
@@ -72,6 +74,31 @@ use crate::error::StepError;
 pub trait Distro {
     /// Lo strumento di firewall di questa famiglia.
     fn firewall(&self) -> &dyn Firewall;
+
+    /// Dove vive il cluster PostgreSQL, **se** questa famiglia richiede di
+    /// inizializzarlo a mano. `None` = il pacchetto lo crea e lo avvia da sé.
+    ///
+    /// # La divergenza più pesante fra le due famiglie
+    ///
+    /// Su Debian/Ubuntu il postinst di `postgresql` chiama `pg_createcluster` e
+    /// il servizio parte: non c'è nulla da fare, e infatti `setup-postgres` non
+    /// ha mai avuto un passo di inizializzazione. Su Fedora
+    /// `postgresql-server` **non inizializza niente**: senza
+    /// `postgresql-setup --initdb` il servizio non parte, e lo step fallirebbe
+    /// alla verifica finale senza dire perché.
+    ///
+    /// `Option` e non una stringa vuota: «questa famiglia non ha il concetto» è
+    /// una risposta diversa da «il percorso è questo», e va rappresentata nei
+    /// dati invece che dedotta.
+    fn postgres_data_dir(&self) -> Option<PathBuf>;
+
+    /// Inizializza il cluster PostgreSQL.
+    ///
+    /// Chiamata **solo** quando [`Self::postgres_data_dir`] è `Some` e il
+    /// cluster non c'è ancora. Sulle famiglie che non ne hanno bisogno è un
+    /// no-op totale: non un ramo irraggiungibile, ma la risposta vera alla
+    /// domanda «cosa serve fare qui?».
+    fn init_postgres_cluster(&self) -> Result<(), StepError>;
 }
 
 /// Lo strumento di firewall, in cinque domande.

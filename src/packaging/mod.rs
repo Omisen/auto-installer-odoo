@@ -441,6 +441,20 @@ pub trait PackageManager {
     /// nei repository.
     fn install_local_file(&self, path: &Path) -> Result<(), StepError>;
 
+    /// Come si chiama il file di pacchetto di questo formato.
+    ///
+    /// Serve a `install-wkhtmltopdf`, che scarica un pacchetto **da upstream**:
+    /// il progetto pubblica sia `.deb` sia `.rpm`, con schemi di nome diversi
+    /// (`wkhtmltox_{ver}.{suffisso}_amd64.deb` contro
+    /// `wkhtmltox-{ver}.{suffisso}.x86_64.rpm`). Non è una convenzione nostra,
+    /// ma è conoscenza del **formato di pacchetto**, quindi di chi lo installa.
+    ///
+    /// L'estensione conta oltre che per il nome: R9 ha scoperto che
+    /// `apt-get install <file>` riconosce un percorso locale **solo** da quella,
+    /// e per questo il temporaneo con nome casuale la conserva
+    /// (`private_temp_path_keeping_extension`).
+    fn local_package_name(&self, version: &str, suffix: &str) -> String;
+
     /// Il comando che l'utente digiterebbe per aggiornare l'indice, **come
     /// testo**, da mettere nei messaggi diagnostici.
     ///

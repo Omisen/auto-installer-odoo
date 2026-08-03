@@ -236,6 +236,10 @@ impl PackageManager for ModelPackages {
         s.wk_version = Some("0.12.6.1".to_string());
         Ok(())
     }
+    fn local_package_name(&self, version: &str, suffix: &str) -> String {
+        odoo_installer::packaging::apt::AptBackend.local_package_name(version, suffix)
+    }
+
     fn refresh_command(&self) -> &'static str {
         odoo_installer::packaging::apt::AptBackend.refresh_command()
     }
@@ -284,6 +288,16 @@ pub struct ModelDistro {
 impl Distro for ModelDistro {
     fn firewall(&self) -> &dyn Firewall {
         &self.firewall
+    }
+
+    /// Il modello rappresenta una macchina Debian: il cluster lo crea il
+    /// pacchetto, non noi.
+    fn postgres_data_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
+    fn init_postgres_cluster(&self) -> Result<(), StepError> {
+        Ok(())
     }
 }
 

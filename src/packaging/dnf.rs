@@ -377,6 +377,17 @@ impl PackageManager for DnfBackend {
         run_dnf(&["install", "-y", &rendered])
     }
 
+    /// Lo schema rpm di upstream: `wkhtmltox-{ver}.{suffisso}.x86_64.rpm`.
+    ///
+    /// **DA VERIFICARE su una release reale**: il nome è ricostruito dalla
+    /// convenzione rpm, non letto dagli asset pubblicati. Se fosse sbagliato il
+    /// download fallirebbe con un 404 — rumoroso, non silenzioso — e comunque
+    /// prima del download c'è il fail-closed sui pin, che per questa famiglia
+    /// non esistono ancora.
+    fn local_package_name(&self, version: &str, suffix: &str) -> String {
+        format!("wkhtmltox-{version}.{suffix}.x86_64.rpm")
+    }
+
     fn refresh_command(&self) -> &'static str {
         "dnf makecache"
     }
