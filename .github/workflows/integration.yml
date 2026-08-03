@@ -259,9 +259,15 @@ jobs:
   # divergenza più rischiosa di tutto il lavoro multi-distro (M3).
   #
   # Da qui la scelta: un container avviato a mano con `/usr/sbin/init` come
-  # comando, `--privileged` e i cgroup dell'host. Le immagini Fedora includono
-  # systemd, quindi lì può fare PID 1 davvero — e il ciclo installazione →
-  # servizio attivo → rollback diventa verificabile.
+  # comando, `--privileged` e i cgroup dell'host, così systemd fa PID 1 davvero
+  # e il ciclo installazione → servizio attivo → rollback diventa verificabile.
+  #
+  # **L'immagine base `fedora:N` NON contiene systemd** — verificato al primo
+  # tentativo, che è morto con `stat /usr/sbin/init: no such file or directory`.
+  # Le immagini Fedora sono minimali: `/usr/sbin/init` è un symlink fornito dal
+  # pacchetto `systemd`, che lì non c'è. Serve quindi costruire un'immagine
+  # intermedia — ed è anche il posto giusto per i prerequisiti del test, che così
+  # non vanno reinstallati a ogni esecuzione degli step.
   #
   # **Se systemd non si alza**, il job fallisce esplicitamente invece di
   # degradare a sonda in silenzio: un job che passa senza aver provato ciò per
@@ -286,6 +292,36 @@ jobs:
           name: odoo-installer-musl
           path: bin
 
+      - name: Immagine con systemd e i prerequisiti del test
+        run: |
+          set -eux
+          # Heredoc QUOTATO: senza le virgolette bash interpreterebbe i `\` di
+          # continuazione e unirebbe le righe del Dockerfile. `${{ matrix.image }}`
+          # lo sostituisce GitHub prima che bash veda lo script, quindi il
+          # quoting non gli toglie nulla.
+          cat > Dockerfile.ci <<'DOCKERFILE'
+          FROM FEDORA_IMAGE
+          # systemd: senza, /usr/sbin/init non esiste e il container non parte.
+          # Gli altri sono prerequisiti del TEST, non dell'installer: sudo (che
+          # l'installer esige), git (clone dei sorgenti), jq (le asserzioni
+          # leggono il manifesto), procps-ng (ss/ps per i preflight sulle porte).
+          RUN dnf -y install --setopt=install_weak_deps=False \
+                systemd sudo git jq procps-ng \
+           && dnf clean all
+          # Unit che in un container non hanno senso e fallirebbero, portando
+          # systemd a `degraded` per rumore invece che per una ragione vera.
+          RUN systemctl mask \
+                systemd-remount-fs.service \
+                dev-hugepages.mount \
+                sys-fs-fuse-connections.mount \
+                console-getty.service \
+                getty.target
+          CMD ["/usr/sbin/init"]
+          DOCKERFILE
+          sed -i "s|FEDORA_IMAGE|${{ matrix.image }}|" Dockerfile.ci
+          cat Dockerfile.ci
+          docker build -t odoo-installer-fedora:ci -f Dockerfile.ci .
+
       - name: Avvia il container con systemd come PID 1
         run: |
           set -eux
@@ -296,7 +332,7 @@ jobs:
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v "$GITHUB_WORKSPACE":/work \
             -w /work \
-            "${{ matrix.image }}" /usr/sbin/init
+            odoo-installer-fedora:ci
 
           # systemd ci mette qualche secondo ad arrivare a regime. `degraded` va
           # bene: in un container alcune unit non partono (e non ci servono), ma
@@ -318,15 +354,6 @@ jobs:
               exit 1
               ;;
           esac
-
-      - name: Prerequisiti del container
-        run: |
-          set -eux
-          # `sudo` (l'installer lo esige), `git` (clone dei sorgenti), `jq` (le
-          # asserzioni leggono il manifesto), `procps-ng` (`ss`/`ps` per i
-          # preflight sulle porte). `systemd` c'è già: è il PID 1.
-          docker exec fedora-test dnf install -y --setopt=install_weak_deps=False \
-            sudo git jq procps-ng
 
       - name: Utente non-root con sudo (come su una macchina vera)
         run: |
