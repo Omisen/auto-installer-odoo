@@ -316,6 +316,13 @@ jobs:
                 sys-fs-fuse-connections.mount \
                 console-getty.service \
                 getty.target
+          # PAM in un container: `sudo` su Fedora passa da `pam_faillock`, che
+          # vuole la sua directory di stato. Senza, l'account management fallisce
+          # con «Authentication service cannot retrieve authentication info» e
+          # sudo chiede una password che non esiste — osservato al primo giro.
+          # `systemd-tmpfiles` la creerebbe, ma non prima che PAM ne abbia
+          # bisogno.
+          RUN mkdir -p /run/faillock /var/run/faillock
           CMD ["/usr/sbin/init"]
           DOCKERFILE
           sed -i "s|FEDORA_IMAGE|${{ matrix.image }}|" Dockerfile.ci
@@ -359,9 +366,38 @@ jobs:
         run: |
           set -eux
           docker exec fedora-test useradd -m -s /bin/bash tester
+          # Una password vera: `useradd` da solo lascia l'account **bloccato**
+          # (`!` in /etc/shadow), e su alcune configurazioni PAM l'account
+          # management di un account bloccato non passa nemmeno con NOPASSWD.
+          docker exec fedora-test bash -c "echo 'tester:tester' | chpasswd"
           docker exec fedora-test bash -c "echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester"
           docker exec fedora-test chmod 440 /etc/sudoers.d/tester
+          docker exec fedora-test mkdir -p /run/faillock
           docker exec fedora-test chown -R tester:tester /work
+
+      # Prima di lanciare mezz'ora di installazione, si verifica che il
+      # prerequisito più banale funzioni. Al primo giro `sudo` falliva per PAM e
+      # il job se n'è accorto **dopo**, da un exit code 1 dell'installer: la
+      # diagnosi era a due passi di distanza dalla causa.
+      #
+      # Se qui fallisce, si stampa ciò che serve a capirlo invece di lasciare il
+      # prossimo a indovinare.
+      - name: sudo funziona? (prerequisito, non l'oggetto del test)
+        run: |
+          if docker exec -u tester fedora-test sudo -n true; then
+            echo "sudo: ok"
+            exit 0
+          fi
+          echo "::error::sudo non funziona per l'utente di test: l'installer non partirebbe nemmeno"
+          docker exec fedora-test bash -c '
+            echo "--- getent passwd tester ---"; getent passwd tester
+            echo "--- shadow (solo presenza) ---"; grep -c "^tester:" /etc/shadow
+            echo "--- sudoers.d ---"; ls -l /etc/sudoers.d/; cat /etc/sudoers.d/tester
+            echo "--- pam.d/sudo ---"; cat /etc/pam.d/sudo
+            echo "--- faillock ---"; ls -ld /run/faillock 2>&1
+            echo "--- sudo verbose ---"; su tester -c "sudo -n true" 2>&1 | tail -20
+          ' || true
+          exit 1
 
       - name: Installazione + rollback reali
         run: |
