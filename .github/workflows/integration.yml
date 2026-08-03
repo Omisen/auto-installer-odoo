@@ -306,7 +306,7 @@ jobs:
           # l'installer esige), git (clone dei sorgenti), jq (le asserzioni
           # leggono il manifesto), procps-ng (ss/ps per i preflight sulle porte).
           RUN dnf -y install --setopt=install_weak_deps=False \
-                systemd sudo git jq procps-ng \
+                systemd sudo git jq procps-ng authselect \
            && dnf clean all
           # Unit che in un container non hanno senso e fallirebbero, portando
           # systemd a `degraded` per rumore invece che per una ragione vera.
@@ -316,12 +316,34 @@ jobs:
                 sys-fs-fuse-connections.mount \
                 console-getty.service \
                 getty.target
-          # PAM in un container: `sudo` su Fedora passa da `pam_faillock`, che
-          # vuole la sua directory di stato. Senza, l'account management fallisce
-          # con «Authentication service cannot retrieve authentication info» e
-          # sudo chiede una password che non esiste — osservato al primo giro.
-          # `systemd-tmpfiles` la creerebbe, ma non prima che PAM ne abbia
-          # bisogno.
+          # PAM in un container Fedora, due cose che mancano.
+          #
+          # 1) `/etc/pam.d/sudo` include `system-auth`, che su Fedora è un
+          #    symlink gestito da `authselect`. In un'immagine container
+          #    authselect non è mai stato inizializzato, quindi quel link non
+          #    risolve: PAM non trova i moduli e l'account management fallisce
+          #    con «Authentication service cannot retrieve authentication info».
+          #    È la causa vera dei due giri precedenti — e non si vedeva dalla
+          #    configurazione di sudo, che era corretta.
+          #
+          #    Si applica un profilo; se `authselect` non è utilizzabile, si
+          #    scrive a mano una configurazione minima basata su `pam_unix`. Il
+          #    `test -e` segue il symlink, quindi risponde `false` proprio nel
+          #    caso che ci interessa: link presente ma rotto.
+          RUN authselect select minimal --force 2>/dev/null \
+           || authselect select local --force 2>/dev/null \
+           || authselect select sssd --force 2>/dev/null \
+           || true
+          RUN test -e /etc/pam.d/system-auth || printf '%s\n' \
+                'auth     sufficient pam_unix.so nullok' \
+                'auth     required   pam_deny.so' \
+                'account  required   pam_unix.so' \
+                'password sufficient pam_unix.so' \
+                'password required   pam_deny.so' \
+                'session  required   pam_unix.so' \
+                > /etc/pam.d/system-auth
+          # 2) `pam_faillock` vuole la propria directory di stato, che
+          #    `systemd-tmpfiles` creerebbe ma non prima che PAM ne abbia bisogno.
           RUN mkdir -p /run/faillock /var/run/faillock
           CMD ["/usr/sbin/init"]
           DOCKERFILE
@@ -394,6 +416,10 @@ jobs:
             echo "--- shadow (solo presenza) ---"; grep -c "^tester:" /etc/shadow
             echo "--- sudoers.d ---"; ls -l /etc/sudoers.d/; cat /etc/sudoers.d/tester
             echo "--- pam.d/sudo ---"; cat /etc/pam.d/sudo
+            echo "--- system-auth (il sospetto n.1: symlink authselect) ---"
+            ls -l /etc/pam.d/system-auth 2>&1
+            readlink -f /etc/pam.d/system-auth 2>&1
+            cat /etc/pam.d/system-auth 2>&1 | head -20
             echo "--- faillock ---"; ls -ld /run/faillock 2>&1
             echo "--- sudo verbose ---"; su tester -c "sudo -n true" 2>&1 | tail -20
           ' || true
