@@ -33,6 +33,7 @@
 //! devono poter asserire la sequenza esatta.
 
 pub mod apt;
+pub mod dnf;
 
 use std::path::Path;
 
@@ -174,6 +175,143 @@ pub fn specs(groups: &[&[&str]]) -> Vec<PackageSpec> {
     groups.iter().map(|g| PackageSpec::group(g)).collect()
 }
 
+/// Un **bisogno** dell'installazione, indipendente dal nome che ha su una
+/// distribuzione.
+///
+/// # A cosa serve, e a cosa NON serve
+///
+/// Non serve alla risoluzione: quella continua a lavorare su nomi, come sempre.
+/// Serve a **una cosa sola**: un test che enumera queste varianti e pretende che
+/// ogni famiglia le copra tutte.
+///
+/// La lezione di R6-hotfix-2 era «congela la lista, così un refactor che perde un
+/// pacchetto lo dice subito». Con due famiglie la lezione si estende: non basta
+/// che ogni lista sia congelata, serve che le due si **corrispondano**. Senza,
+/// si aggiunge una dipendenza a Debian e ci si accorge che manca su Fedora solo
+/// quando una VM non compila più — cioè nel posto più caro possibile.
+///
+/// # Perché la corrispondenza non è 1:1, e va bene così
+///
+/// Un bisogno può costare **più pacchetti** su una famiglia (`BuildTools` è un
+/// pacchetto su Debian e tre su Fedora) e **lo stesso** pacchetto su due bisogni
+/// diversi (`Jpeg` e `Jpeg8` collassano entrambi su `libjpeg-turbo-devel`: la
+/// deduplica di A-MD-1 se ne occupa). Per questo una voce di catalogo porta un
+/// `Vec<PackageSpec>` e non uno solo.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DepId {
+    Git,
+    Curl,
+    Wget,
+    /// `envsubst`, per rendere i template.
+    Gettext,
+    PythonPip,
+    PythonDev,
+    /// Il modulo `ensurepip`, senza cui `python3 -m venv` si ferma a metà
+    /// (A-R6-1). Su alcune famiglie è un pacchetto a sé, su altre sta nella
+    /// libreria standard: il bisogno c'è comunque, ed è la precondizione di
+    /// `create-virtualenv` a verificarlo davvero.
+    PythonVenv,
+    PythonWheel,
+    PythonSetuptools,
+    /// Compilatore C/C++ e make: servono a compilare le estensioni native di pip.
+    BuildTools,
+    Freetype,
+    Xml2,
+    Zip,
+    Ldap,
+    Sasl,
+    Jpeg,
+    /// Variante storica del precedente: su alcune release è un pacchetto di
+    /// transizione, su altre non esiste e ricade sullo stesso nome di [`Self::Jpeg`].
+    Jpeg8,
+    Zlib,
+    /// Header del client PostgreSQL (`libpq`), per `psycopg2`.
+    PostgresClient,
+    Xslt,
+    Tiff,
+    OpenJpeg,
+    Lcms2,
+    Webp,
+    Harfbuzz,
+    Fribidi,
+    Xcb,
+    Ev,
+    CAres,
+    /// **Opzionale**: il compilatore degli asset `.less`. Odoo moderno usa SCSS
+    /// e parte senza; se manca è un warning, non un errore.
+    LessCompiler,
+}
+
+impl DepId {
+    /// Tutti i bisogni, per il test di parità fra cataloghi.
+    pub const ALL: &'static [DepId] = &[
+        DepId::Git,
+        DepId::Curl,
+        DepId::Wget,
+        DepId::Gettext,
+        DepId::PythonPip,
+        DepId::PythonDev,
+        DepId::PythonVenv,
+        DepId::PythonWheel,
+        DepId::PythonSetuptools,
+        DepId::BuildTools,
+        DepId::Freetype,
+        DepId::Xml2,
+        DepId::Zip,
+        DepId::Ldap,
+        DepId::Sasl,
+        DepId::Jpeg,
+        DepId::Jpeg8,
+        DepId::Zlib,
+        DepId::PostgresClient,
+        DepId::Xslt,
+        DepId::Tiff,
+        DepId::OpenJpeg,
+        DepId::Lcms2,
+        DepId::Webp,
+        DepId::Harfbuzz,
+        DepId::Fribidi,
+        DepId::Xcb,
+        DepId::Ev,
+        DepId::CAres,
+        DepId::LessCompiler,
+    ];
+}
+
+/// Un bisogno e i pacchetti che lo soddisfano **su questa famiglia**.
+#[derive(Debug, Clone)]
+pub struct CatalogEntry {
+    pub id: DepId,
+    /// Uno o più `PackageSpec`: un bisogno può costare più pacchetti.
+    pub specs: Vec<PackageSpec>,
+}
+
+impl CatalogEntry {
+    /// Una voce con un solo gruppo di alternative.
+    pub fn new(id: DepId, alternatives: &[&str]) -> Self {
+        CatalogEntry {
+            id,
+            specs: vec![PackageSpec::any(alternatives)],
+        }
+    }
+
+    /// Una voce **opzionale**: se nessuna alternativa è disponibile si prosegue.
+    pub fn optional(id: DepId, alternatives: &[&str]) -> Self {
+        CatalogEntry {
+            id,
+            specs: vec![PackageSpec::optional(alternatives)],
+        }
+    }
+
+    /// Una voce che costa **più pacchetti** (es. `build-essential` → gcc, g++, make).
+    pub fn many(id: DepId, packages: &[&str]) -> Self {
+        CatalogEntry {
+            id,
+            specs: packages.iter().map(|p| PackageSpec::one(p)).collect(),
+        }
+    }
+}
+
 /// I nomi di pacchetto che una famiglia conosce.
 ///
 /// # Perché la lista sta nel backend e non in una tabella a parte
@@ -189,10 +327,10 @@ pub fn specs(groups: &[&[&str]]) -> Vec<PackageSpec> {
 #[derive(Debug, Clone)]
 pub struct PackageCatalog {
     /// Utility comuni a basso rischio, installate per prime.
-    pub bootstrap: Vec<PackageSpec>,
+    pub bootstrap: Vec<CatalogEntry>,
     /// Dipendenze di sistema di Odoo: obbligatorie **e** opzionali insieme,
     /// perché `PackageSpec` porta già con sé la distinzione.
-    pub odoo: Vec<PackageSpec>,
+    pub odoo: Vec<CatalogEntry>,
     /// Pacchetti che installano il server PostgreSQL.
     pub postgres: Vec<String>,
     /// Il nome con cui si chiede «PostgreSQL è installato?». **Non** è il primo
@@ -201,6 +339,30 @@ pub struct PackageCatalog {
     pub postgres_marker: String,
     /// Il pacchetto di nginx.
     pub nginx: String,
+}
+
+impl PackageCatalog {
+    /// Le specs del bootstrap, appiattite: è ciò che lo step consuma.
+    pub fn bootstrap_specs(&self) -> Vec<PackageSpec> {
+        Self::flatten(&self.bootstrap)
+    }
+
+    /// Le specs delle dipendenze Odoo, appiattite.
+    pub fn odoo_specs(&self) -> Vec<PackageSpec> {
+        Self::flatten(&self.odoo)
+    }
+
+    fn flatten(entries: &[CatalogEntry]) -> Vec<PackageSpec> {
+        entries.iter().flat_map(|e| e.specs.clone()).collect()
+    }
+
+    /// Questo catalogo copre il bisogno? (bootstrap **o** dipendenze Odoo)
+    pub fn covers(&self, id: DepId) -> bool {
+        self.bootstrap
+            .iter()
+            .chain(self.odoo.iter())
+            .any(|e| e.id == id && !e.specs.is_empty())
+    }
 }
 
 /// I comandi di un gestore di pacchetti.

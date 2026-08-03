@@ -8,6 +8,7 @@
 use tracing::{info, warn};
 
 use crate::context::Context;
+use crate::distro::OsFamily;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
@@ -31,6 +32,29 @@ impl CreateVirtualenv {
 
     fn venv_dir(ctx: &Context) -> std::path::PathBuf {
         ctx.install_dir.join(VENV_SUBDIR)
+    }
+}
+
+/// Dove va cercato `ensurepip` su questa famiglia.
+///
+/// La **domanda** della precondizione è la stessa per tutti — «il sistema sa
+/// creare un virtualenv?», risolta in `import ensurepip` (A-R6-1) — ma il
+/// suggerimento no: su Debian/Ubuntu manca un pacchetto da installare, su Fedora
+/// `ensurepip` è nella libreria standard e un'assenza significa un'altra cosa.
+/// Dare il consiglio sbagliato manda a cercare un pacchetto che non esiste.
+///
+/// Pura, e verificabile per entrambe le famiglie senza averle sotto mano.
+pub fn missing_ensurepip_hint(family: OsFamily) -> &'static str {
+    match family {
+        OsFamily::Debian => {
+            "su Debian/Ubuntu arriva col pacchetto python3-venv (o la sua variante \
+             versionata, es. python3.12-venv)"
+        }
+        OsFamily::Fedora => {
+            "su Fedora non esiste un pacchetto python3-venv: ensurepip sta in \
+             python3-libs, che dovrebbe essere già presente. Se manca, l'installazione \
+             di Python è incompleta o è stato usato un python3 non di sistema"
+        }
     }
 }
 
@@ -71,13 +95,12 @@ impl Step for CreateVirtualenv {
         // `python3 -m venv`, che si ferma a metà lasciando una `sandbox`
         // incompleta (senza `bin/python`) e un errore grezzo di Python (A-R6-1).
         if !self.ops.python_venv_available() {
-            return Err(StepError::Precondition(
-                "impossibile creare un virtualenv: manca il modulo 'ensurepip', che su \
-                 Debian/Ubuntu arriva col pacchetto python3-venv (o la sua variante \
-                 versionata, es. python3.12-venv). Lo step install-system-dependencies \
-                 dovrebbe averlo installato: controlla il suo esito nel log"
-                    .to_string(),
-            ));
+            return Err(StepError::Precondition(format!(
+                "impossibile creare un virtualenv: manca il modulo 'ensurepip'. {}. \
+                 Lo step install-system-dependencies dovrebbe averlo reso disponibile: \
+                 controlla il suo esito nel log",
+                missing_ensurepip_hint(ctx.os_family)
+            )));
         }
 
         let venv = Self::venv_dir(ctx);

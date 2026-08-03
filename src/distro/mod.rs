@@ -39,6 +39,8 @@
 //! entrambi darebbe la risposta sbagliata **in silenzio**).
 
 pub mod debian;
+pub mod fedora;
+pub mod firewalld;
 pub mod ufw;
 
 use serde::{Deserialize, Serialize};

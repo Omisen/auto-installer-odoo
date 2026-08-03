@@ -295,11 +295,11 @@ fn install_undo_does_not_purge_without_aggressive() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(ops.iter().any(|o| matches!(o, Op::AptInstall(_))));
+    assert!(ops.iter().any(|o| matches!(o, Op::PkgInstall(_))));
     assert!(ops.iter().any(|o| matches!(o, Op::ServiceStop(_))));
     assert!(ops.iter().any(|o| matches!(o, Op::ServiceDisable(_))));
     assert!(
-        !ops.iter().any(|o| matches!(o, Op::AptPurge(_))),
+        !ops.iter().any(|o| matches!(o, Op::PkgRemove(_))),
         "coerenza D3: no purge senza flag"
     );
 }

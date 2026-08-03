@@ -61,11 +61,11 @@ fn installed_but_stopped_starts_then_stops_no_purge() {
         "non disabilitare: era già enabled"
     );
     assert!(
-        !has(&ops, |o| matches!(o, Op::AptInstall(_))),
+        !has(&ops, |o| matches!(o, Op::PkgInstall(_))),
         "già installato: non installare"
     );
     assert!(
-        !has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        !has(&ops, |o| matches!(o, Op::PkgRemove(_))),
         "mai purgare senza --aggressive-rollback"
     );
 }
@@ -75,14 +75,14 @@ fn all_absent_installs_enables_starts_then_reverts_no_purge() {
     let cfg = MockConfig::default(); // niente installato, disabled, fermo
     let ops = run_cycle(cfg, false);
 
-    assert!(has(&ops, |o| matches!(o, Op::AptInstall(_))));
+    assert!(has(&ops, |o| matches!(o, Op::PkgInstall(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceEnable(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceStart(_))));
     // undo: stop + disable, ma NO purge (default).
     assert!(has(&ops, |o| matches!(o, Op::ServiceStop(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceDisable(_))));
     assert!(
-        !has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        !has(&ops, |o| matches!(o, Op::PkgRemove(_))),
         "no purge senza flag"
     );
 }
@@ -92,16 +92,16 @@ fn purge_only_with_aggressive_rollback() {
     // Stesso stato (tutto assente → installed CreatedByUs), due politiche.
     let without = run_cycle(MockConfig::default(), false);
     assert!(
-        !has(&without, |o| matches!(o, Op::AptPurge(_))),
+        !has(&without, |o| matches!(o, Op::PkgRemove(_))),
         "senza flag: no purge"
     );
 
     let with = run_cycle(MockConfig::default(), true);
     assert!(
-        has(&with, |o| matches!(o, Op::AptPurge(_))),
+        has(&with, |o| matches!(o, Op::PkgRemove(_))),
         "con --aggressive-rollback: purga"
     );
-    assert!(has(&with, |o| matches!(o, Op::AptAutoremove)));
+    assert!(has(&with, |o| matches!(o, Op::PkgRemoveOrphans)));
 }
 
 #[test]
@@ -113,7 +113,7 @@ fn aggressive_purge_declined_when_other_databases_present() {
     };
     let ops = run_cycle(cfg, /* aggressive */ true);
     assert!(
-        !has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        !has(&ops, |o| matches!(o, Op::PkgRemove(_))),
         "con altri database nel cluster il purge va declinato"
     );
     // stop+disable sono comunque applicati.
@@ -130,7 +130,7 @@ fn aggressive_purge_allowed_when_only_our_database() {
     };
     let ops = run_cycle(cfg, true);
     assert!(
-        has(&ops, |o| matches!(o, Op::AptPurge(_))),
+        has(&ops, |o| matches!(o, Op::PkgRemove(_))),
         "solo il nostro DB → purge consentito"
     );
 }

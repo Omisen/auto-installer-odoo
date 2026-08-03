@@ -7,7 +7,7 @@
 
 use std::path::Path;
 
-use super::{availability_from, specs, Availability, PackageCatalog, PackageManager, PackageSpec};
+use super::{availability_from, Availability, CatalogEntry, DepId, PackageCatalog, PackageManager};
 use crate::error::StepError;
 use crate::system_ops::{
     capture_command_with_env, has_installable_candidate, run_command_with_env, total_package_names,
@@ -32,74 +32,79 @@ fn run_apt(args: &[&str]) -> Result<(), StepError> {
 
 /// Prerequisiti bootstrap: utility comuni a basso rischio.
 ///
-/// Ogni voce è un gruppo di alternative in ordine di preferenza (vedi
-/// [`PackageSpec`]); questi quattro nomi sono stabili su tutte le release
-/// Debian/Ubuntu supportate, quindi non hanno fallback.
-pub const BOOTSTRAP_PACKAGES: &[&[&str]] = &[&["git"], &["curl"], &["wget"], &["gettext-base"]];
+/// Questi quattro nomi sono stabili su tutte le release Debian/Ubuntu
+/// supportate, quindi non hanno alternative.
+fn bootstrap_catalog() -> Vec<CatalogEntry> {
+    vec![
+        CatalogEntry::new(DepId::Git, &["git"]),
+        CatalogEntry::new(DepId::Curl, &["curl"]),
+        CatalogEntry::new(DepId::Wget, &["wget"]),
+        CatalogEntry::new(DepId::Gettext, &["gettext-base"]),
+    ]
+}
 
-/// Dipendenze di sistema di Odoo (lista canonica, da `system.sh`).
+/// Dipendenze di sistema di Odoo sulla famiglia Debian (lista canonica, da
+/// `system.sh`).
 ///
-/// Ogni voce è un gruppo di alternative in ordine di preferenza: il primo nome
+/// Ogni voce può avere alternative in ordine di preferenza: il primo nome
 /// installabile vince. I gruppi con più di un nome sono quelli che cambiano tra
 /// release — le divergenze osservate in campo su Debian 11/12 (A5.1).
-pub const ODOO_DEPENDENCIES: &[&[&str]] = &[
-    &["git"],
-    &["curl"],
-    &["wget"],
-    &["python3-pip"],
-    &["python3-dev"],
-    &["python3-venv"],
-    &["python3-wheel"],
-    &["python3-setuptools"],
-    &["build-essential"],
-    &["gettext-base"],
-    // Su Ubuntu 24.04 `libfreetype6-dev` è diventato un nome puramente virtuale
-    // (`Provides` di `libfreetype-dev`): installabile ma non purgabile. Il nome
-    // reale come alternativa fa sì che il delta contenga qualcosa che l'undo
-    // possa davvero rimuovere (A5.1-bis).
-    &["libfreetype6-dev", "libfreetype-dev"],
-    &["libxml2-dev"],
-    &["libzip-dev"],
-    &["libldap2-dev"],
-    &["libsasl2-dev"],
-    &["libjpeg-dev"],
-    &["zlib1g-dev"],
-    &["libpq-dev"],
-    &["libxslt1-dev"],
-    // Rinominato senza il soname: Ubuntu 22.04 ha entrambi, Debian 12 solo il
-    // secondo.
-    &["libtiff5-dev", "libtiff-dev"],
-    // Su Ubuntu è un pacchetto di transizione verso `libjpeg-turbo8-dev`; su
-    // Debian 12 non esiste e la copertura la dà `libjpeg-dev`, già in lista.
-    //
-    // Nota (A-MD-1): su una release dove nessuno dei primi due esiste, questo
-    // gruppo risolve a `libjpeg-dev`, **lo stesso nome** del gruppo qui sopra.
-    // La risoluzione deduplica i nomi risolti prima di comporre il delta:
-    // il manifesto è la contabilità di ciò che abbiamo aggiunto, e una
-    // contabilità con una riga doppia è una contabilità sbagliata.
-    &["libjpeg8-dev", "libjpeg-turbo8-dev", "libjpeg-dev"],
-    &["libopenjp2-7-dev"],
-    &["liblcms2-dev"],
-    &["libwebp-dev"],
-    &["libharfbuzz-dev"],
-    &["libfribidi-dev"],
-    &["libxcb1-dev"],
-    &["libev-dev"],
-    &["libc-ares-dev"],
-];
-
-/// Dipendenze **opzionali**: utili ma non essenziali all'avvio di Odoo.
-///
-/// Se nessuna alternativa del gruppo è installabile su questa release, lo step
-/// lo dice con un `warn!` e prosegue, invece di fermare l'installazione.
-///
-/// Qui c'è `node-less`, il compilatore degli asset `.less`. Odoo moderno usa
-/// SCSS (compilato in-process da libsass) e parte senza `lessc`; il pacchetto è
-/// però stato rimosso da alcune release Debian, e una dipendenza da "nice to
-/// have" non deve trasformarsi in un'installazione impossibile. La distinzione
-/// esiste **solo** per questo caso: tutto ciò che serve davvero sta nella lista
-/// obbligatoria, dove un nome mancante è un errore.
-pub const ODOO_OPTIONAL_DEPENDENCIES: &[&[&str]] = &[&["node-less"]];
+fn odoo_catalog() -> Vec<CatalogEntry> {
+    vec![
+        CatalogEntry::new(DepId::Git, &["git"]),
+        CatalogEntry::new(DepId::Curl, &["curl"]),
+        CatalogEntry::new(DepId::Wget, &["wget"]),
+        CatalogEntry::new(DepId::PythonPip, &["python3-pip"]),
+        CatalogEntry::new(DepId::PythonDev, &["python3-dev"]),
+        CatalogEntry::new(DepId::PythonVenv, &["python3-venv"]),
+        CatalogEntry::new(DepId::PythonWheel, &["python3-wheel"]),
+        CatalogEntry::new(DepId::PythonSetuptools, &["python3-setuptools"]),
+        CatalogEntry::new(DepId::BuildTools, &["build-essential"]),
+        CatalogEntry::new(DepId::Gettext, &["gettext-base"]),
+        // Su Ubuntu 24.04 `libfreetype6-dev` è diventato un nome puramente
+        // virtuale (`Provides` di `libfreetype-dev`): installabile ma non
+        // purgabile. Il nome reale come alternativa fa sì che il delta contenga
+        // qualcosa che l'undo possa davvero rimuovere (A5.1-bis).
+        CatalogEntry::new(DepId::Freetype, &["libfreetype6-dev", "libfreetype-dev"]),
+        CatalogEntry::new(DepId::Xml2, &["libxml2-dev"]),
+        CatalogEntry::new(DepId::Zip, &["libzip-dev"]),
+        CatalogEntry::new(DepId::Ldap, &["libldap2-dev"]),
+        CatalogEntry::new(DepId::Sasl, &["libsasl2-dev"]),
+        CatalogEntry::new(DepId::Jpeg, &["libjpeg-dev"]),
+        CatalogEntry::new(DepId::Zlib, &["zlib1g-dev"]),
+        CatalogEntry::new(DepId::PostgresClient, &["libpq-dev"]),
+        CatalogEntry::new(DepId::Xslt, &["libxslt1-dev"]),
+        // Rinominato senza il soname: Ubuntu 22.04 ha entrambi, Debian 12 solo
+        // il secondo.
+        CatalogEntry::new(DepId::Tiff, &["libtiff5-dev", "libtiff-dev"]),
+        // Su Ubuntu è un pacchetto di transizione verso `libjpeg-turbo8-dev`; su
+        // Debian 12 non esiste e la copertura la dà `libjpeg-dev`, già in lista.
+        //
+        // Nota (A-MD-1): su una release dove nessuno dei primi due esiste, questa
+        // voce risolve a `libjpeg-dev`, **lo stesso nome** di `DepId::Jpeg`. La
+        // risoluzione deduplica i nomi risolti prima di comporre il delta: il
+        // manifesto è la contabilità di ciò che abbiamo aggiunto, e una
+        // contabilità con una riga doppia è una contabilità sbagliata.
+        CatalogEntry::new(
+            DepId::Jpeg8,
+            &["libjpeg8-dev", "libjpeg-turbo8-dev", "libjpeg-dev"],
+        ),
+        CatalogEntry::new(DepId::OpenJpeg, &["libopenjp2-7-dev"]),
+        CatalogEntry::new(DepId::Lcms2, &["liblcms2-dev"]),
+        CatalogEntry::new(DepId::Webp, &["libwebp-dev"]),
+        CatalogEntry::new(DepId::Harfbuzz, &["libharfbuzz-dev"]),
+        CatalogEntry::new(DepId::Fribidi, &["libfribidi-dev"]),
+        CatalogEntry::new(DepId::Xcb, &["libxcb1-dev"]),
+        CatalogEntry::new(DepId::Ev, &["libev-dev"]),
+        CatalogEntry::new(DepId::CAres, &["libc-ares-dev"]),
+        // Opzionale: `node-less` è il compilatore degli asset `.less`. Odoo
+        // moderno usa SCSS (compilato in-process da libsass) e parte senza
+        // `lessc`; il pacchetto è però stato rimosso da alcune release Debian, e
+        // una dipendenza da "nice to have" non deve trasformarsi in
+        // un'installazione impossibile.
+        CatalogEntry::optional(DepId::LessCompiler, &["node-less"]),
+    ]
+}
 
 /// Pacchetti che installano il server PostgreSQL su Debian/Ubuntu.
 pub const POSTGRES_PACKAGES: &[&str] = &["postgresql", "postgresql-contrib"];
@@ -108,15 +113,32 @@ pub const POSTGRES_MARKER_PACKAGE: &str = "postgresql";
 /// Il pacchetto di nginx.
 pub const NGINX_PACKAGE: &str = "nginx";
 
-/// Le specs complete delle dipendenze Odoo: obbligatorie + opzionali.
-fn odoo_dependency_specs() -> Vec<PackageSpec> {
-    let mut all = specs(ODOO_DEPENDENCIES);
-    all.extend(
-        ODOO_OPTIONAL_DEPENDENCIES
-            .iter()
-            .map(|g| PackageSpec::optional(g)),
-    );
-    all
+/// Gli argomenti di `apt-get install`, come funzione **pura**.
+///
+/// Come per dnf: il codice che esegue apt gira solo su una macchina reale, e
+/// `--no-install-recommends` è una protezione del delta (senza, entrano
+/// pacchetti che nessuno ha chiesto e che l'undo poi rimuoverebbe). Averla come
+/// valore di ritorno la rende verificabile.
+pub fn install_args(pkgs: &[&str]) -> Vec<String> {
+    let mut args = vec![
+        "install".to_string(),
+        "-y".to_string(),
+        "--no-install-recommends".to_string(),
+    ];
+    args.extend(pkgs.iter().map(|p| p.to_string()));
+    args
+}
+
+/// Gli argomenti di `apt-get purge`, come funzione **pura**.
+///
+/// apt non rimuove le dipendenze orfane se non glielo si chiede, quindi
+/// l'invariante di [`PackageManager::remove`] — rimuovere **solo** ciò che è
+/// stato chiesto — è soddisfatta senza opzioni aggiuntive. Su dnf non è così, ed
+/// è la differenza che il Bivio 2 ha dovuto decidere.
+pub fn remove_args(pkgs: &[&str]) -> Vec<String> {
+    let mut args = vec!["purge".to_string(), "-y".to_string()];
+    args.extend(pkgs.iter().map(|p| p.to_string()));
+    args
 }
 
 /// Il gestore di pacchetti della famiglia Debian.
@@ -190,9 +212,8 @@ impl PackageManager for AptBackend {
     }
 
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        let mut args = vec!["install", "-y", "--no-install-recommends"];
-        args.extend_from_slice(pkgs);
-        run_apt(&args)
+        let args = install_args(pkgs);
+        run_apt(&args.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
     /// `apt-get purge`: rimuove i pacchetti indicati **e i loro file di
@@ -200,9 +221,8 @@ impl PackageManager for AptBackend {
     /// non glielo si chiede, quindi l'invariante di [`PackageManager::remove`] è
     /// soddisfatta senza opzioni aggiuntive.
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        let mut args = vec!["purge", "-y"];
-        args.extend_from_slice(pkgs);
-        run_apt(&args)
+        let args = remove_args(pkgs);
+        run_apt(&args.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
     fn remove_orphans(&self) -> Result<(), StepError> {
@@ -245,8 +265,8 @@ impl PackageManager for AptBackend {
 
     fn catalog(&self) -> PackageCatalog {
         PackageCatalog {
-            bootstrap: specs(BOOTSTRAP_PACKAGES),
-            odoo: odoo_dependency_specs(),
+            bootstrap: bootstrap_catalog(),
+            odoo: odoo_catalog(),
             postgres: POSTGRES_PACKAGES.iter().map(|s| s.to_string()).collect(),
             postgres_marker: POSTGRES_MARKER_PACKAGE.to_string(),
             nginx: NGINX_PACKAGE.to_string(),

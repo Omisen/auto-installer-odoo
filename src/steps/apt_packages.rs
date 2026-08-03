@@ -158,7 +158,7 @@ impl AptPackagesStep {
     /// gestore di pacchetti risponde quando gli si chiede il catalogo. I nomi
     /// dei pacchetti sono conoscenza del gestore quanto lo sono i comandi.
     pub fn bootstrap_with_ops(ops: Box<dyn SystemOps>) -> Self {
-        let bootstrap = ops.packages().catalog().bootstrap;
+        let bootstrap = ops.packages().catalog().bootstrap_specs();
         let mut step = Self::with_specs(
             ops,
             "bootstrap-prerequisites",
@@ -172,7 +172,7 @@ impl AptPackagesStep {
 
     /// Dipendenze di sistema di Odoo (undo purga il delta, e solo il delta).
     pub fn odoo_dependencies_with_ops(ops: Box<dyn SystemOps>) -> Self {
-        let odoo = ops.packages().catalog().odoo;
+        let odoo = ops.packages().catalog().odoo_specs();
         Self::with_specs(
             ops,
             "install-system-dependencies",

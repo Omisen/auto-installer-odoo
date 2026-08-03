@@ -547,6 +547,14 @@ pub struct RealSystemOps {
 }
 
 impl RealSystemOps {
+    /// Le implementazioni della famiglia Fedora (dnf + firewalld).
+    pub fn fedora() -> Self {
+        RealSystemOps {
+            packages: Box::new(crate::packaging::dnf::DnfBackend),
+            distro: Box::new(crate::distro::fedora::Fedora::new()),
+        }
+    }
+
     /// Le implementazioni della famiglia Debian (apt + ufw).
     ///
     /// Non esiste un costruttore «senza famiglia»: sceglierne una e' una
@@ -564,14 +572,14 @@ impl RealSystemOps {
 /// La fabbrica dei backend per una famiglia, o `None` se **questo binario** non
 /// ne ha uno.
 ///
-/// # Perche' `Option` e non un `match` con un ramo di ripiego
+/// # Perche' `Option`
 ///
-/// Perche' oggi la risposta per Fedora e' davvero «non ce l'ho», e un `match`
-/// che le desse apt sarebbe una bugia silenziosa: `apt-get` su una macchina
-/// senza apt fallisce in modo oscuro, e nel rollback significherebbe lasciare
-/// installato tutto cio' che c'era da rimuovere. Entrambi i rami sono **veri e
-/// raggiungibili**, quindi non c'e' nessun ramo che non puo' eseguire — e
-/// quando M2 aggiungera' il backend dnf, qui cambia una riga.
+/// Perche' la risposta «non ce l'ho» dev'essere **dicibile**. Un `match` che
+/// desse apt a una famiglia senza backend sarebbe una bugia silenziosa:
+/// `apt-get` su una macchina senza apt fallisce in modo oscuro, e nel rollback
+/// significherebbe lasciare installato tutto cio' che c'era da rimuovere.
+/// Da M2 entrambe le famiglie hanno un backend, ma la forma resta: e' il
+/// fail-closed che regge quando se ne aggiungera' una terza.
 ///
 /// Restituisce un puntatore a funzione e non un valore gia' costruito perche'
 /// gli step **possiedono** le proprie `ops`: ne servono N istanze, non N
@@ -581,10 +589,7 @@ impl RealSystemOps {
 pub fn backend_factory(family: OsFamily) -> Option<fn() -> Box<dyn SystemOps>> {
     match family {
         OsFamily::Debian => Some(|| Box::new(RealSystemOps::debian()) as Box<dyn SystemOps>),
-        // M2. Finche' e' `None`, `checks::validate_os` rifiuta Fedora a monte e
-        // questo e' il fail-closed di ultima istanza — per esempio su un
-        // manifesto manomesso passato con `--state`.
-        OsFamily::Fedora => None,
+        OsFamily::Fedora => Some(|| Box::new(RealSystemOps::fedora()) as Box<dyn SystemOps>),
     }
 }
 

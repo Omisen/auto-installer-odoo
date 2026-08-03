@@ -59,17 +59,16 @@ pub enum CheckError {
     #[error("impossibile determinare l'OS da {path}: {reason}")]
     OsReleaseParse { path: PathBuf, reason: String },
 
-    #[error("sistema operativo '{id}' non supportato. Supportati: Ubuntu >= 22.04, Debian >= 11")]
+    #[error(
+        "sistema operativo '{id}' non supportato. \
+         Supportati: Ubuntu >= 22.04, Debian >= 11, Fedora >= 40"
+    )]
     UnsupportedOs { id: String },
 
     #[error(
-        "il supporto a {id} è in lavorazione e non è ancora attivo in questa versione \
-         dell'installer: mi fermo senza toccare nulla. Supportati oggi: Ubuntu >= 22.04, \
-         Debian >= 11"
+        "{id} {version} non supportato. \
+         Versione minima: Ubuntu 22.04, Debian 11, Fedora 40"
     )]
-    NotYetSupportedOs { id: String },
-
-    #[error("{id} {version} non supportato. Versione minima: Ubuntu 22.04, Debian 11")]
     UnsupportedVersion { id: String, version: String },
 
     #[error("spazio insufficiente su {target}: disponibili {available_gb} GB, richiesti {required_gb} GB")]
@@ -85,7 +84,19 @@ pub enum CheckError {
     #[error("porta {port} già in uso: liberala prima di procedere")]
     PortInUse { port: u16 },
 
-    #[error("comando di sistema obbligatorio mancante: {command}. Serve un sistema Debian/Ubuntu con apt-get e systemd")]
+    #[error(
+        "--with-nginx non è ancora supportato su {family}: gli step nginx usano i percorsi \
+         di Debian/Ubuntu (sites-available/sites-enabled), che su questa famiglia non \
+         esistono. Il vhost finirebbe in una directory che nginx non legge, e l'installazione \
+         sembrerebbe riuscita. Installa senza --with-nginx e configura il reverse proxy a mano."
+    )]
+    NginxNotSupportedOnFamily { family: OsFamily },
+
+    #[error(
+        "comando di sistema obbligatorio mancante: {command}. \
+         Serve un sistema con systemd e il gestore di pacchetti della sua famiglia \
+         (apt-get su Debian/Ubuntu, dnf su Fedora)"
+    )]
     MissingCommand { command: String },
 }
 
@@ -234,6 +245,14 @@ pub fn os_id_from(path: &Path) -> Option<String> {
 pub const NEWEST_TESTED_UBUNTU: (u32, u32) = (24, 4);
 /// L'ultima Debian su cui la CI di integrazione gira davvero (job `container`).
 pub const NEWEST_TESTED_DEBIAN: (u32, u32) = (12, 0);
+/// L'ultima Fedora su cui la CI di integrazione gira davvero.
+///
+/// **Oggi la CI Fedora non esiste** (arriva in M5): questa costante dice quindi
+/// «nessuna release provata», e ogni Fedora accettata produce l'avviso di
+/// [`is_newer_than_tested`]. È la verità, ed è l'informazione che serve a chi
+/// installa. Quando il job esisterà, qui andrà la sua release — e il test che
+/// lega le costanti alla matrice della CI coprirà anche questa.
+pub const NEWEST_TESTED_FEDORA: (u32, u32) = (0, 0);
 
 /// La release è **più recente** dell'ultima che abbiamo davvero provato?
 ///
@@ -251,16 +270,10 @@ pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
     let (tested_major, tested_minor) = match id {
         "ubuntu" => NEWEST_TESTED_UBUNTU,
         "debian" => NEWEST_TESTED_DEBIAN,
+        "fedora" => NEWEST_TESTED_FEDORA,
         // Qui non ci arriva nulla d'altro: un `ID` di famiglia ignota è già
-        // stato rifiutato da `OsFamily::from_os_id`, e Fedora da `validate_os`
-        // (non è ancora supportata). Inventare una soglia per loro sarebbe un
-        // ramo che non può eseguire.
-        //
-        // Quando Fedora verrà accettata servirà una `NEWEST_TESTED_FEDORA` e un
-        // ramo qui: senza, l'avviso «release più recente di quelle provate» si
-        // spegnerebbe in silenzio proprio sulla famiglia meno collaudata. La
-        // costante va legata alla matrice della CI dallo stesso test che già lo
-        // fa per le altre due, o l'avviso mentirebbe in una delle due direzioni.
+        // stato rifiutato da `OsFamily::from_os_id`. Inventargli una soglia
+        // sarebbe un ramo che non può eseguire.
         _ => return false,
     };
     (major, minor) > (tested_major, tested_minor)
@@ -273,12 +286,12 @@ pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
 /// `match` sulla famiglia è esaustivo per costruzione, quindi non c'è nessun
 /// ramo «distribuzione sconosciuta» che in produzione non potrebbe mai eseguire.
 ///
-/// Il ramo `Fedora` **rifiuta**: il supporto è in lavorazione (backend dnf,
-/// lista pacchetti, init del cluster PostgreSQL) e accettarlo prima che esista
-/// produrrebbe un'installazione che si ferma a metà — cioè esattamente lo stato
-/// intermedio sporco che il progetto esiste per non lasciare. Il messaggio dice
-/// «non ancora», non «non supportato»: sono due informazioni diverse per chi
-/// legge.
+/// La soglia Fedora è **40**, ed è una scelta prudente più che misurata: è la più
+/// vecchia release ancora supportata da upstream al momento in cui il backend dnf
+/// è stato scritto, e sotto quella nessuno ha provato nulla. Come per le altre
+/// famiglie la soglia è aperta verso l'alto, con l'avviso di
+/// [`is_newer_than_tested`] — che su Fedora scatta **sempre**, finché la CI di
+/// quella famiglia non esiste.
 pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
     let (major, minor) = parse_version(&info.version);
     match info.family {
@@ -296,9 +309,15 @@ pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
             }
             Ok(())
         }
-        OsFamily::Fedora => Err(CheckError::NotYetSupportedOs {
-            id: info.id.clone(),
-        }),
+        OsFamily::Fedora => {
+            if major < 40 {
+                return Err(CheckError::UnsupportedVersion {
+                    id: info.id.clone(),
+                    version: info.version.clone(),
+                });
+            }
+            Ok(())
+        }
     }
 }
 
@@ -513,10 +532,54 @@ fn command_exists(command: &str) -> bool {
     })
 }
 
-/// Verifica i prerequisiti di sistema **non installabili** dallo script:
-/// `apt-get` e `systemctl`. `nginx`/`certbot` sono opzionali (solo info).
-pub fn check_commands() -> Result<(), CheckError> {
-    for command in ["apt-get", "systemctl"] {
+/// I comandi che **devono** esserci, per questa famiglia.
+///
+/// Puro: la scelta si verifica senza avere quei comandi sulla macchina che
+/// esegue i test — e senza la separazione sarebbe verificabile solo su una
+/// Fedora vera, cioè in nessun test.
+///
+/// # Perché è il primo punto che un'esecuzione su Fedora incontrava
+///
+/// Fino a M2 questa lista conteneva `apt-get` **per nome**, quindi su Fedora
+/// l'installazione si fermava qui — prima di ogni altra cosa — con un messaggio
+/// che diceva «serve un sistema Debian/Ubuntu». Il gestore di pacchetti è per
+/// definizione ciò che cambia fra famiglie: chiederne uno per nome è la stessa
+/// classe di errore del `match os_id` che questo lavoro sta smontando.
+pub fn required_commands(family: OsFamily) -> [&'static str; 2] {
+    match family {
+        OsFamily::Debian => ["apt-get", "systemctl"],
+        OsFamily::Fedora => ["dnf", "systemctl"],
+    }
+}
+
+/// Gli step nginx sanno lavorare su questa famiglia?
+///
+/// # Perché un rifiuto esplicito e non «vediamo come va»
+///
+/// Perché il modo in cui andrebbe è il peggiore possibile: `nginx-write-config`
+/// scriverebbe il vhost in `/etc/nginx/sites-available`, che su Fedora **non
+/// esiste e nginx non legge**; `nginx-enable-site` creerebbe un symlink in
+/// un'altra directory inesistente. Nessuno dei due fallirebbe in modo evidente,
+/// e l'installazione si chiuderebbe dichiarando un reverse proxy che non serve
+/// nulla — un difetto senza sintomo, cioè la classe che questo progetto ha
+/// imparato a temere di più (A-V3-7).
+///
+/// Il supporto arriva in M4, insieme ai percorsi per famiglia. Fino ad allora la
+/// risposta onesta è no, detta **prima** di mutare qualsiasi cosa.
+///
+/// Pura: la si verifica per entrambe le famiglie senza avere né nginx né Fedora.
+pub fn nginx_support(family: OsFamily, with_nginx: bool) -> Result<(), CheckError> {
+    if with_nginx && family != OsFamily::Debian {
+        return Err(CheckError::NginxNotSupportedOnFamily { family });
+    }
+    Ok(())
+}
+
+/// Verifica i prerequisiti di sistema **non installabili** dallo script: il
+/// gestore di pacchetti della famiglia e `systemctl`. `nginx`/`certbot` sono
+/// opzionali (solo info).
+pub fn check_commands(family: OsFamily) -> Result<(), CheckError> {
+    for command in required_commands(family) {
         if command_exists(command) {
             info!(command, "✔ presente");
         } else {

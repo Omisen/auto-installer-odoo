@@ -6,10 +6,8 @@ use std::collections::HashSet;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
 use odoo_installer::context::Context;
-use odoo_installer::packaging::apt::{
-    BOOTSTRAP_PACKAGES, ODOO_DEPENDENCIES, ODOO_OPTIONAL_DEPENDENCIES,
-};
-use odoo_installer::packaging::PackageSpec;
+use odoo_installer::packaging::apt::AptBackend;
+use odoo_installer::packaging::{PackageManager, PackageSpec};
 use odoo_installer::state::{InstallState, StepRecord};
 use odoo_installer::step::Step;
 use odoo_installer::steps::apt_packages::{AptDeltaSnapshot, AptPackagesStep, UndoPolicy};
@@ -64,18 +62,18 @@ fn undo_purges_only_the_delta() {
     let ops = ops_of(&log);
     // Purge del solo delta, mai 'a'.
     assert!(
-        ops.contains(&Op::AptPurge(strings(&["b", "c"]))),
+        ops.contains(&Op::PkgRemove(strings(&["b", "c"]))),
         "atteso purge di [b,c], trovato: {ops:?}"
     );
     // A3.3/A3.2: nessun `apt-get autoremove` globale nel rollback — rimuoverebbe
     // orfani estranei a Odoo, fuori dal nostro delta.
     assert!(
-        !ops.contains(&Op::AptAutoremove),
+        !ops.contains(&Op::PkgRemoveOrphans),
         "l'undo non deve lanciare un autoremove globale, trovato: {ops:?}"
     );
     assert!(
         !ops.iter()
-            .any(|op| matches!(op, Op::AptPurge(p) if p.contains(&"a".to_string()))),
+            .any(|op| matches!(op, Op::PkgRemove(p) if p.contains(&"a".to_string()))),
         "il pacchetto preesistente 'a' non deve mai essere purgato"
     );
 }
@@ -109,11 +107,11 @@ fn undo_recovers_a_broken_dpkg_before_purging() {
     let ops = ops_of(&log);
     let fix = ops
         .iter()
-        .position(|o| matches!(o, Op::AptFixBroken))
+        .position(|o| matches!(o, Op::PkgRepair))
         .expect("il recovery di dpkg deve precedere il purge");
     let purge = ops
         .iter()
-        .position(|o| matches!(o, Op::AptPurge(_)))
+        .position(|o| matches!(o, Op::PkgRemove(_)))
         .expect("il purge deve essere tentato");
     assert!(
         fix < purge,
@@ -121,13 +119,13 @@ fn undo_recovers_a_broken_dpkg_before_purging() {
     );
     // E il purge, dopo il recovery, riesce davvero: il delta se ne va.
     assert!(
-        ops.contains(&Op::AptPurge(strings(&["b", "c"]))),
+        ops.contains(&Op::PkgRemove(strings(&["b", "c"]))),
         "il delta deve essere purgato dopo il recovery: {ops:?}"
     );
     // La protezione resta: mai il preesistente.
     assert!(
         !ops.iter()
-            .any(|op| matches!(op, Op::AptPurge(p) if p.contains(&"a".to_string()))),
+            .any(|op| matches!(op, Op::PkgRemove(p) if p.contains(&"a".to_string()))),
         "il pacchetto preesistente 'a' non va mai purgato"
     );
 }
@@ -156,11 +154,11 @@ fn undo_retries_the_purge_after_dpkg_configure_all() {
 
     let ops = ops_of(&log);
     assert!(
-        ops.contains(&Op::DpkgConfigureAll),
+        ops.contains(&Op::PkgDeepRepair),
         "se il fix-broken fallisce si tenta dpkg --configure -a: {ops:?}"
     );
     assert_eq!(
-        ops.iter().filter(|o| matches!(o, Op::AptPurge(_))).count(),
+        ops.iter().filter(|o| matches!(o, Op::PkgRemove(_))).count(),
         2,
         "il purge va ritentato dopo il recovery: {ops:?}"
     );
@@ -233,11 +231,11 @@ fn bootstrap_does_not_purge_on_normal_undo() {
 
     let ops = ops_of(&log);
     assert!(
-        ops.iter().any(|op| matches!(op, Op::AptInstall(_))),
+        ops.iter().any(|op| matches!(op, Op::PkgInstall(_))),
         "il run deve installare"
     );
     assert!(
-        !ops.iter().any(|op| matches!(op, Op::AptPurge(_))),
+        !ops.iter().any(|op| matches!(op, Op::PkgRemove(_))),
         "undo normale non deve purgare le utility bootstrap, trovato: {ops:?}"
     );
 }
@@ -255,12 +253,12 @@ fn bootstrap_purges_only_with_aggressive_rollback() {
 
     let ops = ops_of(&log);
     assert!(
-        ops.iter().any(|op| matches!(op, Op::AptPurge(_))),
+        ops.iter().any(|op| matches!(op, Op::PkgRemove(_))),
         "con --aggressive-rollback il bootstrap deve purgare il delta"
     );
     // Nemmeno in modalità aggressiva: l'autoremove globale è fuori dal delta.
     assert!(
-        !ops.contains(&Op::AptAutoremove),
+        !ops.contains(&Op::PkgRemoveOrphans),
         "nessun autoremove globale nemmeno con --aggressive-rollback, trovato: {ops:?}"
     );
 }
@@ -319,7 +317,7 @@ fn the_preferred_name_wins_when_available() {
 
     step.run(&c).expect("run");
     assert!(
-        ops_of(&log).contains(&Op::AptInstall(strings(&["libtiff5-dev"]))),
+        ops_of(&log).contains(&Op::PkgInstall(strings(&["libtiff5-dev"]))),
         "apt deve ricevere il nome preferito: {:?}",
         ops_of(&log)
     );
@@ -343,7 +341,7 @@ fn the_fallback_is_used_when_the_preferred_name_does_not_exist() {
 
     step.run(&c).expect("run");
     assert!(
-        ops_of(&log).contains(&Op::AptInstall(strings(&["libtiff-dev"]))),
+        ops_of(&log).contains(&Op::PkgInstall(strings(&["libtiff-dev"]))),
         "apt deve ricevere il fallback, mai il nome inesistente: {:?}",
         ops_of(&log)
     );
@@ -351,7 +349,7 @@ fn the_fallback_is_used_when_the_preferred_name_does_not_exist() {
     // E il rollback purga il nome davvero installato.
     step.undo(&c).expect("undo");
     assert!(
-        ops_of(&log).contains(&Op::AptPurge(strings(&["libtiff-dev"]))),
+        ops_of(&log).contains(&Op::PkgRemove(strings(&["libtiff-dev"]))),
         "il delta persistito è in nomi risolti: {:?}",
         ops_of(&log)
     );
@@ -382,7 +380,7 @@ fn an_already_installed_alternative_wins_over_the_preferred_one() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
     assert!(
-        !ops_of(&log).iter().any(|o| matches!(o, Op::AptPurge(_))),
+        !ops_of(&log).iter().any(|o| matches!(o, Op::PkgRemove(_))),
         "niente da purgare: non abbiamo installato nulla. Trovato: {:?}",
         ops_of(&log)
     );
@@ -544,7 +542,7 @@ fn the_index_update_lives_in_run_never_in_snapshot() {
 
     step.snapshot(&c).expect("snapshot");
     assert!(
-        !ops_of(&log).contains(&Op::AptUpdate),
+        !ops_of(&log).contains(&Op::PkgRefreshIndex),
         "lo snapshot deve restare NON mutante: nessun apt-get update. Trovato: {:?}",
         ops_of(&log)
     );
@@ -553,11 +551,11 @@ fn the_index_update_lives_in_run_never_in_snapshot() {
     let ops = ops_of(&log);
     let update = ops
         .iter()
-        .position(|o| matches!(o, Op::AptUpdate))
+        .position(|o| matches!(o, Op::PkgRefreshIndex))
         .expect("il run del bootstrap deve aggiornare l'indice");
     let install = ops
         .iter()
-        .position(|o| matches!(o, Op::AptInstall(_)))
+        .position(|o| matches!(o, Op::PkgInstall(_)))
         .expect("e poi installare");
     assert!(
         update < install,
@@ -576,7 +574,7 @@ fn only_bootstrap_updates_the_index() {
     deps.snapshot(&c).expect("snapshot");
     deps.run(&c).expect("run");
     assert!(
-        !ops_of(&log).contains(&Op::AptUpdate),
+        !ops_of(&log).contains(&Op::PkgRefreshIndex),
         "install-system-dependencies non rifà l'update: {:?}",
         ops_of(&log)
     );
@@ -618,7 +616,7 @@ fn a_third_party_repo_that_fails_does_not_block_the_install() {
     step.run(&c)
         .expect("un update parziale non deve fermare l'installazione");
     assert!(
-        ops_of(&log).iter().any(|o| matches!(o, Op::AptInstall(_))),
+        ops_of(&log).iter().any(|o| matches!(o, Op::PkgInstall(_))),
         "e l'install deve avvenire comunque: {:?}",
         ops_of(&log)
     );
@@ -647,7 +645,7 @@ fn an_update_that_leaves_no_index_at_all_is_a_hard_error() {
         "il messaggio deve spiegare cosa manca: {message}"
     );
     assert!(
-        !ops_of(&log).iter().any(|o| matches!(o, Op::AptInstall(_))),
+        !ops_of(&log).iter().any(|o| matches!(o, Op::PkgInstall(_))),
         "e non si installa nulla dopo l'errore: {:?}",
         ops_of(&log)
     );
@@ -677,7 +675,7 @@ fn a_real_name_beats_a_virtual_one_because_only_the_real_one_is_purgeable() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
     assert!(
-        ops_of(&log).contains(&Op::AptPurge(strings(&["libfreetype-dev"]))),
+        ops_of(&log).contains(&Op::PkgRemove(strings(&["libfreetype-dev"]))),
         "e l'undo purga qualcosa che dpkg conosce davvero: {:?}",
         ops_of(&log)
     );
@@ -702,7 +700,7 @@ fn a_virtual_only_group_is_installed_rather_than_refused() {
 
     step.run(&c).expect("run");
     assert!(
-        ops_of(&log).contains(&Op::AptInstall(strings(&["libfreetype6-dev"]))),
+        ops_of(&log).contains(&Op::PkgInstall(strings(&["libfreetype6-dev"]))),
         "apt riceve il nome virtuale, che sa risolvere: {:?}",
         ops_of(&log)
     );
@@ -712,13 +710,16 @@ fn a_virtual_only_group_is_installed_rather_than_refused() {
 fn the_canonical_list_declares_the_real_name_for_the_virtual_one() {
     // Guardia sulla lista: `libfreetype6-dev` da solo, su noble, porterebbe un
     // nome non purgabile nel delta. Serve il nome reale come alternativa.
-    let group = ODOO_DEPENDENCIES
-        .iter()
-        .find(|g| g.contains(&"libfreetype6-dev"))
+    let catalog = AptBackend.catalog();
+    let group = catalog
+        .odoo_specs()
+        .into_iter()
+        .find(|s| s.alternatives().iter().any(|n| n == "libfreetype6-dev"))
         .expect("'libfreetype6-dev' deve restare in lista");
     assert!(
-        group.contains(&"libfreetype-dev"),
-        "il nome reale deve essere fra le alternative, trovato {group:?}"
+        group.alternatives().iter().any(|n| n == "libfreetype-dev"),
+        "il nome reale deve essere fra le alternative, trovato {:?}",
+        group.alternatives()
     );
 }
 
@@ -777,13 +778,31 @@ const INTENTIONALLY_DEMOTED: &[&str] = &[
     "node-less",
 ];
 
-/// Tutti i nomi che compaiono nei gruppi obbligatori (bootstrap + deps).
+/// Tutti i nomi che compaiono nei gruppi **obbligatori** del catalogo Debian
+/// (bootstrap + dipendenze Odoo).
+///
+/// Legge il catalogo del backend invece di una costante: da M1 la lista è ciò
+/// che il gestore risponde, e un test che guardasse ancora una costante
+/// verificherebbe qualcosa che nessuno consuma più.
 fn required_names() -> HashSet<String> {
-    BOOTSTRAP_PACKAGES
-        .iter()
-        .chain(ODOO_DEPENDENCIES.iter())
-        .flat_map(|group| group.iter())
-        .map(|name| name.to_string())
+    let catalog = AptBackend.catalog();
+    catalog
+        .bootstrap_specs()
+        .into_iter()
+        .chain(catalog.odoo_specs())
+        .filter(|spec| spec.is_required())
+        .flat_map(|spec| spec.alternatives().to_vec())
+        .collect()
+}
+
+/// I nomi dei gruppi **opzionali** del catalogo Debian.
+fn optional_names() -> Vec<String> {
+    AptBackend
+        .catalog()
+        .odoo_specs()
+        .into_iter()
+        .filter(|spec| !spec.is_required())
+        .flat_map(|spec| spec.alternatives().to_vec())
         .collect()
 }
 
@@ -793,11 +812,7 @@ fn the_refactor_did_not_lose_a_single_package() {
     // era obbligatorio prima di R6 deve essere ancora raggiungibile in un gruppo
     // obbligatorio, oppure comparire fra i declassamenti espliciti.
     let required = required_names();
-    let optional: HashSet<String> = ODOO_OPTIONAL_DEPENDENCIES
-        .iter()
-        .flat_map(|g| g.iter())
-        .map(|n| n.to_string())
-        .collect();
+    let optional: HashSet<String> = optional_names().into_iter().collect();
 
     let mut lost = Vec::new();
     for pkg in PRE_R6_REQUIRED {
@@ -857,11 +872,7 @@ fn the_python3_core_set_is_complete() {
 fn python3_venv_is_never_optional() {
     // Vincolo esplicito: senza venv non c'è Odoo. Deve essere impossibile
     // declassarlo per sbaglio nella lista degli opzionali.
-    let optional: Vec<&str> = ODOO_OPTIONAL_DEPENDENCIES
-        .iter()
-        .flat_map(|g| g.iter())
-        .copied()
-        .collect();
+    let optional = optional_names();
     assert!(
         !optional.iter().any(|p| p.contains("venv")),
         "nessun pacchetto venv può stare fra gli opzionali: {optional:?}"
@@ -902,7 +913,7 @@ fn python3_venv_reaches_apt_whether_or_not_it_is_already_installed() {
         let installed_line = ops_of(&log)
             .into_iter()
             .find_map(|o| match o {
-                Op::AptInstall(pkgs) => Some(pkgs),
+                Op::PkgInstall(pkgs) => Some(pkgs),
                 _ => None,
             })
             .expect("il run deve invocare apt-get install");
@@ -959,7 +970,7 @@ fn an_optional_group_without_candidates_does_not_stop_the_install() {
 
     step.run(&c).expect("run");
     assert!(
-        ops_of(&log).contains(&Op::AptInstall(strings(&["build-essential"]))),
+        ops_of(&log).contains(&Op::PkgInstall(strings(&["build-essential"]))),
         "il pacchetto disponibile va installato comunque: {:?}",
         ops_of(&log)
     );
@@ -970,16 +981,17 @@ fn the_canonical_list_declares_the_renames_seen_in_the_field() {
     // Guardia sulla lista di produzione: i due nomi che hanno rotto Debian 12 in
     // R5 devono avere un'alternativa. Senza questo test, una futura pulizia
     // della lista potrebbe riportarli a nomi secchi e riaprire A5.1 in silenzio.
-    let groups: Vec<Vec<&str>> = ODOO_DEPENDENCIES.iter().map(|g| g.to_vec()).collect();
+    let specs = AptBackend.catalog().odoo_specs();
     for broken in ["libtiff5-dev", "libjpeg8-dev"] {
-        let group = groups
+        let group = specs
             .iter()
-            .find(|g| g.contains(&broken))
+            .find(|s| s.alternatives().iter().any(|n| n == broken))
             .unwrap_or_else(|| panic!("'{broken}' deve restare in lista"));
         assert!(
-            group.len() > 1,
+            group.alternatives().len() > 1,
             "'{broken}' non esiste su Debian 12: il suo gruppo deve avere un'alternativa, \
-             trovato {group:?}"
+             trovato {:?}",
+            group.alternatives()
         );
     }
 }

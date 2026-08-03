@@ -76,7 +76,8 @@ fn checksum_mismatch_fails_without_installing() {
         "il download avviene"
     );
     assert!(
-        !ops.iter().any(|op| matches!(op, Op::AptInstallDebFile(_))),
+        !ops.iter()
+            .any(|op| matches!(op, Op::PkgInstallLocalFile(_))),
         "con checksum errato NON si deve installare il .deb"
     );
 }
@@ -119,7 +120,8 @@ fn checksum_match_installs() {
             "{codename} deve scaricare il .deb {suffix}, trovato: {ops:?}"
         );
         assert!(
-            ops.iter().any(|op| matches!(op, Op::AptInstallDebFile(_))),
+            ops.iter()
+                .any(|op| matches!(op, Op::PkgInstallLocalFile(_))),
             "checksum valido → installa ({codename})"
         );
         assert_eq!(
@@ -156,7 +158,7 @@ fn install_resolves_dependencies_instead_of_bare_dpkg() {
 
     let ops = ops_of(&log);
     assert!(
-        ops.iter().any(|op| matches!(op, Op::AptInstallDebFile(p)
+        ops.iter().any(|op| matches!(op, Op::PkgInstallLocalFile(p)
             if p.to_string_lossy().ends_with(".deb"))),
         "il .deb va installato con apt, che risolve le dipendenze: {ops:?}"
     );
@@ -227,7 +229,7 @@ fn production_pins_reject_a_deb_that_is_not_the_pinned_one() {
         assert!(
             !ops_of(&log)
                 .iter()
-                .any(|op| matches!(op, Op::AptInstallDebFile(_))),
+                .any(|op| matches!(op, Op::PkgInstallLocalFile(_))),
             "nessuna installazione con checksum non combaciante ({codename})"
         );
     }
@@ -298,7 +300,7 @@ fn missing_checksum_refuses_to_install() {
     assert!(
         !ops_of(&log)
             .iter()
-            .any(|op| matches!(op, Op::AptInstallDebFile(_))),
+            .any(|op| matches!(op, Op::PkgInstallLocalFile(_))),
         "nessuna installazione senza checksum verificabile"
     );
 }
@@ -454,7 +456,7 @@ fn the_downloaded_deb_has_an_unpredictable_path() {
     // installa un altro.
     assert!(
         ops.iter()
-            .any(|op| matches!(op, Op::AptInstallDebFile(p) if *p == dest)),
+            .any(|op| matches!(op, Op::PkgInstallLocalFile(p) if *p == dest)),
         "apt deve installare esattamente il file verificato: {ops:?}"
     );
 }

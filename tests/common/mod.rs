@@ -15,7 +15,7 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use odoo_installer::distro::{Distro, Firewall};
+use odoo_installer::distro::{Distro, Firewall, OsFamily};
 use odoo_installer::error::StepError;
 use odoo_installer::packaging::{Availability, PackageCatalog, PackageManager};
 use odoo_installer::progress::ProgressReporter;
@@ -44,13 +44,13 @@ pub enum Op {
     },
     Mkdir(PathBuf),
     Rmdir(PathBuf),
-    AptUpdate,
-    AptInstall(Vec<String>),
-    AptPurge(Vec<String>),
-    AptAutoremove,
-    AptFixBroken,
-    DpkgConfigureAll,
-    AptInstallDebFile(PathBuf),
+    PkgRefreshIndex,
+    PkgInstall(Vec<String>),
+    PkgRemove(Vec<String>),
+    PkgRemoveOrphans,
+    PkgRepair,
+    PkgDeepRepair,
+    PkgInstallLocalFile(PathBuf),
     Download {
         url: String,
         dest: PathBuf,
@@ -211,6 +211,13 @@ pub struct MockConfig {
     /// parti irraggiungibile (l'indice resta popolato); insieme a
     /// `apt_index_populated: false` modella il fallimento vero, senza rete.
     pub apt_update_fails: bool,
+    /// La famiglia della distribuzione modellata: decide **quale catalogo** il
+    /// gestore di pacchetti risponde.
+    ///
+    /// Serve al test di equivalenza per famiglia: gli step che non passano dai
+    /// due confini devono comportarsi in modo identico su entrambe, e senza
+    /// poter cambiare questo campo non ci sarebbe modo di dimostrarlo.
+    pub family: OsFamily,
 }
 
 impl Default for MockConfig {
@@ -253,6 +260,7 @@ impl Default for MockConfig {
             dpkg_configure_fails: false,
             apt_install_deb_fails: false,
             apt_update_fails: false,
+            family: OsFamily::Debian,
         }
     }
 }
@@ -380,7 +388,7 @@ impl PackageManager for MockPackageManager {
         self.cfg.installed_packages.contains(pkg)
     }
     fn refresh_index(&self) -> Result<(), StepError> {
-        self.record(Op::AptUpdate);
+        self.record(Op::PkgRefreshIndex);
         if self.cfg.apt_update_fails {
             return Err(StepError::CommandFailed {
                 command: "apt-get update".to_string(),
@@ -413,11 +421,11 @@ impl PackageManager for MockPackageManager {
         self.index_populated.get()
     }
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        self.record(Op::AptInstall(pkgs.iter().map(|s| s.to_string()).collect()));
+        self.record(Op::PkgInstall(pkgs.iter().map(|s| s.to_string()).collect()));
         Ok(())
     }
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        self.record(Op::AptPurge(pkgs.iter().map(|s| s.to_string()).collect()));
+        self.record(Op::PkgRemove(pkgs.iter().map(|s| s.to_string()).collect()));
         // Modella A-RT-2: con dpkg rotto apt si rifiuta di operare, finché un
         // fix-broken (o un `dpkg --configure -a`) non lo rimette a posto.
         if self.dpkg_broken.get() {
@@ -426,11 +434,11 @@ impl PackageManager for MockPackageManager {
         Ok(())
     }
     fn remove_orphans(&self) -> Result<(), StepError> {
-        self.record(Op::AptAutoremove);
+        self.record(Op::PkgRemoveOrphans);
         Ok(())
     }
     fn try_repair(&self) -> Result<(), StepError> {
-        self.record(Op::AptFixBroken);
+        self.record(Op::PkgRepair);
         if self.cfg.fix_broken_fails {
             return Err(unmet_dependencies("apt-get install -f"));
         }
@@ -438,7 +446,7 @@ impl PackageManager for MockPackageManager {
         Ok(())
     }
     fn try_deep_repair(&self) -> Result<(), StepError> {
-        self.record(Op::DpkgConfigureAll);
+        self.record(Op::PkgDeepRepair);
         if self.cfg.dpkg_configure_fails {
             return Err(unmet_dependencies("dpkg --configure -a"));
         }
@@ -446,7 +454,7 @@ impl PackageManager for MockPackageManager {
         Ok(())
     }
     fn install_local_file(&self, path: &Path) -> Result<(), StepError> {
-        self.record(Op::AptInstallDebFile(path.to_path_buf()));
+        self.record(Op::PkgInstallLocalFile(path.to_path_buf()));
         if self.cfg.apt_install_deb_fails {
             return Err(StepError::CommandFailed {
                 command: "apt-get install -y -- <deb>".to_string(),
@@ -459,9 +467,13 @@ impl PackageManager for MockPackageManager {
         Ok(())
     }
     fn catalog(&self) -> PackageCatalog {
-        // Il catalogo di produzione della famiglia Debian: i test sugli step
-        // devono vedere gli stessi nomi che vedrebbe un'installazione vera.
-        odoo_installer::packaging::apt::AptBackend.catalog()
+        // Il catalogo di **produzione** della famiglia modellata: i test sugli
+        // step devono vedere gli stessi nomi che vedrebbe un'installazione vera.
+        // Un catalogo finto qui renderebbe verdi test che in campo fallirebbero.
+        match self.cfg.family {
+            OsFamily::Debian => odoo_installer::packaging::apt::AptBackend.catalog(),
+            OsFamily::Fedora => odoo_installer::packaging::dnf::DnfBackend.catalog(),
+        }
     }
 }
 

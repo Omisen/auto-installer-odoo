@@ -86,14 +86,11 @@ fn check_os_rejects_old_and_unsupported() {
         Err(CheckError::UnsupportedVersion { .. })
     ));
 
-    // Fedora è una famiglia **conosciuta ma non ancora supportata**: il rifiuto
-    // c'è, ma con un errore diverso da «non supportato». Dire «non ancora» a chi
-    // ha una Fedora e «non supportato» a chi ha una Arch sono due informazioni
-    // diverse, e la seconda manderebbe a cercare una soluzione che non esiste.
+    // Fedora è supportata da M2, ma con la sua soglia: la 39 è sotto.
     let fedora = write_os_release(dir.path(), "ID=fedora\nVERSION_ID=\"39\"\n");
     assert!(matches!(
         check_os_from(&fedora),
-        Err(CheckError::NotYetSupportedOs { .. })
+        Err(CheckError::UnsupportedVersion { .. })
     ));
 
     // Una distribuzione di cui non conosciamo nemmeno la famiglia resta
@@ -237,9 +234,9 @@ fn a_newer_release_is_still_accepted() {
     }
 }
 
-/// Una distribuzione che non trattiamo è già rifiutata da `validate_os`: darle
-/// una soglia superiore sarebbe un ramo che non può eseguire.
+/// Una distribuzione che non trattiamo è già rifiutata da `OsFamily::from_os_id`:
+/// darle una soglia superiore sarebbe un ramo che non può eseguire.
 #[test]
 fn an_unsupported_distribution_has_no_upper_threshold() {
-    assert!(!is_newer_than_tested("fedora", "99"));
+    assert!(!is_newer_than_tested("arch", "99"));
 }

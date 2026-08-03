@@ -14,7 +14,10 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use odoo_installer::checks::{check_os_from, os_id_from, validate_os, CheckError, OsInfo};
+use odoo_installer::checks::{
+    check_os_from, is_newer_than_tested, nginx_support, os_id_from, required_commands, validate_os,
+    CheckError, OsInfo,
+};
 use odoo_installer::context::Context;
 use odoo_installer::distro::{family_mismatch, OsFamily};
 use odoo_installer::state::{
@@ -104,29 +107,86 @@ fn a_supported_os_carries_its_family() {
     );
 }
 
-/// Fedora è **riconosciuta** ma rifiutata, e le due cose vanno dette insieme.
+/// Fedora è **accettata**, con la sua soglia di versione.
 ///
-/// Accettarla prima che esistano backend dnf, lista pacchetti e init del cluster
-/// produrrebbe un'installazione che si ferma a metà: cioè lo stato intermedio
-/// sporco che questo progetto esiste per non lasciare.
+/// In M0 questo stesso caso era un rifiuto: la famiglia era riconosciuta ma non
+/// c'era ancora un backend dnf, e accettarla avrebbe prodotto un'installazione
+/// che si ferma a metà. Con M2 il backend esiste, quindi la risposta cambia — ed
+/// è un cambiamento **voluto**, non una regressione: è il senso della fase.
 #[test]
-fn fedora_is_recognised_but_refused_with_its_own_message() {
-    let info = OsInfo {
+fn fedora_is_accepted_from_its_minimum_version() {
+    let fedora = |version: &str| OsInfo {
         id: "fedora".to_string(),
-        version: "41".to_string(),
+        version: version.to_string(),
         codename: None,
         family: OsFamily::Fedora,
     };
 
-    let err = validate_os(&info).expect_err("Fedora non è ancora supportata");
+    assert!(validate_os(&fedora("40")).is_ok(), "40 è la soglia minima");
+    assert!(validate_os(&fedora("41")).is_ok());
+
+    let err = validate_os(&fedora("39")).expect_err("sotto la soglia si rifiuta");
     assert!(
-        matches!(err, CheckError::NotYetSupportedOs { .. }),
-        "atteso NotYetSupportedOs, trovato {err:?}"
+        matches!(err, CheckError::UnsupportedVersion { .. }),
+        "atteso UnsupportedVersion, trovato {err:?}"
     );
+}
+
+/// La soglia è aperta verso l'alto **anche** su Fedora — un rifiuto senza prova
+/// blocca il caso buono (A5.1-bis) — ma «accettiamo» non vuol dire «tacciamo».
+///
+/// Finché la CI Fedora non esiste, `NEWEST_TESTED_FEDORA` vale «nessuna release
+/// provata» e l'avviso scatta **sempre**. È la verità, ed è l'informazione che
+/// serve a chi installa quando qualcosa non torna.
+#[test]
+fn every_fedora_is_flagged_as_untested_until_the_ci_exists() {
+    assert!(
+        is_newer_than_tested("fedora", "40"),
+        "nessuna Fedora è ancora stata provata dalla CI: va detto"
+    );
+    assert!(is_newer_than_tested("fedora", "99"));
+}
+
+/// Una distribuzione di cui non conosciamo nemmeno la famiglia non ha soglia
+/// superiore: darle un avviso sarebbe un ramo che non può eseguire, perché
+/// `OsFamily::from_os_id` l'ha già respinta.
+#[test]
+fn an_unknown_distribution_has_no_upper_threshold() {
+    assert!(!is_newer_than_tested("arch", "99"));
+}
+
+/// I comandi obbligatori seguono la famiglia: chiedere `apt-get` per nome era il
+/// **primo** punto che un'esecuzione su Fedora incontrava, e falliva lì con un
+/// messaggio che parlava di Debian.
+#[test]
+fn the_required_commands_follow_the_family() {
+    assert_eq!(
+        required_commands(OsFamily::Debian),
+        ["apt-get", "systemctl"]
+    );
+    assert_eq!(required_commands(OsFamily::Fedora), ["dnf", "systemctl"]);
+}
+
+/// `--with-nginx` è rifiutato **prima di mutare** su una famiglia i cui percorsi
+/// nginx non sono ancora portati (arrivano in M4).
+///
+/// Senza questo rifiuto il vhost finirebbe in `/etc/nginx/sites-available`, che
+/// su Fedora non esiste e nginx non legge: nessuno step fallirebbe, e
+/// l'installazione dichiarerebbe un reverse proxy che non serve nulla. Un
+/// difetto senza sintomo è la classe peggiore (A-V3-7).
+#[test]
+fn nginx_is_refused_on_a_family_whose_paths_are_not_ported_yet() {
+    assert!(nginx_support(OsFamily::Debian, true).is_ok());
+    assert!(
+        nginx_support(OsFamily::Fedora, false).is_ok(),
+        "senza --with-nginx non c'è nulla da rifiutare"
+    );
+
+    let err = nginx_support(OsFamily::Fedora, true).expect_err("su Fedora nginx non è pronto");
     let msg = err.to_string();
     assert!(
-        msg.contains("non è ancora attivo") || msg.contains("in lavorazione"),
-        "il messaggio deve dire «non ancora», non «non supportato»: {msg}"
+        msg.contains("sites-available") && msg.contains("non legge"),
+        "il messaggio deve dire PERCHÉ, non solo di no: {msg}"
     );
 }
 

@@ -42,24 +42,29 @@ fn names(v: &[&str]) -> Vec<String> {
 
 // --- La scelta del backend: una decisione, in un posto solo ------------------
 
-/// La fabbrica dei backend **può dire di no**, ed è il punto.
+/// Da M2 **entrambe** le famiglie hanno un backend, e nessuna riceve quello
+/// dell'altra.
 ///
-/// Un `match` che desse apt a una famiglia senza backend sarebbe una bugia
-/// silenziosa: `apt-get purge` su una macchina senza apt fallisce, l'undo è
-/// best-effort, e il rollback dichiarerebbe fatto ciò che non ha fatto. Qui i
-/// due rami sono entrambi **veri**: nessuno dei due è un ramo che non può
-/// eseguire.
+/// La verifica non è «esiste una fabbrica» — sarebbe vera anche se tutte e due
+/// restituissero apt — ma che i comandi prodotti siano quelli giusti: è
+/// l'errore che la forma `Option` esiste per rendere impossibile, e che sarebbe
+/// silenzioso (`apt-get` su una macchina senza apt fallisce in modo oscuro, e
+/// nel rollback significherebbe lasciare installato tutto).
 #[test]
-fn the_backend_factory_answers_honestly_for_both_families() {
-    assert!(
-        backend_factory(OsFamily::Debian).is_some(),
-        "la famiglia Debian ha apt: dev'esserci una fabbrica"
+fn each_family_gets_its_own_backend() {
+    let debian = backend_factory(OsFamily::Debian).expect("la famiglia Debian ha apt")();
+    let fedora = backend_factory(OsFamily::Fedora).expect("la famiglia Fedora ha dnf")();
+
+    assert_eq!(
+        debian.packages().catalog().postgres_marker,
+        "postgresql",
+        "su Debian il marker del server è il pacchetto `postgresql`"
     );
-    assert!(
-        backend_factory(OsFamily::Fedora).is_none(),
-        "finché il backend dnf non esiste, la risposta onesta è «non ce l'ho»: \
-         dare apt a Fedora significherebbe eseguire comandi che quella macchina \
-         non ha, e dichiarare rimosso ciò che è rimasto installato"
+    assert_eq!(
+        fedora.packages().catalog().postgres_marker,
+        "postgresql-server",
+        "su Fedora `postgresql` è il solo CLIENT: prenderlo come marker farebbe \
+         credere che il server ci sia già, quindi Preexisting, quindi nessun undo"
     );
 }
 
@@ -77,12 +82,15 @@ fn the_package_lists_come_from_the_backend_catalog() {
     let catalog = odoo_installer::system_ops::SystemOps::packages(&ops).catalog();
 
     assert!(
-        catalog.bootstrap.iter().any(|s| s.preferred() == "git"),
+        catalog
+            .bootstrap_specs()
+            .iter()
+            .any(|s| s.preferred() == "git"),
         "il bootstrap della famiglia Debian contiene git"
     );
     assert!(
         catalog
-            .odoo
+            .odoo_specs()
             .iter()
             .any(|s| s.preferred() == "build-essential"),
         "le dipendenze Odoo della famiglia Debian contengono build-essential"
@@ -221,7 +229,7 @@ fn the_install_command_does_not_repeat_a_package() {
     let installs: Vec<Vec<String>> = ops_of(&log)
         .into_iter()
         .filter_map(|op| match op {
-            Op::AptInstall(pkgs) => Some(pkgs),
+            Op::PkgInstall(pkgs) => Some(pkgs),
             _ => None,
         })
         .collect();
@@ -263,7 +271,7 @@ fn an_empty_delta_asks_the_manager_for_nothing() {
     assert!(
         !ops_of(&log)
             .iter()
-            .any(|op| matches!(op, Op::AptPurge(_) | Op::AptFixBroken)),
+            .any(|op| matches!(op, Op::PkgRemove(_) | Op::PkgRepair)),
         "nessun pacchetto nel delta: il gestore non va nemmeno invocato"
     );
 }
@@ -348,7 +356,7 @@ fn the_undo_still_removes_only_what_we_added() {
     let purged: Vec<Vec<String>> = ops_of(&log)
         .into_iter()
         .filter_map(|op| match op {
-            Op::AptPurge(pkgs) => Some(pkgs),
+            Op::PkgRemove(pkgs) => Some(pkgs),
             _ => None,
         })
         .collect();
