@@ -36,9 +36,9 @@ check() {
 # `step` quotato (Debug) e `pacchetti` NON quotato (Display), fino a fine riga.
 {
   printf '\033[2m2026-08-02T17:19:36Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::progress\033[0m\033[2m:\033[0m ✔ prepare-opt-root\n'
-  printf '\033[2m2026-08-02T17:19:37Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta apt: pacchetti aggiunti da noi \033[3mstep\033[0m\033[2m=\033[0m"bootstrap-prerequisites" \033[3mpacchetti\033[0m\033[2m=\033[0mgit curl\n'
-  printf '\033[2m2026-08-02T17:19:38Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta apt: pacchetti aggiunti da noi \033[3mstep\033[0m\033[2m=\033[0m"install-system-dependencies" \033[3mpacchetti\033[0m\033[2m=\033[0mbuild-essential libzip-dev node-less\n'
-  printf '\033[2m2026-08-02T17:19:38Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta apt: pacchetti già presenti, mai toccati \033[3mstep\033[0m\033[2m=\033[0m"install-system-dependencies" \033[3mpacchetti\033[0m\033[2m=\033[0mlibpq-dev zlib1g-dev\n'
+  printf '\033[2m2026-08-02T17:19:37Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta pacchetti: pacchetti aggiunti da noi \033[3mstep\033[0m\033[2m=\033[0m"bootstrap-prerequisites" \033[3mpacchetti\033[0m\033[2m=\033[0mgit curl\n'
+  printf '\033[2m2026-08-02T17:19:38Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta pacchetti: pacchetti aggiunti da noi \033[3mstep\033[0m\033[2m=\033[0m"install-system-dependencies" \033[3mpacchetti\033[0m\033[2m=\033[0mbuild-essential libzip-dev node-less\n'
+  printf '\033[2m2026-08-02T17:19:38Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta pacchetti: pacchetti già presenti, mai toccati \033[3mstep\033[0m\033[2m=\033[0m"install-system-dependencies" \033[3mpacchetti\033[0m\033[2m=\033[0mlibpq-dev zlib1g-dev\n'
   printf '\033[2m2026-08-02T17:19:39Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::progress\033[0m\033[2m:\033[0m ✔ install-system-dependencies\n'
 } > "$WORK/raw.out"
 

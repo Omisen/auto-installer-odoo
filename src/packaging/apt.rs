@@ -263,6 +263,10 @@ impl PackageManager for AptBackend {
         run_apt(&["install", "-y", "--", &rendered])
     }
 
+    fn refresh_command(&self) -> &'static str {
+        "apt-get update"
+    }
+
     fn catalog(&self) -> PackageCatalog {
         PackageCatalog {
             bootstrap: bootstrap_catalog(),

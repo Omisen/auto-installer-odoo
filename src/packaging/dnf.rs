@@ -15,8 +15,17 @@
 //! `unavailable_packages_error` riporta **tutti** i gruppi irrisolvibili in un
 //! solo messaggio. Il ciclo è «dry-run → correggi → ripeti», di minuti.
 //!
-//! Ogni voce del catalogo marcata `// DA VERIFICARE` è un nome che non è stato
-//! confermato su una Fedora vera.
+//! # Stato della taratura
+//!
+//! **Verificata su Fedora 41 (dnf5 5.2.17)**, con `--dry-run`: tutti i 31 gruppi
+//! si risolvono. Tre nomi si sono rivelati **virtuali** e sono stati corretti con
+//! il nome reale come alternativa preferita — `wget`, `zlib-devel`,
+//! `openjpeg2-devel`. È la stessa cura di `libfreetype6-dev` su Ubuntu 24.04
+//! (A5.1-bis): un nome virtuale è installabile ma non rimovibile, e un delta che
+//! lo contiene mente al rollback.
+//!
+//! Restano da provare su una macchina vera l'**installazione** e il **rollback**:
+//! il dry-run risolve i nomi, non li installa.
 
 use std::path::Path;
 
@@ -29,7 +38,11 @@ fn bootstrap_catalog() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry::new(DepId::Git, &["git"]),
         CatalogEntry::new(DepId::Curl, &["curl"]),
-        CatalogEntry::new(DepId::Wget, &["wget"]),
+        // `wget` su Fedora 41 **non è un pacchetto**: è un `Provides` di
+        // `wget1-wget` (il wget classico) e `wget2-wget`. Verificato in campo.
+        // Il nome reale va per primo — vedi la nota su `DepId::Wget` in
+        // `odoo_catalog`.
+        CatalogEntry::new(DepId::Wget, &["wget1-wget", "wget2-wget", "wget"]),
         // `gettext-base` di Debian è la parte runtime (`envsubst`); su Fedora
         // sta nel pacchetto unico `gettext`.
         CatalogEntry::new(DepId::Gettext, &["gettext"]),
@@ -44,7 +57,20 @@ fn odoo_catalog() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry::new(DepId::Git, &["git"]),
         CatalogEntry::new(DepId::Curl, &["curl"]),
-        CatalogEntry::new(DepId::Wget, &["wget"]),
+        // # Perché tre alternative e non un nome solo (verificato in campo)
+        //
+        // Su Fedora 41 `wget` è un nome **puramente virtuale**: `rpm -q wget`
+        // non lo conosce, e `dnf remove wget` uscirebbe 0 rimuovendo zero
+        // pacchetti. Un delta che lo contiene mente, e il rollback dichiarerebbe
+        // rimosso ciò che è rimasto: è A5.1-bis, la stessa forma che su Ubuntu
+        // 24.04 ha prodotto `libfreetype6-dev`.
+        //
+        // `wget1-wget` (il wget classico 1.x) va per primo perché è quello le cui
+        // opzioni `-q -O` sono quelle che `RealDownloader` usa da sempre;
+        // `wget2-wget` è il ripiego se il primo non c'è. Il nome virtuale resta
+        // in coda come rete: se un domani Fedora rinominasse ancora, la
+        // risoluzione lo troverebbe comunque — con il warning che dice perché.
+        CatalogEntry::new(DepId::Wget, &["wget1-wget", "wget2-wget", "wget"]),
         CatalogEntry::new(DepId::PythonPip, &["python3-pip"]),
         CatalogEntry::new(DepId::PythonDev, &["python3-devel"]),
         // Su Fedora **non esiste** un `python3-venv`: il modulo `venv` è nella
@@ -78,13 +104,17 @@ fn odoo_catalog() -> Vec<CatalogEntry> {
         // Stesso pacchetto di `Jpeg`: la deduplica di A-MD-1 lo assorbe, e su
         // questa famiglia il duplicato è la norma, non un caso di bordo.
         CatalogEntry::new(DepId::Jpeg8, &["libjpeg-turbo-devel"]),
-        // Cade anche il `1g` del soname.
-        CatalogEntry::new(DepId::Zlib, &["zlib-devel"]),
+        // Cade il `1g` del soname — ma non basta: su Fedora 41 `zlib-devel` è a
+        // sua volta **virtuale**, perché la distribuzione è migrata a `zlib-ng`
+        // e il pacchetto reale è `zlib-ng-compat-devel` (verificato in campo).
+        CatalogEntry::new(DepId::Zlib, &["zlib-ng-compat-devel", "zlib-devel"]),
         CatalogEntry::new(DepId::PostgresClient, &["libpq-devel"]),
         // Cade anche l'`1`.
         CatalogEntry::new(DepId::Xslt, &["libxslt-devel"]),
         CatalogEntry::new(DepId::Tiff, &["libtiff-devel"]),
-        CatalogEntry::new(DepId::OpenJpeg, &["openjpeg2-devel"]),
+        // Il `2` nel nome è storia: il pacchetto reale è `openjpeg-devel`, che
+        // fornisce `openjpeg2-devel` per compatibilità (verificato in campo).
+        CatalogEntry::new(DepId::OpenJpeg, &["openjpeg-devel", "openjpeg2-devel"]),
         CatalogEntry::new(DepId::Lcms2, &["lcms2-devel"]),
         CatalogEntry::new(DepId::Webp, &["libwebp-devel"]),
         CatalogEntry::new(DepId::Harfbuzz, &["harfbuzz-devel"]),
@@ -345,6 +375,10 @@ impl PackageManager for DnfBackend {
     fn install_local_file(&self, path: &Path) -> Result<(), StepError> {
         let rendered = path.to_string_lossy();
         run_dnf(&["install", "-y", &rendered])
+    }
+
+    fn refresh_command(&self) -> &'static str {
+        "dnf makecache"
     }
 
     fn catalog(&self) -> PackageCatalog {

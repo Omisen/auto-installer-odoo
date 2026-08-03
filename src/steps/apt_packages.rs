@@ -80,7 +80,11 @@ enum ResolvedPackage {
 /// assenza, e dire "questo pacchetto non esiste su questa release" sarebbe una
 /// diagnosi inventata: è il falso positivo A5.1-bis, che in campo ha mandato a
 /// cercare la rinomina di un pacchetto che stava benissimo al suo posto.
-fn unavailable_packages_error(unavailable: &[PackageSpec], index_populated: bool) -> StepError {
+fn unavailable_packages_error(
+    unavailable: &[PackageSpec],
+    index_populated: bool,
+    refresh_command: &str,
+) -> StepError {
     let groups: Vec<String> = unavailable
         .iter()
         .map(|spec| format!("[{}]", spec.alternatives().join(" | ")))
@@ -88,10 +92,13 @@ fn unavailable_packages_error(unavailable: &[PackageSpec], index_populated: bool
     let cause = if index_populated {
         "I nomi elencati non esistono su questa release: aggiungi il nome corretto come \
          alternativa nel catalogo della famiglia (A5.1)"
+            .to_string()
     } else {
-        "L'indice apt non è interrogabile (liste vuote o illeggibili), quindi NON è detto che i \
-         pacchetti manchino davvero: esegui 'apt-get update' e riprova. Se l'update non produce \
-         un indice valido, il problema è la rete o sources.list"
+        format!(
+            "L'indice dei pacchetti non è interrogabile, quindi NON è detto che i pacchetti \
+             manchino davvero: esegui '{refresh_command}' e riprova. Se l'aggiornamento non \
+             produce un indice valido, il problema è la rete o i repository configurati"
+        )
     };
     StepError::Precondition(format!(
         "nessun pacchetto installabile per {} {}. {cause}",
@@ -284,26 +291,30 @@ impl AptPackagesStep {
     /// potrebbero decidere nulla.
     fn refresh_apt_index(&self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!(step = self.name, "run (dry-run): apt-get update");
+            info!(
+                step = self.name,
+                "run (dry-run): aggiornerei l'indice dei pacchetti"
+            );
             return Ok(());
         }
         let Err(e) = self.ops.packages().refresh_index() else {
-            info!(step = self.name, "run: indice apt aggiornato");
+            info!(step = self.name, "run: indice dei pacchetti aggiornato");
             return Ok(());
         };
         if self.ops.packages().index_is_queryable() {
             warn!(
                 step = self.name,
                 error = %e,
-                "run: apt-get update ha segnalato errori (repository irraggiungibile?), \
-                 ma l'indice apt è popolato: proseguo"
+                "run: l'aggiornamento dell'indice ha segnalato errori (repository \
+                 irraggiungibile?), ma l'indice resta interrogabile: proseguo"
             );
             return Ok(());
         }
         Err(StepError::Precondition(format!(
-            "apt-get update è fallito e l'indice apt resta vuoto: senza indice non è possibile \
-             stabilire quali pacchetti siano installabili. Verifica rete e sources.list. \
-             Errore originale: {e}"
+            "l'aggiornamento dell'indice ({}) è fallito e l'indice resta vuoto: senza indice \
+             non è possibile stabilire quali pacchetti siano installabili. Verifica rete e \
+             repository configurati. Errore originale: {e}",
+            self.ops.packages().refresh_command()
         )))
     }
 
@@ -404,15 +415,20 @@ impl Step for AptPackagesStep {
         if !unavailable.is_empty() {
             let index_populated = self.ops.packages().index_is_queryable();
             if index_populated || !self.refresh_index {
-                return Err(unavailable_packages_error(&unavailable, index_populated));
+                return Err(unavailable_packages_error(
+                    &unavailable,
+                    index_populated,
+                    self.ops.packages().refresh_command(),
+                ));
             }
             for spec in unavailable.drain(..) {
                 if spec.is_required() {
                     warn!(
                         step = self.name,
                         gruppo = ?spec.alternatives(),
-                        "snapshot: indice apt non interrogabile, non posso verificare questo gruppo. \
-                         Uso il nome preferito e lascio decidere ad apt nel run (dopo apt-get update)"
+                        "snapshot: indice dei pacchetti non interrogabile, non posso verificare \
+                         questo gruppo. Uso il nome preferito e lascio decidere al gestore nel run \
+                         (dopo l'aggiornamento dell'indice)"
                     );
                     let preferred = spec.preferred().to_string();
                     resolved.push(preferred.clone());
@@ -424,7 +440,8 @@ impl Step for AptPackagesStep {
                     warn!(
                         step = self.name,
                         gruppo = ?spec.alternatives(),
-                        "snapshot: indice apt non interrogabile e gruppo OPZIONALE, proseguo senza"
+                        "snapshot: indice dei pacchetti non interrogabile e gruppo OPZIONALE, \
+                         proseguo senza"
                     );
                 }
             }
@@ -452,7 +469,7 @@ impl Step for AptPackagesStep {
             already = already_installed.len(),
             delta = delta.len(),
             risolti = resolved.len(),
-            "snapshot delta apt"
+            "snapshot delta pacchetti"
         );
         // I NOMI, non solo il conteggio: il log è il **diario** dell'esecuzione,
         // il manifesto è lo **stato**. Sono due cose diverse, e confonderle è
@@ -463,12 +480,12 @@ impl Step for AptPackagesStep {
         info!(
             step = self.name,
             pacchetti = %delta.join(" "),
-            "delta apt: pacchetti aggiunti da noi"
+            "delta pacchetti: pacchetti aggiunti da noi"
         );
         info!(
             step = self.name,
             pacchetti = %already_installed.join(" "),
-            "delta apt: pacchetti già presenti, mai toccati"
+            "delta pacchetti: pacchetti già presenti, mai toccati"
         );
         self.resolved = resolved;
         self.snap = AptDeltaSnapshot {
@@ -498,7 +515,7 @@ impl Step for AptPackagesStep {
         if ctx.dry_run {
             info!(
                 step = self.name,
-                "run (dry-run): apt-get install dell'intera lista (installa solo i mancanti)"
+                "run (dry-run): installerei l'intera lista (il gestore aggiunge solo i mancanti)"
             );
             return Ok(());
         }

@@ -54,6 +54,6 @@ journal_steps() {
 # esce 1 quando non trova nulla, e sotto `set -o pipefail` farebbe abortire lo
 # script chiamante. Il `|| true` è quindi parte del contratto, non pigrizia.
 journal_packages() {
-  sed -n "s/.*delta apt: $2 step=\"$3\" pacchetti=//p" "$1" \
+  sed -n "s/.*delta pacchetti: $2 step=\"$3\" pacchetti=//p" "$1" \
     | tr ' ' '\n' | grep -v '^$' | sort -u || true
 }

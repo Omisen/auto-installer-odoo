@@ -236,6 +236,10 @@ impl PackageManager for ModelPackages {
         s.wk_version = Some("0.12.6.1".to_string());
         Ok(())
     }
+    fn refresh_command(&self) -> &'static str {
+        odoo_installer::packaging::apt::AptBackend.refresh_command()
+    }
+
     fn catalog(&self) -> PackageCatalog {
         odoo_installer::packaging::apt::AptBackend.catalog()
     }

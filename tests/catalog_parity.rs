@@ -191,8 +191,11 @@ fn the_fedora_names_are_not_the_debian_ones() {
         "openldap-devel",      // libldap2-dev
         "cyrus-sasl-devel",    // libsasl2-dev
         "libjpeg-turbo-devel", // libjpeg-dev
-        "zlib-devel",          // zlib1g-dev: cade il soname
         "libxslt-devel",       // libxslt1-dev: cade l'1
+        // zlib1g-dev non diventa `zlib-devel`: Fedora 41 è migrata a zlib-ng, e
+        // `zlib-devel` è solo un `Provides`. Due passaggi, non uno — e il
+        // secondo lo si scopre solo su una macchina vera.
+        "zlib-ng-compat-devel",
     ] {
         assert!(
             fedora.iter().any(|n| n == atteso),
@@ -303,4 +306,63 @@ fn firewalld_does_not_find_port_80_inside_port_8080() {
     assert!(port_in_list("8080/tcp 80/tcp 53/udp", "80/tcp"));
     assert!(port_in_list("80/tcp", "80/tcp"));
     assert!(!port_in_list("", "80/tcp"));
+}
+
+/// Il suggerimento diagnostico nomina il comando **della famiglia**.
+///
+/// «Esegui `apt-get update`» detto a chi sta su Fedora è peggio di nessun
+/// suggerimento: manda a provare un comando che non esiste e fa dubitare del
+/// resto della diagnosi — proprio nel momento in cui l'installazione si è
+/// fermata e l'utente sta cercando di capire perché.
+#[test]
+fn the_refresh_hint_names_the_right_command() {
+    assert_eq!(AptBackend.refresh_command(), "apt-get update");
+    assert_eq!(DnfBackend.refresh_command(), "dnf makecache");
+}
+
+/// **I tre nomi virtuali trovati in campo su Fedora 41.**
+///
+/// `wget`, `zlib-devel` e `openjpeg2-devel` non sono pacchetti su quella
+/// release: sono `Provides` di altri. Un nome virtuale è installabile ma
+/// `rpm -q` non lo riconosce, quindi `dnf remove` uscirebbe 0 rimuovendo zero
+/// pacchetti: il delta lo elencherebbe, il report direbbe «rimosso», e il
+/// pacchetto resterebbe installato. Residuo **invisibile** — la cosa peggiore,
+/// ed è esattamente A5.1-bis nella sua versione rpm.
+///
+/// Il test congela il nome **reale** in ciascun gruppo. Senza, una futura
+/// "pulizia" della lista potrebbe ridurli al nome canonico e riaprire il difetto
+/// in silenzio: l'installazione continuerebbe a funzionare, e solo il rollback
+/// mentirebbe.
+#[test]
+fn the_fedora_list_declares_the_real_name_for_each_virtual_one() {
+    let specs = DnfBackend.catalog();
+    let gruppo = |virtuale: &str| -> Vec<String> {
+        specs
+            .bootstrap_specs()
+            .into_iter()
+            .chain(specs.odoo_specs())
+            .find(|s| s.alternatives().iter().any(|n| n == virtuale))
+            .unwrap_or_else(|| panic!("'{virtuale}' deve restare in lista"))
+            .alternatives()
+            .to_vec()
+    };
+
+    for (virtuale, reale) in [
+        ("wget", "wget1-wget"),
+        ("zlib-devel", "zlib-ng-compat-devel"),
+        ("openjpeg2-devel", "openjpeg-devel"),
+    ] {
+        let alternative = gruppo(virtuale);
+        assert!(
+            alternative.iter().any(|n| n == reale),
+            "'{virtuale}' è virtuale su Fedora 41: il gruppo deve offrire il nome \
+             reale '{reale}', trovato {alternative:?}"
+        );
+        assert_eq!(
+            alternative.first().map(String::as_str),
+            Some(reale),
+            "il nome reale va per PRIMO: è quello che compare nei messaggi \
+             diagnostici, e quello che vogliamo nel delta"
+        );
+    }
 }

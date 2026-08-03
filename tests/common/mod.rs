@@ -466,6 +466,16 @@ impl PackageManager for MockPackageManager {
         self.dpkg_broken.set(false);
         Ok(())
     }
+    /// Il comando della famiglia modellata, come in produzione: un mock che
+    /// rispondesse sempre "apt-get update" renderebbe verde un messaggio che in
+    /// campo manderebbe l'utente Fedora a digitare un comando inesistente.
+    fn refresh_command(&self) -> &'static str {
+        match self.cfg.family {
+            OsFamily::Debian => odoo_installer::packaging::apt::AptBackend.refresh_command(),
+            OsFamily::Fedora => odoo_installer::packaging::dnf::DnfBackend.refresh_command(),
+        }
+    }
+
     fn catalog(&self) -> PackageCatalog {
         // Il catalogo di **produzione** della famiglia modellata: i test sugli
         // step devono vedere gli stessi nomi che vedrebbe un'installazione vera.

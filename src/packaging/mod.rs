@@ -441,6 +441,14 @@ pub trait PackageManager {
     /// nei repository.
     fn install_local_file(&self, path: &Path) -> Result<(), StepError>;
 
+    /// Il comando che l'utente digiterebbe per aggiornare l'indice, **come
+    /// testo**, da mettere nei messaggi diagnostici.
+    ///
+    /// Serve a non scrivere «esegui `apt-get update`» a chi sta su Fedora. Un
+    /// suggerimento sbagliato è peggio di nessun suggerimento: manda a provare
+    /// un comando che non esiste e fa dubitare del resto della diagnosi.
+    fn refresh_command(&self) -> &'static str;
+
     /// I nomi di pacchetto che questa famiglia conosce.
     fn catalog(&self) -> PackageCatalog;
 }
