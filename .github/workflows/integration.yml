@@ -304,9 +304,17 @@ jobs:
           # systemd: senza, /usr/sbin/init non esiste e il container non parte.
           # Gli altri sono prerequisiti del TEST, non dell'installer: sudo (che
           # l'installer esige), git (clone dei sorgenti), jq (le asserzioni
-          # leggono il manifesto), procps-ng (ss/ps per i preflight sulle porte).
+          # leggono il manifesto), procps-ng (`ps`).
+          #
+          # `iproute` porta `ss`, e non è un dettaglio: senza, il preflight
+          # sulle porte scrive «ss/netstat/lsof assenti: assumo libera» e
+          # **non può fallire**. È la firma ricorrente di questo progetto
+          # comparsa nell'ambiente di test invece che nel codice: il rifiuto
+          # della seconda installazione (A-R9-1) sta proprio nell'ORDINE fra il
+          # controllo sulle porte e la lettura del manifesto, e con `ss` assente
+          # quel test non distingue l'ordine corretto da quello rotto.
           RUN dnf -y install --setopt=install_weak_deps=False \
-                systemd sudo git jq procps-ng authselect \
+                systemd sudo git jq procps-ng iproute authselect \
            && dnf clean all
           # Unit che in un container non hanno senso e fallirebbero, portando
           # systemd a `degraded` per rumore invece che per una ragione vera.

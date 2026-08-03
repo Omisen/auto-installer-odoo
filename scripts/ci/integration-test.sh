@@ -69,6 +69,13 @@ WORK="$(mktemp -d)"
 # Le asserzioni NON si fermano alla prima: un solo giro di CI (che dura decine
 # di minuti) deve dire *tutto* ciò che non va, non solo il primo sintomo.
 FAILURES=0
+# Non basta CONTARLE. Le asserzioni vivono dentro `::group::`, che GitHub
+# mostra collassati: chi legge il riepilogo vede «4 verifiche non superate» e
+# deve andare a cercare QUALI, aprendo i gruppi uno per uno. È la lezione di
+# A-R9-1 applicata a questo script — `exit != 0` non dice perché, e nemmeno un
+# numero lo dice. I messaggi si accumulano e si ristampano alla fine, FUORI dai
+# gruppi.
+FAILED_CHECKS=()
 
 # --- utilità -----------------------------------------------------------------
 
@@ -76,7 +83,7 @@ group()  { echo "::group::$*"; }
 endgroup() { echo "::endgroup::"; }
 info()   { echo "  ·  $*"; }
 ok()     { echo "  ✔  $*"; }
-fail()   { echo "  ✖  $*"; FAILURES=$((FAILURES + 1)); }
+fail()   { echo "  ✖  $*"; FAILURES=$((FAILURES + 1)); FAILED_CHECKS+=("$*"); }
 
 # Legge il file di stato (0600 root) via sudo.
 state_json() { sudo cat "$STATE" 2>/dev/null || echo '{}'; }
@@ -712,6 +719,13 @@ if [ "$FAILURES" -eq 0 ]; then
   exit 0
 fi
 echo "=== INTEGRAZIONE FALLITA ($MODE): $FAILURES verifiche non superate ==="
+echo "Verifiche fallite:"
+for check in "${FAILED_CHECKS[@]}"; do
+  echo "  ✖  $check"
+  # `::error::` diventa un'annotazione in cima all'esecuzione: visibile senza
+  # aprire nulla, che è il punto.
+  echo "::error::$check"
+done
 echo "Log dell'installer:"
 sudo tail -n 100 /var/log/odoo-installer.log 2>/dev/null || echo "(nessun log)"
 exit 1
