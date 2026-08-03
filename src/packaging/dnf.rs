@@ -128,7 +128,6 @@ pub fn install_args(pkgs: &[&str]) -> Vec<String> {
         // `Recommends` e il delta cresce di pacchetti che nessuno ha chiesto —
         // e che l'undo poi rimuoverebbe.
         "--setopt=install_weak_deps=False".to_string(),
-        "--".to_string(),
     ];
     args.extend(pkgs.iter().map(|p| p.to_string()));
     args
@@ -144,7 +143,6 @@ pub fn remove_args(pkgs: &[&str]) -> Vec<String> {
         "remove".to_string(),
         "-y".to_string(),
         "--setopt=clean_requirements_on_remove=False".to_string(),
-        "--".to_string(),
     ];
     args.extend(pkgs.iter().map(|p| p.to_string()));
     args
@@ -158,12 +156,26 @@ pub struct DnfBackend;
 ///
 /// Non serve l'equivalente di `DEBIAN_FRONTEND`: dnf non fa domande con `-y`, e
 /// non esiste un `needrestart` da mettere a tacere.
+///
+/// # Niente `--` prima dei nomi, e va dichiarato
+///
+/// Su apt il separatore `--` è **metà** della doppia difesa contro
+/// l'argument injection (R1): l'altra metà è il validatore che pretende un primo
+/// carattere alfanumerico. **dnf5 non lo accetta**: `dnf install -- <pkg>`
+/// risponde `Unknown argument "--"` ed esce 2 — verificato su Fedora 41,
+/// dnf5 5.2.17.
+///
+/// Su questa famiglia resta quindi una difesa sola. La superficie reale è nulla —
+/// i nomi arrivano dal catalogo, che è fatto di costanti nel sorgente, non da
+/// input dell'utente — ma un vincolo esterno che indebolisce una difesa va
+/// scritto, non lasciato scoprire a chi legge il codice fra un anno.
 fn run_dnf(args: &[&str]) -> Result<(), StepError> {
     run_command("dnf", args)
 }
 
 impl PackageManager for DnfBackend {
     fn is_installed(&self, pkg: &str) -> bool {
+        // `rpm` accetta `--`, a differenza di dnf5: qui la doppia difesa regge.
         std::process::Command::new("rpm")
             .args(["-q", "--", pkg])
             .output()
@@ -196,41 +208,53 @@ impl PackageManager for DnfBackend {
             .unwrap_or(false)
     }
 
-    /// Due domande, come su apt, ma con comandi diversi.
+    /// Due domande, come su apt, ma poste a `dnf repoquery` — il comando pensato
+    /// per lo scripting.
     ///
-    /// 1. `dnf list --available --installed <pkg>` risponde solo se **quel
-    ///    nome** è un pacchetto vero: è l'equivalente del candidato reale, cioè
-    ///    di un nome che dopo l'installazione `rpm -q` saprà riconoscere.
-    /// 2. se no, resta da distinguere «non esiste» da «lo fornisce qualcun
-    ///    altro»: `dnf install --assumeno` fa girare il risolutore senza
-    ///    installare, ed esce 1 con «Nothing to do» per un nome ignoto ma
-    ///    risolve un `Provides`.
+    /// 1. **`repoquery --qf '%{name}'`**: esiste un pacchetto con *questo nome
+    ///    esatto*? È l'equivalente del candidato reale, cioè di un nome che dopo
+    ///    l'installazione `rpm -q` saprà riconoscere — e che quindi l'undo saprà
+    ///    rimuovere.
+    /// 2. **`repoquery --whatprovides`**: se no, qualcuno lo *fornisce*? Su
+    ///    Fedora 41 `wget` è esattamente questo: non è un pacchetto, è fornito da
+    ///    `wget1-wget` e `wget2-wget`.
+    ///
+    /// # Perché non i comandi ovvi (verificato in campo, Fedora 41 / dnf5 5.2.17)
+    ///
+    /// Il primo tentativo usava `dnf list` e `dnf install --assumeno`, e **nessuno
+    /// dei due funzionava**:
+    ///
+    /// - `dnf list --quiet -- <pkg>` esce 2 con `Unknown argument "--"`: dnf5 non
+    ///   accetta il separatore;
+    /// - `dnf install --assumeno <pkg>` esce **2 anche quando il pacchetto
+    ///   esiste**, perché l'operazione è stata annullata — che è precisamente ciò
+    ///   che gli si era chiesto di fare.
+    ///
+    /// Il secondo è la firma ricorrente di questo progetto nella sua forma
+    /// speculare: non un controllo che non può fallire, ma uno **che non può
+    /// riuscire**. L'effetto era che ogni pacchetto non già installato risultava
+    /// assente, e il primo dry-run su Fedora si è fermato elencando ventiquattro
+    /// nomi che esistevano tutti.
+    ///
+    /// `repoquery` non ha il problema: risponde con l'elenco — vuoto se nulla
+    /// corrisponde — ed esce **0** in entrambi i casi. Alla domanda si risponde
+    /// leggendo l'output, non l'exit code. È la stessa lezione di R9-hotfix:
+    /// *`exit != 0` non dice PERCHÉ*.
     ///
     /// La politica che ne discende — reale batte virtuale — è la stessa di apt e
     /// vive in `AptPackagesStep::resolve`: qui c'è solo il meccanismo.
     fn availability(&self, pkg: &str) -> Availability {
-        let real = capture_command("dnf", &["list", "--quiet", "--", pkg])
-            .map(|out| {
-                out.lines().any(|line| {
-                    line.split_whitespace()
-                        .next()
-                        .is_some_and(|first| first == pkg || first.starts_with(&format!("{pkg}.")))
-                })
-            })
+        let real = capture_command("dnf", &["repoquery", "--quiet", "--qf", "%{name}\n", pkg])
+            .map(|out| out.lines().any(|line| line.trim() == pkg))
             .unwrap_or(false);
 
         // La via lenta si percorre **solo** se serve, come su apt.
-        let resolver_accepts = !real
-            && run_dnf(&[
-                "install",
-                "--assumeno",
-                "--setopt=install_weak_deps=False",
-                "--",
-                pkg,
-            ])
-            .is_ok();
+        let provided_by_others = !real
+            && capture_command("dnf", &["repoquery", "--quiet", "--whatprovides", pkg])
+                .map(|out| out.lines().any(|line| !line.trim().is_empty()))
+                .unwrap_or(false);
 
-        availability_from(real, resolver_accepts)
+        availability_from(real, provided_by_others)
     }
 
     /// `dnf install -y`, **senza dipendenze deboli**.
@@ -259,6 +283,20 @@ impl PackageManager for DnfBackend {
     /// Il flag si passa **sempre**, anche se il default un giorno cambiasse: un
     /// comportamento su cui poggia una promessa non si lascia decidere a un file
     /// di configurazione che non controlliamo.
+    ///
+    /// # Cosa il flag NON impedisce (verificato in campo)
+    ///
+    /// Le **reverse dependencies**. `dnf remove git` su Fedora 41 annuncia anche
+    /// `Removing dependent packages: perl-Git`, e non è il flag a governarlo: è
+    /// obbligatorio, perché rpm non può lasciare installato un pacchetto la cui
+    /// dipendenza sparisce. `apt-get purge` fa lo stesso, quindi **non è una
+    /// divergenza fra famiglie** — ma è un limite della promessa chirurgica che
+    /// vale per entrambe e che va detto: rimuovere un pacchetto del nostro delta
+    /// può portarsi via un pacchetto **del cliente** che dipendeva da lui.
+    ///
+    /// Non c'è modo di evitarlo restando dentro il gestore, e uscirne
+    /// (`rpm -e --nodeps`) lascerebbe il sistema in uno stato che il gestore non
+    /// sa più riparare — molto peggio del residuo che si vorrebbe evitare.
     ///
     /// # Cosa resta, dichiarato
     ///
@@ -306,7 +344,7 @@ impl PackageManager for DnfBackend {
     /// dipendenze, come `apt-get install <file.deb>` sul lato Debian.
     fn install_local_file(&self, path: &Path) -> Result<(), StepError> {
         let rendered = path.to_string_lossy();
-        run_dnf(&["install", "-y", "--", &rendered])
+        run_dnf(&["install", "-y", &rendered])
     }
 
     fn catalog(&self) -> PackageCatalog {

@@ -226,10 +226,6 @@ fn dnf_remove_never_touches_orphaned_dependencies() {
         "senza questo flag il rollback su Fedora rimuove più di quanto ha messo: {args:?}"
     );
     assert_eq!(args.first().map(String::as_str), Some("remove"));
-    assert!(
-        args.iter().any(|a| a == "--"),
-        "il separatore protegge dai nomi che iniziano con '-' (stessa rete di R1)"
-    );
     assert!(args.iter().any(|a| a == "pippo") && args.iter().any(|a| a == "pluto"));
 }
 
@@ -252,6 +248,34 @@ fn neither_family_installs_weak_dependencies() {
         apt.iter().any(|a| a == "--no-install-recommends"),
         "apt: {apt:?}"
     );
+}
+
+/// **Verificato in campo (Fedora 41, dnf5 5.2.17):** dnf5 non accetta il
+/// separatore `--`, che su apt è metà della doppia difesa contro l'argument
+/// injection (R1).
+///
+/// `dnf install -- <pkg>` risponde `Unknown argument "--"` ed esce 2: metterlo
+/// non irrobustisce niente, **rompe il comando**. Su questa famiglia resta quindi
+/// il solo validatore, e la superficie reale è nulla — i nomi arrivano dal
+/// catalogo, che è fatto di costanti nel sorgente.
+///
+/// Il test esiste perché la tentazione di «riallineare le due famiglie»
+/// riaggiungendo il separatore è concreta, e il sintomo sarebbe
+/// un'installazione che fallisce al primo pacchetto.
+#[test]
+fn dnf_does_not_use_the_argument_separator() {
+    for args in [
+        odoo_installer::packaging::dnf::install_args(&["pippo"]),
+        odoo_installer::packaging::dnf::remove_args(&["pippo"]),
+    ] {
+        assert!(
+            !args.iter().any(|a| a == "--"),
+            "dnf5 rifiuta `--`: metterlo rompe il comando invece di proteggerlo ({args:?})"
+        );
+    }
+
+    // Su rpm invece il separatore è accettato, e lì la doppia difesa regge.
+    // (`is_installed` usa `rpm -q -- <pkg>`.)
 }
 
 /// Le due famiglie usano verbi diversi, e va bene: ciò che deve coincidere è la
