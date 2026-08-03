@@ -342,6 +342,35 @@ jobs:
                 'password required   pam_deny.so' \
                 'session  required   pam_unix.so' \
                 > /etc/pam.d/system-auth
+          # 1-bis) Anche con `system-auth` risolto, `pam_unix` in account
+          #    management continua a rispondere «cannot retrieve authentication
+          #    info»: legge `/etc/shadow` e in questo container non ci riesce.
+          #
+          #    Qui si smette di inseguire la causa e si cambia la domanda.
+          #    **`sudo` è infrastruttura del test, non il suo oggetto**: serve a
+          #    lanciare l'installer come una persona lo lancerebbe, e la sua
+          #    catena PAM non è ciò che stiamo verificando. In un'immagine
+          #    container non è configurabile in modo affidabile — tre tentativi
+          #    lo hanno mostrato — quindi la si sostituisce con una permissiva.
+          #
+          #    **Cosa si perde, dichiarato**: questo job non prova più che `sudo`
+          #    funzioni su una Fedora vera. Quella prova esiste altrove ed è più
+          #    forte — l'installazione manuale su VM Fedora 41, dove `sudo` è
+          #    quello della distribuzione. Il container copre ciò che la VM non
+          #    può dare: la ripetibilità a ogni push.
+          #
+          #    Il container è usa-e-getta, privilegiato e senza rete esposta:
+          #    una catena PAM permissiva qui non apre nulla che non fosse già
+          #    aperto da `--privileged`.
+          RUN printf '%s\n' \
+                '#%PAM-1.0' \
+                '# Sostituita nel container di CI: vedi il commento nel workflow.' \
+                'auth       sufficient   pam_permit.so' \
+                'account    sufficient   pam_permit.so' \
+                'session    optional     pam_keyinit.so revoke' \
+                'session    required     pam_limits.so' \
+                'session    sufficient   pam_permit.so' \
+                > /etc/pam.d/sudo
           # 2) `pam_faillock` vuole la propria directory di stato, che
           #    `systemd-tmpfiles` creerebbe ma non prima che PAM ne abbia bisogno.
           RUN mkdir -p /run/faillock /var/run/faillock
@@ -421,6 +450,9 @@ jobs:
             readlink -f /etc/pam.d/system-auth 2>&1
             cat /etc/pam.d/system-auth 2>&1 | head -20
             echo "--- faillock ---"; ls -ld /run/faillock 2>&1
+            echo "--- sudo setuid? (se manca, pam_unix non puo\x27 leggere shadow) ---"
+            ls -l /usr/bin/sudo 2>&1
+            echo "--- nsswitch shadow/passwd ---"; grep -E "^(passwd|shadow):" /etc/nsswitch.conf 2>&1
             echo "--- sudo verbose ---"; su tester -c "sudo -n true" 2>&1 | tail -20
           ' || true
           exit 1
