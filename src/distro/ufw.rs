@@ -9,6 +9,10 @@ use crate::system_ops::{capture_command, run_command};
 pub struct Ufw;
 
 impl Firewall for Ufw {
+    fn name(&self) -> &'static str {
+        "ufw"
+    }
+
     fn available(&self) -> bool {
         std::process::Command::new("ufw")
             .arg("--version")

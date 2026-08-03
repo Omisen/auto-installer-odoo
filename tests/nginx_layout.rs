@@ -249,3 +249,186 @@ fn the_vhost_content_does_not_depend_on_the_family() {
          sarebbe per una ragione da scrivere, non per inerzia"
     );
 }
+
+// --- M4b: SELinux, aggiunto perché il campo l'ha chiesto --------------------
+
+use odoo_installer::steps::nginx_selinux::NginxSelinux;
+
+/// **Il difetto osservato in campo.** Su Fedora, con il vhost corretto,
+/// `nginx -t` valido e il reload riuscito, il browser riceve **502**: SELinux
+/// nega a nginx la connessione verso `127.0.0.1:8069`.
+///
+/// ```text
+/// avc: denied { name_connect } for comm="nginx" dest=8069
+///      scontext=httpd_t tcontext=unreserved_port_t permissive=0
+/// ```
+///
+/// Nei log dell'installer non compare nulla di anomalo: è un difetto senza
+/// sintomo fino al primo utente che apre il browser.
+#[test]
+fn on_fedora_the_proxy_boolean_is_turned_on() {
+    let (ops, log) = MockSystemOps::new(cfg(OsFamily::Fedora));
+    let mut step = NginxSelinux::with_ops(Box::new(ops));
+    let c = ctx(OsFamily::Fedora);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    assert!(
+        ops_of(&log).iter().any(
+            |op| matches!(op, Op::SetSelinuxBoolean { boolean, value: true }
+            if boolean == "httpd_can_network_connect")
+        ),
+        "senza questo boolean il proxy risponde 502: {:?}",
+        ops_of(&log)
+    );
+    assert_eq!(
+        serde_json::from_value::<PreState>(step.snapshot_value()).expect("prestate"),
+        PreState::CreatedByUs
+    );
+}
+
+/// Su Debian non si tocca nulla: SELinux non è in uso, e mutare la politica di
+/// sicurezza di un sistema che non ce l'ha sarebbe assurdo.
+#[test]
+fn on_debian_selinux_is_left_alone() {
+    let (ops, log) = MockSystemOps::new(cfg(OsFamily::Debian));
+    let mut step = NginxSelinux::with_ops(Box::new(ops));
+    let c = ctx(OsFamily::Debian);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::SetSelinuxBoolean { .. })),
+        "questa famiglia non ha SELinux: niente da accendere e niente da spegnere"
+    );
+}
+
+/// **La protezione.** Un boolean **già acceso** non è nostro: su una macchina
+/// che ospita altri servizi web lo è quasi sempre, e spegnerlo al rollback
+/// romperebbe il proxy di qualcun altro.
+#[test]
+fn a_boolean_that_was_already_on_is_never_turned_off() {
+    let (ops, log) = MockSystemOps::new(MockConfig {
+        selinux_boolean: Some(true),
+        ..cfg(OsFamily::Fedora)
+    });
+    let mut step = NginxSelinux::with_ops(Box::new(ops));
+    let c = ctx(OsFamily::Fedora);
+
+    step.snapshot(&c).expect("snapshot");
+    assert_eq!(
+        serde_json::from_value::<PreState>(step.snapshot_value()).expect("prestate"),
+        PreState::Preexisting,
+        "era acceso prima di noi"
+    );
+
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::SetSelinuxBoolean { .. })),
+        "né acceso né spento: non è nostro da toccare"
+    );
+}
+
+/// L'undo spegne **solo** ciò che abbiamo acceso noi.
+#[test]
+fn what_we_turned_on_we_turn_off() {
+    let (ops, log) = MockSystemOps::new(cfg(OsFamily::Fedora));
+    let mut step = NginxSelinux::with_ops(Box::new(ops));
+    let c = ctx(OsFamily::Fedora);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    assert!(
+        ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::SetSelinuxBoolean { value: false, .. })),
+        "il boolean acceso da noi va rimesso com'era: è una politica di sicurezza \
+         persistente, non un'impostazione di sessione"
+    );
+}
+
+/// **Non interrogabile ≠ spento.** Se `getsebool` non risponde — SELinux
+/// disabilitato, `policycoreutils` assente — non si tocca la politica.
+///
+/// È la stessa distinzione fra cecità e assenza di A5.1-bis: agire su un
+/// «non lo so» significa scrivere sul sistema di qualcun altro sulla base di
+/// un'informazione che non abbiamo.
+#[test]
+fn an_unreadable_policy_is_not_a_policy_to_write() {
+    let (ops, log) = MockSystemOps::new(MockConfig {
+        selinux_boolean: None,
+        ..cfg(OsFamily::Fedora)
+    });
+    let mut step = NginxSelinux::with_ops(Box::new(ops));
+    let c = ctx(OsFamily::Fedora);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::SetSelinuxBoolean { .. })),
+        "SELinux non interrogabile: nel dubbio non si muta la politica"
+    );
+}
+
+/// **Il buco che la validazione per mutazione ha trovato**, per la seconda volta
+/// nello stesso modo.
+///
+/// I test sopra passano dal mock, che ha una *sua* `nginx_proxy_boolean`: la
+/// costante vera di `FedoraSelinux` non era esercitata da niente, e la mutazione
+/// «usa `httpd_can_network_relay`» sopravviveva a tutta la suite. In campo
+/// l'effetto sarebbe stato accendere il boolean **sbagliato** — `relay` governa
+/// il proxy verso host *remoti*, non il `name_connect` locale che il log di
+/// `ausearch` mostra — quindi 502 identico, con in più una politica di sicurezza
+/// modificata per niente.
+///
+/// È la stessa lezione di M3 (`postgres_data_dir`): quando il mock replica una
+/// decisione della produzione, la decisione va provata **anche dov'è scritta**.
+#[test]
+fn the_boolean_is_the_one_the_kernel_actually_denies() {
+    use odoo_installer::distro::{debian::Debian, fedora::Fedora, Distro};
+
+    let selinux = Fedora::new()
+        .selinux()
+        .expect("su Fedora SELinux è in uso")
+        .nginx_proxy_boolean()
+        .to_string();
+    assert_eq!(
+        selinux, "httpd_can_network_connect",
+        "è il boolean che governa `name_connect` verso una porta locale, che è \
+         esattamente ciò che ausearch mostra negato. `httpd_can_network_relay` \
+         riguarda il proxy verso host remoti e non sbloccherebbe nulla"
+    );
+
+    assert!(
+        Debian::new().selinux().is_none(),
+        "su questa famiglia SELinux non è in uso: il trait non è implementato, \
+         così non resta nessun ramo che non possa eseguire"
+    );
+}
+
+/// Il messaggio del firewall nomina lo strumento **della famiglia**.
+///
+/// «ufw non trovato» detto su Fedora — osservato in campo — manda a cercare uno
+/// strumento che lì non esiste. Stessa classe di «esegui `apt-get update`» detto
+/// a chi ha dnf.
+#[test]
+fn the_firewall_is_called_by_its_real_name() {
+    use odoo_installer::distro::{debian::Debian, fedora::Fedora, Distro};
+
+    assert_eq!(Debian::new().firewall().name(), "ufw");
+    assert_eq!(Fedora::new().firewall().name(), "firewalld");
+}

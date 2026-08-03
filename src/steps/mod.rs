@@ -245,6 +245,10 @@ pub fn build_steps(make_ops: OpsFactory<'_>) -> Vec<Box<dyn Step>> {
         Box::new(nginx_install::NginxInstall::with_ops(make_ops())),
         Box::new(nginx_write_config::NginxWriteConfig::with_ops(make_ops())),
         Box::new(nginx_enable_site::NginxEnableSite::with_ops(make_ops())),
+        // SELinux prima del reload: senza il boolean, nginx viene ricaricato
+        // correttamente e poi **risponde 502**, perché la politica gli nega la
+        // connessione verso Odoo. No-op dove SELinux non è in uso.
+        Box::new(nginx_selinux::NginxSelinux::with_ops(make_ops())),
         Box::new(nginx_firewall::NginxFirewall::with_ops(make_ops())),
         Box::new(nginx_reload::NginxReload::with_ops(make_ops())),
         // Comando helper `odoo` + patch PATH nel .bashrc dell'utente.
@@ -312,6 +316,7 @@ pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step
             Box::new(nginx_write_config::NginxWriteConfig::with_ops(make_ops()))
         }
         "nginx-enable-site" => Box::new(nginx_enable_site::NginxEnableSite::with_ops(make_ops())),
+        "nginx-selinux" => Box::new(nginx_selinux::NginxSelinux::with_ops(make_ops())),
         "nginx-firewall" => Box::new(nginx_firewall::NginxFirewall::with_ops(make_ops())),
         "nginx-reload" => Box::new(nginx_reload::NginxReload::with_ops(make_ops())),
         "write-control-script" => Box::new(write_control_script::WriteControlScript::with_ops(
@@ -349,6 +354,7 @@ pub mod nginx_enable_site;
 pub mod nginx_firewall;
 pub mod nginx_install;
 pub mod nginx_reload;
+pub mod nginx_selinux;
 pub mod nginx_write_config;
 pub mod noop;
 pub mod patch_bashrc;

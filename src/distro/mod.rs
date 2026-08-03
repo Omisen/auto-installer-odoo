@@ -132,6 +132,13 @@ pub trait Distro {
     /// Dove questa famiglia tiene la configurazione di nginx.
     fn nginx_layout(&self) -> NginxLayout;
 
+    /// SELinux, **se** questa famiglia ce l'ha. `None` = non esiste il concetto.
+    ///
+    /// `Option` e non tre metodi che su metà delle famiglie non fanno nulla:
+    /// dove SELinux non c'è, il trait non è nemmeno implementato, e non resta
+    /// nessun ramo che non possa eseguire.
+    fn selinux(&self) -> Option<&dyn Selinux>;
+
     /// Dove vive il cluster PostgreSQL, **se** questa famiglia richiede di
     /// inizializzarlo a mano. `None` = il pacchetto lo crea e lo avvia da sé.
     ///
@@ -172,6 +179,14 @@ pub trait Distro {
 /// che «di solito» fa la cosa giusta è il tipo di scorciatoia da cui è nato
 /// A-V3-7.
 pub trait Firewall {
+    /// Come si chiama questo strumento, per i messaggi.
+    ///
+    /// «ufw non trovato» detto su Fedora è la stessa classe di errore di
+    /// «esegui `apt-get update`» detto a chi ha dnf: manda a cercare uno
+    /// strumento che su quella macchina non esiste, e fa dubitare del resto.
+    /// Osservato in campo.
+    fn name(&self) -> &'static str;
+
     /// Lo strumento è installato?
     fn available(&self) -> bool;
     /// Lo strumento è **attivo**? Se non lo è, non tocchiamo il firewall.
@@ -182,6 +197,45 @@ pub trait Firewall {
     fn allow(&self, rule: &str) -> Result<(), StepError>;
     /// Richiude la regola. Chiamata **solo** sul delta.
     fn delete(&self, rule: &str) -> Result<(), StepError>;
+}
+
+/// SELinux, per la sola cosa che ci riguarda: **lasciar passare il proxy**.
+///
+/// # Perché serve, e come lo si è scoperto
+///
+/// Su Fedora SELinux è in enforcing, e nega a nginx di aprire una connessione
+/// verso un servizio locale su una porta non riservata:
+///
+/// ```text
+/// avc: denied { name_connect } for comm="nginx" dest=8069
+///      scontext=httpd_t tcontext=unreserved_port_t permissive=0
+/// ```
+///
+/// Il vhost è corretto, `nginx -t` passa, il reload riesce — e `curl` risponde
+/// **502**. È un difetto senza sintomo *nei log dell'installer*: tutto va bene
+/// fino al primo utente che apre il browser.
+///
+/// Non è stato aggiunto per prudenza: prima di questa traccia di `ausearch`
+/// scrivere lo step sarebbe stato mitigare un problema mai osservato, e questo
+/// progetto ha una regola contro i rami che nessuno ha visto eseguire.
+///
+/// # È una mutazione, quindi è reversibile
+///
+/// `setsebool -P` scrive la politica **in modo persistente**: sopravvive al
+/// riavvio, quindi è un artefatto di sistema come gli altri e va registrato con
+/// un `PreState`. Se il boolean era già acceso — su una macchina che ospita altri
+/// servizi web lo è spesso — è `Preexisting` e l'undo non lo tocca: spegnerlo
+/// romperebbe il proxy di qualcun altro.
+pub trait Selinux {
+    /// Il boolean che permette a nginx di fare proxy verso un servizio locale.
+    fn nginx_proxy_boolean(&self) -> &'static str;
+
+    /// Il boolean è acceso? `None` se SELinux non è interrogabile — che è
+    /// diverso da «è spento», e porta a non toccare nulla.
+    fn is_enabled(&self, boolean: &str) -> Option<bool>;
+
+    /// Imposta il boolean **in modo persistente** (`setsebool -P`).
+    fn set(&self, boolean: &str, value: bool) -> Result<(), StepError>;
 }
 
 /// La famiglia di distribuzione a cui appartiene il sistema.

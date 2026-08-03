@@ -2,24 +2,62 @@
 
 use std::path::PathBuf;
 
-use super::{firewalld::Firewalld, Distro, Firewall, NginxLayout};
+use super::{firewalld::Firewalld, Distro, Firewall, NginxLayout, Selinux};
 use crate::error::StepError;
-use crate::system_ops::run_command;
+use crate::system_ops::{capture_command, run_command};
 
 /// Il PGDATA di default su Fedora.
 pub const POSTGRES_DATA_DIR: &str = "/var/lib/pgsql/data";
 
-/// Fedora: firewall `firewalld`.
+/// Fedora: firewall `firewalld`, politica SELinux in enforcing.
 #[derive(Debug, Default)]
 pub struct Fedora {
     firewall: Firewalld,
+    selinux: FedoraSelinux,
 }
 
 impl Fedora {
     pub const fn new() -> Self {
         Fedora {
             firewall: Firewalld,
+            selinux: FedoraSelinux,
         }
+    }
+}
+
+/// SELinux su Fedora.
+#[derive(Debug, Default)]
+pub struct FedoraSelinux;
+
+impl Selinux for FedoraSelinux {
+    /// `httpd_can_network_connect`: senza, SELinux nega a nginx di connettersi a
+    /// `127.0.0.1:8069` e il proxy risponde **502** — con `nginx -t` valido e il
+    /// reload riuscito. Verificato in campo con `ausearch`.
+    fn nginx_proxy_boolean(&self) -> &'static str {
+        "httpd_can_network_connect"
+    }
+
+    /// `getsebool <nome>` → `nome --> on|off`.
+    ///
+    /// `None` se il comando non è eseguibile: SELinux disabilitato, o
+    /// `policycoreutils` non installato. **Non è «spento»** — è «non lo so», e
+    /// da lì non si conclude nulla: lo step non tocca la politica di un sistema
+    /// che non sa interrogare.
+    fn is_enabled(&self, boolean: &str) -> Option<bool> {
+        let out = capture_command("getsebool", &[boolean]).ok()?;
+        let stato = out.split("-->").nth(1)?.trim();
+        match stato {
+            "on" => Some(true),
+            "off" => Some(false),
+            _ => None,
+        }
+    }
+
+    /// `setsebool -P`: **persistente**, sopravvive al riavvio. È per questo che
+    /// è un artefatto da registrare e non un comando di contorno.
+    fn set(&self, boolean: &str, value: bool) -> Result<(), StepError> {
+        let valore = if value { "on" } else { "off" };
+        run_command("setsebool", &["-P", boolean, valore])
     }
 }
 
@@ -58,6 +96,10 @@ impl Distro for Fedora {
             default_site_standard_target: None,
             default_site_backup_dir: PathBuf::from("/etc/nginx"),
         }
+    }
+
+    fn selinux(&self) -> Option<&dyn Selinux> {
+        Some(&self.selinux)
     }
 
     /// `/var/lib/pgsql/data`, il PGDATA di default di Fedora.

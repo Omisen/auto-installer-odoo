@@ -256,6 +256,10 @@ pub struct ModelFirewall {
 }
 
 impl Firewall for ModelFirewall {
+    fn name(&self) -> &'static str {
+        "ufw"
+    }
+
     fn available(&self) -> bool {
         self.state.lock().expect("l").ufw_available
     }
@@ -292,6 +296,11 @@ impl Distro for ModelDistro {
 
     /// Il modello rappresenta una macchina Debian: il cluster lo crea il
     /// pacchetto, non noi.
+    /// Il modello rappresenta una macchina Debian: niente SELinux.
+    fn selinux(&self) -> Option<&dyn odoo_installer::distro::Selinux> {
+        None
+    }
+
     fn nginx_layout(&self) -> odoo_installer::distro::NginxLayout {
         odoo_installer::distro::debian::Debian::new().nginx_layout()
     }

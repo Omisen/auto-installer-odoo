@@ -38,6 +38,12 @@ impl Distro for Debian {
         }
     }
 
+    /// `None`: su questa famiglia SELinux non è in uso (AppArmor non richiede
+    /// nulla di equivalente per il proxy verso un servizio locale).
+    fn selinux(&self) -> Option<&dyn super::Selinux> {
+        None
+    }
+
     /// `None`: il postinst del pacchetto `postgresql` chiama `pg_createcluster` e
     /// avvia il servizio. Non c'è nulla da inizializzare, e non c'è nessun
     /// artefatto in più da registrare.

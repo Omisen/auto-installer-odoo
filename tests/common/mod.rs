@@ -69,6 +69,10 @@ pub enum Op {
     RemoveSymlink(PathBuf),
     UfwAllow(String),
     InitPostgresCluster,
+    SetSelinuxBoolean {
+        boolean: String,
+        value: bool,
+    },
     UfwDelete(String),
     ChownToUser {
         path: PathBuf,
@@ -212,6 +216,11 @@ pub struct MockConfig {
     /// parti irraggiungibile (l'indice resta popolato); insieme a
     /// `apt_index_populated: false` modella il fallimento vero, senza rete.
     pub apt_update_fails: bool,
+    /// Stato del boolean SELinux per il proxy nginx.
+    ///
+    /// `None` = SELinux non interrogabile, che **non** è «spento»: da lì lo step
+    /// non conclude nulla e non tocca la politica.
+    pub selinux_boolean: Option<bool>,
     /// Il cluster PostgreSQL è già inizializzato? (`<PGDATA>/PG_VERSION` esiste)
     ///
     /// Campo a sé e non `path_exists`: quello è un bool globale che risponde per
@@ -267,6 +276,7 @@ impl Default for MockConfig {
             dpkg_configure_fails: false,
             apt_install_deb_fails: false,
             apt_update_fails: false,
+            selinux_boolean: Some(false),
             pg_cluster_initialized: false,
             family: OsFamily::Debian,
         }
@@ -329,6 +339,10 @@ impl MockSystemOps {
         };
         let distro = MockDistro {
             firewall: MockFirewall {
+                log: Arc::clone(&log),
+                cfg: cfg.clone(),
+            },
+            selinux: MockSelinux {
                 log: Arc::clone(&log),
                 cfg: cfg.clone(),
             },
@@ -523,6 +537,16 @@ impl MockFirewall {
 }
 
 impl Firewall for MockFirewall {
+    /// Il nome dello strumento **della famiglia modellata**: un mock che
+    /// rispondesse sempre "ufw" renderebbe verde un messaggio che su Fedora
+    /// manda a cercare uno strumento inesistente.
+    fn name(&self) -> &'static str {
+        match self.cfg.family {
+            OsFamily::Debian => "ufw",
+            OsFamily::Fedora => "firewalld",
+        }
+    }
+
     fn available(&self) -> bool {
         self.cfg.ufw_available
     }
@@ -559,6 +583,7 @@ impl Firewall for MockFirewall {
 /// Le convenzioni di distribuzione del mock.
 pub struct MockDistro {
     firewall: MockFirewall,
+    selinux: MockSelinux,
     family: OsFamily,
     log: OpLog,
 }
@@ -571,9 +596,42 @@ impl MockDistro {
     }
 }
 
+/// SELinux del mock: esiste solo sulle famiglie che lo hanno davvero.
+pub struct MockSelinux {
+    log: OpLog,
+    cfg: MockConfig,
+}
+
+impl odoo_installer::distro::Selinux for MockSelinux {
+    fn nginx_proxy_boolean(&self) -> &'static str {
+        "httpd_can_network_connect"
+    }
+    fn is_enabled(&self, _boolean: &str) -> Option<bool> {
+        self.cfg.selinux_boolean
+    }
+    fn set(&self, boolean: &str, value: bool) -> Result<(), StepError> {
+        if let Ok(mut entries) = self.log.lock() {
+            entries.push(Op::SetSelinuxBoolean {
+                boolean: boolean.to_string(),
+                value,
+            });
+        }
+        Ok(())
+    }
+}
+
 impl Distro for MockDistro {
     fn firewall(&self) -> &dyn Firewall {
         &self.firewall
+    }
+
+    /// Segue la famiglia: su Debian SELinux non è in uso, e uno step che lo
+    /// trovasse comunque muterebbe la politica di un sistema che non ce l'ha.
+    fn selinux(&self) -> Option<&dyn odoo_installer::distro::Selinux> {
+        match self.family {
+            OsFamily::Debian => None,
+            OsFamily::Fedora => Some(&self.selinux),
+        }
     }
 
     /// Segue la famiglia modellata, come in produzione: un mock che rispondesse

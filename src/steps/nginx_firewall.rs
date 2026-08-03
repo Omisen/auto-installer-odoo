@@ -45,12 +45,19 @@ impl NginxFirewall {
 
     /// ufw è utilizzabile (installato e attivo)?
     fn ufw_usable(&self) -> bool {
-        if !self.ops.distro().firewall().available() {
-            warn!("ufw non trovato: apertura firewall saltata (apri manualmente 80/443)");
+        let distro = self.ops.distro();
+        let firewall = distro.firewall();
+        // Il nome viene dallo strumento, non da una costante: «ufw non trovato»
+        // detto su Fedora manda a cercare qualcosa che lì non esiste (osservato
+        // in campo). È la stessa classe di «esegui apt-get update» detto a chi
+        // ha dnf.
+        let nome = firewall.name();
+        if !firewall.available() {
+            warn!("{nome} non trovato: apertura firewall saltata (apri manualmente 80/443)");
             return false;
         }
-        if !self.ops.distro().firewall().is_active() {
-            warn!("ufw presente ma non attivo: apertura firewall saltata");
+        if !firewall.is_active() {
+            warn!("{nome} presente ma non attivo: apertura firewall saltata");
             return false;
         }
         true

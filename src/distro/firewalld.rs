@@ -23,6 +23,10 @@ use crate::system_ops::{capture_command, run_command};
 pub struct Firewalld;
 
 impl Firewall for Firewalld {
+    fn name(&self) -> &'static str {
+        "firewalld"
+    }
+
     fn available(&self) -> bool {
         std::process::Command::new("firewall-cmd")
             .arg("--version")
