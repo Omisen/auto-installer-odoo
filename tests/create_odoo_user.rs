@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
 use odoo_installer::context::Context;
+use odoo_installer::error::StepError;
 use odoo_installer::state::PreState;
 use odoo_installer::step::Step;
 use odoo_installer::steps::create_odoo_user::{CreateOdooUser, CreateUserSnapshot};
@@ -225,4 +226,92 @@ fn a_root_owned_home_is_fine_when_we_create_the_user() {
     step.snapshot(&c)
         .expect("con l'utente da creare, una home di root è lo stato normale");
     step.run(&c).expect("run");
+}
+
+// --- A-MD-3: un esito voluto non si comunica come fallimento ----------------
+
+/// **Il difetto, visto a ogni rollback su Fedora.**
+///
+/// ```text
+/// WARN undo: groupdel fallito/orfano, proseguo (best-effort) group=odoo
+///      error=comando `groupdel -- odoo` fallito (exit 6): group 'odoo' does not exist
+/// ```
+///
+/// Su Fedora `userdel` porta via anche il gruppo primario, quindi il `groupdel`
+/// che segue trova il vuoto. L'undo è corretto — il gruppo *non c'è*, che è il
+/// risultato voluto — ma lo comunicava come fallimento: chi leggeva un rollback
+/// riuscito trovava un `WARN` e si chiedeva se qualcosa fosse rimasto indietro.
+///
+/// È la categoria di A-V3-10: cosmetico, e proprio per questo insidioso, perché
+/// compare **sempre** e insegna a ignorare i warning.
+#[test]
+fn a_group_removed_together_with_the_user_is_not_a_failure() {
+    use odoo_installer::steps::create_odoo_user::group_already_gone;
+
+    let gia_rimosso = StepError::CommandFailed {
+        command: "groupdel -- odoo".to_string(),
+        status: "6".to_string(),
+        stderr: "groupdel: group 'odoo' does not exist\n".to_string(),
+    };
+    assert!(
+        group_already_gone(&gia_rimosso),
+        "exit 6 di groupdel significa «il gruppo non esiste», che qui è ciò che volevamo"
+    );
+}
+
+/// Ma un fallimento **vero** resta un fallimento: il gruppo c'è ancora, ed è un
+/// residuo che l'utente deve sapere di avere.
+#[test]
+fn a_real_groupdel_failure_is_still_reported() {
+    use odoo_installer::steps::create_odoo_user::group_already_gone;
+
+    // Il caso concreto: il gruppo è ancora primario per un altro utente.
+    let in_uso = StepError::CommandFailed {
+        command: "groupdel -- odoo".to_string(),
+        status: "8".to_string(),
+        stderr: "groupdel: cannot remove the primary group of user 'altro'\n".to_string(),
+    };
+    assert!(
+        !group_already_gone(&in_uso),
+        "exit 8 è un ostacolo reale: il gruppo resta sul sistema"
+    );
+
+    for status in ["1", "2", "10", "spawn-failed", "signal"] {
+        let altro = StepError::CommandFailed {
+            command: "groupdel -- odoo".to_string(),
+            status: status.to_string(),
+            stderr: String::new(),
+        };
+        assert!(
+            !group_already_gone(&altro),
+            "'{status}' non è «il gruppo non esiste»: nel dubbio si avvisa"
+        );
+    }
+
+    // Un errore che non viene da un comando non è nemmeno classificabile.
+    assert!(!group_already_gone(&StepError::Precondition(
+        "altro".into()
+    )));
+}
+
+/// Il discriminante è l'**exit code**, non il testo.
+///
+/// `groupdel` scrive «group 'odoo' does not exist» nella lingua del sistema: un
+/// controllo sullo stderr fallirebbe su una macchina localizzata — la stessa
+/// trappola di `apt-cache policy` in R6, dove è servito `LC_ALL=C`. Il codice 6
+/// è documentato da shadow-utils e non si traduce.
+#[test]
+fn the_verdict_does_not_depend_on_the_system_language() {
+    use odoo_installer::steps::create_odoo_user::group_already_gone;
+
+    let in_italiano = StepError::CommandFailed {
+        command: "groupdel -- odoo".to_string(),
+        status: "6".to_string(),
+        stderr: "groupdel: il gruppo «odoo» non esiste\n".to_string(),
+    };
+    assert!(
+        group_already_gone(&in_italiano),
+        "il verdetto viene dal codice 6, non dal messaggio: su una macchina \
+         localizzata il testo è un altro e la conclusione dev'essere la stessa"
+    );
 }

@@ -123,6 +123,36 @@ impl CreateOdooUser {
     }
 }
 
+/// L'esito di `groupdel` che l'audit chiama A-MD-3: **il gruppo non c'era già**.
+///
+/// # Perché va distinto da un fallimento
+///
+/// Su Fedora `userdel` rimuove anche il gruppo primario dell'utente; il
+/// `groupdel` che segue esce quindi 6 («specified group doesn't exist»). Su
+/// Debian/Ubuntu il gruppo sopravvive all'utente e il `groupdel` serve davvero:
+/// è una divergenza di comportamento fra le famiglie che nessuno aveva previsto.
+///
+/// L'undo è corretto in entrambi i casi — il gruppo *non c'è*, che è il
+/// risultato voluto — ma finché lo comunicava come `WARN` chi leggeva un
+/// rollback riuscito trovava un avviso e si chiedeva se qualcosa fosse rimasto
+/// indietro. È la categoria di A-V3-10: cosmetico, e proprio per questo
+/// insidioso, perché compare **a ogni rollback** e insegna a ignorare i warning.
+///
+/// # Perché l'exit code e non il messaggio
+///
+/// Perché `groupdel` scrive «group 'odoo' does not exist» **nella lingua del
+/// sistema**, e un controllo sullo stderr fallirebbe su una macchina localizzata
+/// — la stessa trappola di `apt-cache policy` in R6, dove è servito `LC_ALL=C`.
+/// Il codice 6 è documentato da shadow-utils e non si traduce.
+///
+/// Pura: si verifica su un errore costruito a mano, senza avere un gruppo da
+/// rimuovere né i privilegi per farlo.
+pub fn group_already_gone(err: &StepError) -> bool {
+    /// `groupdel`: «specified group doesn't exist» (shadow-utils).
+    const GROUP_NOT_FOUND: &str = "6";
+    matches!(err, StepError::CommandFailed { status, .. } if status == GROUP_NOT_FOUND)
+}
+
 impl Step for CreateOdooUser {
     fn name(&self) -> &str {
         "create-odoo-user"
@@ -214,8 +244,20 @@ impl Step for CreateOdooUser {
         }
 
         // 2) Gruppo dedicato creato da --user-group, se resta orfano.
+        //
+        // Su alcune famiglie `userdel` porta via anche il gruppo primario, e
+        // questo `groupdel` trova il vuoto: è l'esito **voluto**, non un
+        // fallimento, e va detto come tale (A-MD-3).
         if let Err(e) = self.ops.delete_group(user) {
-            warn!(group = %user, error = %e, "undo: groupdel fallito/orfano, proseguo (best-effort)");
+            if group_already_gone(&e) {
+                info!(
+                    group = %user,
+                    "undo: il gruppo non esiste più — l'ha già rimosso `userdel` insieme \
+                     all'utente. È il risultato voluto"
+                );
+            } else {
+                warn!(group = %user, error = %e, "undo: groupdel fallito, proseguo (best-effort)");
+            }
         }
 
         // 3) Ripristina l'owner originale della home se l'avevamo cambiato
