@@ -7,6 +7,7 @@ use odoo_installer::checks::{
     check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user,
     is_newer_than_tested, ports_to_check, validate_os, CheckError, OsInfo,
 };
+use odoo_installer::distro::OsFamily;
 
 fn write_os_release(dir: &Path, body: &str) -> std::path::PathBuf {
     let path = dir.join("os-release");
@@ -85,9 +86,21 @@ fn check_os_rejects_old_and_unsupported() {
         Err(CheckError::UnsupportedVersion { .. })
     ));
 
+    // Fedora è una famiglia **conosciuta ma non ancora supportata**: il rifiuto
+    // c'è, ma con un errore diverso da «non supportato». Dire «non ancora» a chi
+    // ha una Fedora e «non supportato» a chi ha una Arch sono due informazioni
+    // diverse, e la seconda manderebbe a cercare una soluzione che non esiste.
     let fedora = write_os_release(dir.path(), "ID=fedora\nVERSION_ID=\"39\"\n");
     assert!(matches!(
         check_os_from(&fedora),
+        Err(CheckError::NotYetSupportedOs { .. })
+    ));
+
+    // Una distribuzione di cui non conosciamo nemmeno la famiglia resta
+    // `UnsupportedOs`, ed è respinta da `OsFamily::from_os_id` — l'unico gate.
+    let arch = write_os_release(dir.path(), "ID=arch\nVERSION_ID=\"rolling\"\n");
+    assert!(matches!(
+        check_os_from(&arch),
         Err(CheckError::UnsupportedOs { .. })
     ));
 
@@ -213,6 +226,7 @@ fn a_newer_release_is_still_accepted() {
             id: id.to_string(),
             version: version.to_string(),
             codename: None,
+            family: OsFamily::Debian,
         };
         assert!(
             validate_os(&info).is_ok(),

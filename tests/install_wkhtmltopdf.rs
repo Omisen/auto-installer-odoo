@@ -9,6 +9,7 @@ use std::path::Path;
 use common::{ops_of, MockConfig, MockDownloader, MockSystemOps, Op};
 use odoo_installer::checks::OsInfo;
 use odoo_installer::context::Context;
+use odoo_installer::distro::OsFamily;
 use odoo_installer::state::PreState;
 use odoo_installer::step::Step;
 use odoo_installer::steps::install_wkhtmltopdf::{
@@ -23,6 +24,7 @@ fn ctx(codename: &str) -> Context {
             id: "ubuntu".to_string(),
             version: "22.04".to_string(),
             codename: Some(codename.to_string()),
+            family: OsFamily::Debian,
         }),
         ..Default::default()
     }

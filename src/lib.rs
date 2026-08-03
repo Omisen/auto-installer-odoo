@@ -13,6 +13,7 @@ pub mod checks;
 pub mod cli;
 pub mod config;
 pub mod context;
+pub mod distro;
 pub mod engine;
 pub mod error;
 pub mod interrupt;

@@ -657,6 +657,7 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
         id: "ubuntu".to_string(),
         version: "22.04".to_string(),
         codename: Some("jammy".to_string()),
+        family: odoo_installer::distro::OsFamily::Debian,
     });
 
     let mut installer = Installer::new();

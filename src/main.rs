@@ -144,6 +144,10 @@ fn run_install(cli: &Cli) -> Result<()> {
     // più riprendibile — il resume di R8 morirebbe sul suo stesso servizio.
     let port_is_ours = matches!(&start, Start::Resume(state) if state.owns_the_http_port());
     let os_info = run_environment_checks(&ctx, port_is_ours)?;
+    // La famiglia si valorizza qui, una volta sola, e da qui in poi è ciò che
+    // gli step useranno per decidere comandi e convenzioni — e ciò che finirà
+    // nel manifesto per gli `undo` di domani. Mai dedotta step per step.
+    ctx.os_family = os_info.family;
     ctx.os_info = Some(os_info);
 
     // Conferma finale interattiva prima di mutare il sistema.
@@ -569,6 +573,22 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // è comodo.
     if !args.dry_run {
         state::ensure_trustworthy(&state_path).map_err(|e| anyhow!(e))?;
+    }
+
+    // Con quale famiglia stiamo per lavorare, e il sistema è d'accordo?
+    //
+    // La famiglia si LEGGE dal manifesto e si usa quella: è lei a dire con quali
+    // comandi gli artefatti sono stati creati. Il sistema si legge solo per
+    // AVVISARE — mai per decidere — perché un manifesto pre-2.3 ricade sul
+    // default `Debian` e `--state` accetta il manifesto di un'altra macchina.
+    // Loggare la famiglia non è decorativo: un default che nessuno vede è un
+    // default che nessuno può smentire.
+    tracing::info!(famiglia = %config.os_family, "rollback: famiglia letta dal manifesto");
+    let detected = checks::os_id_from(Path::new(checks::OS_RELEASE_PATH))
+        .and_then(|id| odoo_installer::distro::OsFamily::from_os_id(&id));
+    if let Some(avviso) = odoo_installer::distro::family_mismatch(config.os_family, detected) {
+        tracing::warn!("{avviso}");
+        eprintln!("Attenzione: {avviso}");
     }
 
     print_rollback_summary(&state, &state_path, &config, args);

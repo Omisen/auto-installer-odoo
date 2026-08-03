@@ -84,6 +84,7 @@ fn config_with(home: &str, install_dir: &str) -> InstallConfig {
         odoo_logfile: None,
         with_nginx: false,
         sudo_user: None,
+        os_family: odoo_installer::distro::OsFamily::Debian,
     }
 }
 

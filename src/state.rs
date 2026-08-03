@@ -54,6 +54,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 
 use crate::context::Context;
+use crate::distro::OsFamily;
 use crate::error::StepError;
 
 /// Directory del manifesto in produzione. Creata da [`InstallState::save`] e
@@ -230,6 +231,23 @@ pub struct InstallConfig {
     pub with_nginx: bool,
     /// Utente che ha lanciato `sudo`: possiede control-script e `.bashrc`.
     pub sudo_user: Option<String>,
+    /// La famiglia della distribuzione su cui l'installazione è avvenuta.
+    ///
+    /// # Perché è qui e non si rileva al momento del rollback
+    ///
+    /// Perché è **la stessa domanda a cui risponde tutto il resto di questa
+    /// struct**: uno `StepRecord` dice *in che stato* era un artefatto, non quale
+    /// fosse; qui si registra *quale*. La famiglia dice con quali comandi quegli
+    /// artefatti sono stati creati, e quindi con quali vanno rimossi. Rilevarla
+    /// dal sistema al momento del rollback sarebbe una deduzione a posteriori, ed
+    /// è così che in questo progetto sono nati A-V3-1 e A-R8-1.
+    ///
+    /// `serde(default)` per retrocompatibilità: un manifesto scritto prima che
+    /// questo campo esistesse si legge come `Debian`, che è la verità — ogni
+    /// installazione precedente è apt. Stessa cura per cui `config` è `Option`
+    /// dalla R4 e il percorso storico resta leggibile dalla R7.
+    #[serde(default)]
+    pub os_family: OsFamily,
 }
 
 impl InstallConfig {
@@ -247,6 +265,7 @@ impl InstallConfig {
             odoo_logfile: ctx.odoo_logfile.clone(),
             with_nginx: ctx.with_nginx,
             sudo_user: ctx.sudo_user.clone(),
+            os_family: ctx.os_family,
         }
     }
 
@@ -283,6 +302,17 @@ impl InstallConfig {
                 "directory di installazione",
                 self.install_dir.display().to_string(),
             ),
+            // La famiglia non *nomina* un artefatto, ma cambia il **significato**
+            // dei nomi registrati: un delta di trenta pacchetti scritto da apt
+            // non è riprendibile da dnf, e gli undo userebbero comandi che non
+            // reclamano nulla. Un mismatch qui è grave quanto un `--db-name`
+            // diverso, e stando in `identity()` produce il messaggio che dice
+            // **quale** campo non coincide invece di un rifiuto generico.
+            //
+            // Non rompe la retrocompatibilità: su un manifesto pre-2.3 il default
+            // `Debian` coincide con il `Debian` corrente e il confronto passa
+            // come prima.
+            ("famiglia OS", self.os_family.to_string()),
         ]
     }
 
@@ -333,6 +363,20 @@ impl InstallConfig {
     ///
     /// I campi non persistiti restano ai default: le password sono vuote
     /// (nessun undo le usa) e `os_info` è `None` (serve solo a `run`).
+    ///
+    /// # `os_family` va impostata ESPLICITAMENTE, e non è un dettaglio
+    ///
+    /// È l'unico campo con un `Default` che gli `undo` **leggono davvero**.
+    /// Lasciarlo cadere nel `..Default::default()` qui sotto lo farebbe valere
+    /// `Debian` per ogni rollback — anche per un'installazione Fedora — e il
+    /// difetto sarebbe silenzioso: nessun test che non guardi *questo* campo se
+    /// ne accorgerebbe, e in campo si vedrebbe solo un `apt-get` che fallisce su
+    /// una macchina senza apt, con i pacchetti lasciati installati.
+    ///
+    /// È lo stesso difetto di forma che ha prodotto A-V3-1 e A-R8-1 — un dato
+    /// che c'era e non è stato letto — nel punto esatto in cui questo lavoro
+    /// esiste per impedirlo. C'è un test dedicato, ed è scritto per morire se
+    /// questa riga sparisce.
     pub fn to_context(
         &self,
         dry_run: bool,
@@ -351,6 +395,8 @@ impl InstallConfig {
             odoo_logfile: self.odoo_logfile.clone(),
             with_nginx: self.with_nginx,
             sudo_user: self.sudo_user.clone(),
+            // Vedi il doc sopra: esplicita, mai dal `..Default::default()`.
+            os_family: self.os_family,
             dry_run,
             aggressive_rollback,
             state_path,

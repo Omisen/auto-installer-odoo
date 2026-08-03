@@ -15,6 +15,8 @@ use std::process::Command;
 
 use tracing::{info, warn};
 
+use crate::distro::OsFamily;
+
 /// Path di default del file OS release.
 pub const OS_RELEASE_PATH: &str = "/etc/os-release";
 /// Soglia disco di default (GB).
@@ -28,6 +30,15 @@ pub struct OsInfo {
     pub id: String,
     pub version: String,
     pub codename: Option<String>,
+    /// La famiglia a cui `id` appartiene.
+    ///
+    /// **Non è un ripiego mai**: un `id` di cui non conosciamo la famiglia viene
+    /// rifiutato da [`check_os_from`] prima che questa struct esista, quindi
+    /// questo campo non contiene mai un valore «di comodo». Vale la pena
+    /// notarlo, perché il tipo ha un `Default` — che serve alla
+    /// retrocompatibilità del manifesto (vedi [`crate::distro::OsFamily`]) e non
+    /// a riempire buchi qui.
+    pub family: OsFamily,
 }
 
 /// Errore di precondizione (non mutante). I check non hanno `undo`: non mutano.
@@ -50,6 +61,13 @@ pub enum CheckError {
 
     #[error("sistema operativo '{id}' non supportato. Supportati: Ubuntu >= 22.04, Debian >= 11")]
     UnsupportedOs { id: String },
+
+    #[error(
+        "il supporto a {id} è in lavorazione e non è ancora attivo in questa versione \
+         dell'installer: mi fermo senza toccare nulla. Supportati oggi: Ubuntu >= 22.04, \
+         Debian >= 11"
+    )]
+    NotYetSupportedOs { id: String },
 
     #[error("{id} {version} non supportato. Versione minima: Ubuntu 22.04, Debian 11")]
     UnsupportedVersion { id: String, version: String },
@@ -180,13 +198,36 @@ pub fn check_os_from(path: &Path) -> Result<OsInfo, CheckError> {
         })?;
     let codename = os_release_value(&content, "VERSION_CODENAME");
 
+    // La famiglia è il **primo** gate, e l'unico posto in cui si decide se una
+    // distribuzione ci sia nota: se `from_os_id` non la riconosce, non c'è
+    // nessuna famiglia da scrivere in `OsInfo` e non c'è nulla da validare.
+    // Tenere questa decisione in un solo punto evita che la lista delle
+    // distribuzioni note viva in due posti che possono divergere — `validate_os`
+    // si occupa **solo** delle soglie di versione.
+    let family =
+        OsFamily::from_os_id(&id).ok_or_else(|| CheckError::UnsupportedOs { id: id.clone() })?;
+
     let info = OsInfo {
         id,
         version,
         codename,
+        family,
     };
     validate_os(&info)?;
     Ok(info)
+}
+
+/// L'`ID` dichiarato da un file `os-release`, **senza validarlo**.
+///
+/// Esiste separata da [`check_os_from`] perché il rollback deve poter girare
+/// anche su un sistema su cui *rifiuteremmo di installare*: disinstallare
+/// un'istanza non richiede che la macchina sia ancora adatta a ospitarla, e far
+/// passare il rollback da una validazione lo renderebbe impossibile proprio dove
+/// serve. Serve solo a decidere se **avvisare** di una discordanza con il
+/// manifesto (`distro::family_mismatch`), mai a decidere un'azione.
+pub fn os_id_from(path: &Path) -> Option<String> {
+    let content = std::fs::read_to_string(path).ok()?;
+    os_release_value(&content, "ID").map(|s| s.to_ascii_lowercase())
 }
 
 /// L'ultima Ubuntu su cui la CI di integrazione installa davvero.
@@ -210,20 +251,44 @@ pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
     let (tested_major, tested_minor) = match id {
         "ubuntu" => NEWEST_TESTED_UBUNTU,
         "debian" => NEWEST_TESTED_DEBIAN,
-        // Una distribuzione che non riconosciamo è già stata rifiutata da
-        // `validate_os`: qui non ci arriva, e inventarle una soglia sarebbe
-        // un ramo che non può eseguire.
+        // Qui non ci arriva nulla d'altro: un `ID` di famiglia ignota è già
+        // stato rifiutato da `OsFamily::from_os_id`, e Fedora da `validate_os`
+        // (non è ancora supportata). Inventare una soglia per loro sarebbe un
+        // ramo che non può eseguire.
+        //
+        // Quando Fedora verrà accettata servirà una `NEWEST_TESTED_FEDORA` e un
+        // ramo qui: senza, l'avviso «release più recente di quelle provate» si
+        // spegnerebbe in silenzio proprio sulla famiglia meno collaudata. La
+        // costante va legata alla matrice della CI dallo stesso test che già lo
+        // fa per le altre due, o l'avviso mentirebbe in una delle due direzioni.
         _ => return false,
     };
     (major, minor) > (tested_major, tested_minor)
 }
 
 /// Applica le soglie di versione minima: Ubuntu ≥ 22.04, Debian ≥ 11.
+///
+/// **Non** decide se la distribuzione ci sia nota: quello lo ha già fatto
+/// [`OsFamily::from_os_id`] dentro [`check_os_from`], che è l'unico gate. Qui il
+/// `match` sulla famiglia è esaustivo per costruzione, quindi non c'è nessun
+/// ramo «distribuzione sconosciuta» che in produzione non potrebbe mai eseguire.
+///
+/// Il ramo `Fedora` **rifiuta**: il supporto è in lavorazione (backend dnf,
+/// lista pacchetti, init del cluster PostgreSQL) e accettarlo prima che esista
+/// produrrebbe un'installazione che si ferma a metà — cioè esattamente lo stato
+/// intermedio sporco che il progetto esiste per non lasciare. Il messaggio dice
+/// «non ancora», non «non supportato»: sono due informazioni diverse per chi
+/// legge.
 pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
     let (major, minor) = parse_version(&info.version);
-    match info.id.as_str() {
-        "ubuntu" => {
-            if major < 22 || (major == 22 && minor < 4) {
+    match info.family {
+        OsFamily::Debian => {
+            let too_old = if info.id == "ubuntu" {
+                major < 22 || (major == 22 && minor < 4)
+            } else {
+                major < 11
+            };
+            if too_old {
                 return Err(CheckError::UnsupportedVersion {
                     id: info.id.clone(),
                     version: info.version.clone(),
@@ -231,16 +296,7 @@ pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
             }
             Ok(())
         }
-        "debian" => {
-            if major < 11 {
-                return Err(CheckError::UnsupportedVersion {
-                    id: info.id.clone(),
-                    version: info.version.clone(),
-                });
-            }
-            Ok(())
-        }
-        _ => Err(CheckError::UnsupportedOs {
+        OsFamily::Fedora => Err(CheckError::NotYetSupportedOs {
             id: info.id.clone(),
         }),
     }

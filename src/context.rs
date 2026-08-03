@@ -11,6 +11,7 @@ use std::sync::Arc;
 
 use crate::checks::OsInfo;
 use crate::config::ResolvedConfig;
+use crate::distro::OsFamily;
 use crate::secret::Secret;
 
 /// Configurazione risolta dell'installazione + stato runtime del motore.
@@ -58,7 +59,25 @@ pub struct Context {
     pub state_path: PathBuf,
     /// Info OS rilevate dai preflight checks; popolate in `main` dopo `check_os`
     /// e usate dalle fasi successive (es. wkhtmltopdf). `None` finché non note.
+    ///
+    /// Resta `Option` perché resta ciò che è sempre stato: informazione di
+    /// dettaglio che serve **solo** a `run`. La famiglia, che serve anche agli
+    /// `undo`, sta in [`Self::os_family`] e non è opzionale — vedi lì il perché.
     pub os_info: Option<OsInfo>,
+    /// La famiglia della distribuzione: quali comandi e quali convenzioni valgono
+    /// su questa macchina.
+    ///
+    /// **Non è `Option`, di proposito.** In ogni percorso c'è una risposta: nel
+    /// percorso di installazione la dà il sistema (`check_os`), nel rollback da
+    /// disco la dà il **manifesto** (`InstallConfig::to_context`). Un `Option`
+    /// qui rifarebbe il buco che questo campo esiste per chiudere: `os_info` è
+    /// `None` nel rollback perché «serve solo a `run`», e finché nessun `undo`
+    /// dipendeva dall'OS non era falso. Con due gestori di pacchetti lo
+    /// diventerebbe, e l'undo del delta non saprebbe quale comando invocare.
+    ///
+    /// Vedi [`crate::distro::OsFamily`] per la regola: si **rilegge**, non si
+    /// rideduce.
+    pub os_family: OsFamily,
     /// Utente che ha lanciato `sudo` (`SUDO_USER`), proprietario del
     /// control-script e del `.bashrc`. Popolato in `main`. `None` se assente.
     pub sudo_user: Option<String>,
@@ -93,6 +112,9 @@ impl Context {
             aggressive_rollback: false,
             state_path,
             os_info: None,
+            // Valorizzata in `main` insieme a `os_info`, subito dopo `check_os`:
+            // prima di allora non c'è nulla da installare e nessuno step gira.
+            os_family: OsFamily::default(),
             sudo_user: None,
             db_created_by_us: Arc::new(AtomicBool::new(false)),
         }
