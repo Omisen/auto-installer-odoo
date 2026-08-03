@@ -579,6 +579,16 @@ impl Distro for MockDistro {
     /// Segue la famiglia modellata, come in produzione: un mock che rispondesse
     /// sempre `Some` farebbe inizializzare un cluster anche su Debian, dove il
     /// pacchetto lo crea da sé.
+    /// Il layout **di produzione** della famiglia modellata: un layout finto
+    /// renderebbe verdi test che in campo scriverebbero il vhost in una
+    /// directory che nginx non legge.
+    fn nginx_layout(&self) -> odoo_installer::distro::NginxLayout {
+        match self.family {
+            OsFamily::Debian => odoo_installer::distro::debian::Debian::new().nginx_layout(),
+            OsFamily::Fedora => odoo_installer::distro::fedora::Fedora::new().nginx_layout(),
+        }
+    }
+
     fn postgres_data_dir(&self) -> Option<std::path::PathBuf> {
         match self.family {
             OsFamily::Debian => None,

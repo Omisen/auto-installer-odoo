@@ -292,6 +292,10 @@ impl Distro for ModelDistro {
 
     /// Il modello rappresenta una macchina Debian: il cluster lo crea il
     /// pacchetto, non noi.
+    fn nginx_layout(&self) -> odoo_installer::distro::NginxLayout {
+        odoo_installer::distro::debian::Debian::new().nginx_layout()
+    }
+
     fn postgres_data_dir(&self) -> Option<PathBuf> {
         None
     }

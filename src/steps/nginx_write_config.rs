@@ -14,7 +14,6 @@ use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
 const VHOST_TEMPLATE: &str = include_str!("../../templates/nginx.conf.tpl");
-const SITES_AVAILABLE: &str = "/etc/nginx/sites-available";
 const VHOST_MODE: u32 = 0o644;
 const DEFAULT_CLIENT_MAX: &str = "100m";
 
@@ -37,8 +36,15 @@ impl NginxWriteConfig {
         }
     }
 
-    fn dest(ctx: &Context) -> std::path::PathBuf {
-        std::path::PathBuf::from(format!("{SITES_AVAILABLE}/odoo{}", ctx.odoo_version_short))
+    /// Dove va scritto il vhost, secondo le convenzioni di questa famiglia.
+    ///
+    /// Non è più una costante: su Fedora la directory è `conf.d` e il file deve
+    /// finire in `.conf`, altrimenti nginx non lo carica — e non lo direbbe.
+    fn dest(&self, ctx: &Context) -> std::path::PathBuf {
+        self.ops
+            .distro()
+            .nginx_layout()
+            .vhost_path(&ctx.odoo_version_short)
     }
     /// Temporaneo privato accanto alla destinazione (stesso filesystem → rename
     /// atomico), con nome imprevedibile e creazione `O_EXCL | O_NOFOLLOW`.
@@ -57,7 +63,7 @@ impl Step for NginxWriteConfig {
             self.snap = NginxWriteConfigSnapshot::default();
             return Ok(());
         }
-        let dest = Self::dest(ctx);
+        let dest = self.dest(ctx);
         self.snap.prestate = if self.ops.path_exists(&dest) {
             PreState::Preexisting
         } else {
@@ -77,7 +83,7 @@ impl Step for NginxWriteConfig {
             return Ok(());
         }
 
-        let dest = Self::dest(ctx);
+        let dest = self.dest(ctx);
         if self.snap.prestate == PreState::Preexisting {
             let backup = format!("{}.bak.{}", dest.display(), unix_timestamp());
             self.ops.copy_file(&dest, std::path::Path::new(&backup))?;
@@ -110,7 +116,7 @@ impl Step for NginxWriteConfig {
             info!("undo (dry-run): rm o ripristino backup del vhost");
             return Ok(());
         }
-        let dest = Self::dest(ctx);
+        let dest = self.dest(ctx);
         match self.snap.prestate {
             PreState::CreatedByUs => {
                 if let Err(e) = self.ops.remove_file(&dest) {

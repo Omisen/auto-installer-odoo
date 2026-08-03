@@ -15,8 +15,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use odoo_installer::checks::{
-    check_os_from, is_newer_than_tested, nginx_support, os_id_from, required_commands, validate_os,
-    CheckError, OsInfo,
+    check_os_from, is_newer_than_tested, os_id_from, required_commands, validate_os, CheckError,
+    OsInfo,
 };
 use odoo_installer::context::Context;
 use odoo_installer::distro::{family_mismatch, OsFamily};
@@ -165,29 +165,6 @@ fn the_required_commands_follow_the_family() {
         ["apt-get", "systemctl"]
     );
     assert_eq!(required_commands(OsFamily::Fedora), ["dnf", "systemctl"]);
-}
-
-/// `--with-nginx` è rifiutato **prima di mutare** su una famiglia i cui percorsi
-/// nginx non sono ancora portati (arrivano in M4).
-///
-/// Senza questo rifiuto il vhost finirebbe in `/etc/nginx/sites-available`, che
-/// su Fedora non esiste e nginx non legge: nessuno step fallirebbe, e
-/// l'installazione dichiarerebbe un reverse proxy che non serve nulla. Un
-/// difetto senza sintomo è la classe peggiore (A-V3-7).
-#[test]
-fn nginx_is_refused_on_a_family_whose_paths_are_not_ported_yet() {
-    assert!(nginx_support(OsFamily::Debian, true).is_ok());
-    assert!(
-        nginx_support(OsFamily::Fedora, false).is_ok(),
-        "senza --with-nginx non c'è nulla da rifiutare"
-    );
-
-    let err = nginx_support(OsFamily::Fedora, true).expect_err("su Fedora nginx non è pronto");
-    let msg = err.to_string();
-    assert!(
-        msg.contains("sites-available") && msg.contains("non legge"),
-        "il messaggio deve dire PERCHÉ, non solo di no: {msg}"
-    );
 }
 
 // --- La persistenza: il manifesto porta la famiglia --------------------------

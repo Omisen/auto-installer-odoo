@@ -423,9 +423,6 @@ fn run_environment_checks(
     }
     checks::check_commands(ctx.os_family).map_err(|e| anyhow!(e))?;
 
-    // La fase nginx non è ancora portata su tutte le famiglie: meglio rifiutare
-    // prima di mutare che consegnare un reverse proxy che non serve nulla.
-    checks::nginx_support(ctx.os_family, ctx.with_nginx).map_err(|e| anyhow!(e))?;
     Ok(())
 }
 

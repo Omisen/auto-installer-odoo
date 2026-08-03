@@ -85,14 +85,6 @@ pub enum CheckError {
     PortInUse { port: u16 },
 
     #[error(
-        "--with-nginx non è ancora supportato su {family}: gli step nginx usano i percorsi \
-         di Debian/Ubuntu (sites-available/sites-enabled), che su questa famiglia non \
-         esistono. Il vhost finirebbe in una directory che nginx non legge, e l'installazione \
-         sembrerebbe riuscita. Installa senza --with-nginx e configura il reverse proxy a mano."
-    )]
-    NginxNotSupportedOnFamily { family: OsFamily },
-
-    #[error(
         "comando di sistema obbligatorio mancante: {command}. \
          Serve un sistema con systemd e il gestore di pacchetti della sua famiglia \
          (apt-get su Debian/Ubuntu, dnf su Fedora)"
@@ -550,29 +542,6 @@ pub fn required_commands(family: OsFamily) -> [&'static str; 2] {
         OsFamily::Debian => ["apt-get", "systemctl"],
         OsFamily::Fedora => ["dnf", "systemctl"],
     }
-}
-
-/// Gli step nginx sanno lavorare su questa famiglia?
-///
-/// # Perché un rifiuto esplicito e non «vediamo come va»
-///
-/// Perché il modo in cui andrebbe è il peggiore possibile: `nginx-write-config`
-/// scriverebbe il vhost in `/etc/nginx/sites-available`, che su Fedora **non
-/// esiste e nginx non legge**; `nginx-enable-site` creerebbe un symlink in
-/// un'altra directory inesistente. Nessuno dei due fallirebbe in modo evidente,
-/// e l'installazione si chiuderebbe dichiarando un reverse proxy che non serve
-/// nulla — un difetto senza sintomo, cioè la classe che questo progetto ha
-/// imparato a temere di più (A-V3-7).
-///
-/// Il supporto arriva in M4, insieme ai percorsi per famiglia. Fino ad allora la
-/// risposta onesta è no, detta **prima** di mutare qualsiasi cosa.
-///
-/// Pura: la si verifica per entrambe le famiglie senza avere né nginx né Fedora.
-pub fn nginx_support(family: OsFamily, with_nginx: bool) -> Result<(), CheckError> {
-    if with_nginx && family != OsFamily::Debian {
-        return Err(CheckError::NginxNotSupportedOnFamily { family });
-    }
-    Ok(())
 }
 
 /// Verifica i prerequisiti di sistema **non installabili** dallo script: il

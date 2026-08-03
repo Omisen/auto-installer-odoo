@@ -28,7 +28,7 @@ servizio systemd e (opzionale) Nginx.
 
 | Requisito | Dettaglio |
 |-----------|-----------|
-| OS | Ubuntu ≥ 22.04 **o** Debian ≥ 11 — provati in CI fino a **Ubuntu 24.04** e **Debian 12**; una release più recente viene accettata con un avviso, non rifiutata |
+| OS | **Ubuntu ≥ 22.04**, **Debian ≥ 11** o **Fedora ≥ 40** — provati in CI fino a Ubuntu 24.04 e Debian 12, e in campo su Fedora 41; una release più recente viene accettata con un avviso, non rifiutata |
 | Privilegi | utente normale con `sudo` (non login diretto come root) |
 | Disk | ≥ 5 GB liberi (override `MIN_DISK_GB`) |
 | Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx — a meno che a tenerle non sia già Nginx, nel qual caso non è un conflitto |
@@ -365,6 +365,29 @@ sudo cat /var/log/odoo-installer.log
 
   `--open-https-port` apre soltanto la 443 sul firewall, in vista di quel passaggio. Si chiamava
   `--enable-ssl`, un nome che prometteva TLS senza fornirlo: il vecchio nome resta accettato.
+
+### Nginx: una differenza fra le famiglie, dichiarata
+
+Le due famiglie organizzano nginx in modo diverso, e una delle differenze **si vede**:
+
+| | Ubuntu / Debian | Fedora |
+|---|---|---|
+| vhost | `/etc/nginx/sites-available/odooN` | `/etc/nginx/conf.d/odooN.conf` |
+| come si abilita | symlink in `sites-enabled/` | scrivere il file **è** abilitarlo |
+| firewall | `ufw` | `firewalld` |
+| server di default | file `sites-enabled/default`, che l'installer **sposta** per liberare la porta 80 (e rimette al suo posto al rollback) | blocco `server` dentro `nginx.conf`: **non lo tocchiamo** |
+
+L'ultima riga è la differenza che conta. Su Fedora il server di default non è un file
+separato: toglierlo significherebbe riscrivere `/etc/nginx/nginx.conf`, cioè la configurazione
+principale di un servizio che sulla macchina potrebbe servire altro. L'installer non lo fa.
+
+**Conseguenza pratica**: su una Fedora con nginx appena installato, una richiesta a un hostname
+che non combacia con `--server-name` continua a ricevere la pagina di benvenuto di nginx invece di
+Odoo. Se `--server-name` è il catch-all `_` (il default) la cosa non si nota; se hai impostato un
+dominio e vuoi che *qualunque* hostname arrivi a Odoo, togli o modifica quel blocco a mano.
+
+È la scelta più prudente delle due: modificare la configurazione principale di nginx è
+esattamente la classe di mutazione che questo installer tratta con la massima cautela.
 
 ### Rigenerare i pin checksum wkhtmltopdf
 

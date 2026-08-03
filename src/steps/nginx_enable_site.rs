@@ -44,15 +44,6 @@ use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
 use crate::system_ops::{PathKind, SystemOps};
 
-const SITES_AVAILABLE: &str = "/etc/nginx/sites-available";
-const SITES_ENABLED: &str = "/etc/nginx/sites-enabled";
-/// Target standard Debian/Ubuntu del default site.
-///
-/// Usato **solo** come ripiego per gli stati persistiti prima della R11, che
-/// registravano l'esistenza ma non il target. Per gli stati nuovi il target si
-/// rilegge da [`DefaultSite::Symlink`].
-const DEFAULT_SITE_TARGET: &str = "/etc/nginx/sites-available/default";
-
 /// Cosa c'era in `sites-enabled/default` prima di noi, e cosa ne abbiamo fatto.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DefaultSite {
@@ -104,14 +95,20 @@ impl NginxEnableSite {
         }
     }
 
-    fn src(ctx: &Context) -> std::path::PathBuf {
-        std::path::PathBuf::from(format!("{SITES_AVAILABLE}/odoo{}", ctx.odoo_version_short))
+    fn layout(&self) -> crate::distro::NginxLayout {
+        self.ops.distro().nginx_layout()
     }
-    fn link(ctx: &Context) -> std::path::PathBuf {
-        std::path::PathBuf::from(format!("{SITES_ENABLED}/odoo{}", ctx.odoo_version_short))
+    fn src(&self, ctx: &Context) -> std::path::PathBuf {
+        self.layout().vhost_path(&ctx.odoo_version_short)
     }
-    fn default_site() -> std::path::PathBuf {
-        std::path::PathBuf::from(format!("{SITES_ENABLED}/default"))
+    /// Il symlink che abilita il sito — `None` sulle famiglie dove **scrivere il
+    /// vhost è già abilitarlo**.
+    fn link(&self, ctx: &Context) -> Option<std::path::PathBuf> {
+        self.layout().enabled_link(&ctx.odoo_version_short)
+    }
+    /// Il default site come file separato — `None` dove non esiste il concetto.
+    fn default_site(&self) -> Option<std::path::PathBuf> {
+        self.layout().default_site
     }
 
     /// Dove finisce il backup di un default site che è un **file regolare**.
@@ -121,14 +118,24 @@ impl NginxEnableSite {
     /// lasciato lì verrebbe caricato lo stesso e la porta 80 resterebbe
     /// occupata. Cioè il difetto che stiamo correggendo, con un nome diverso.
     /// `/etc/nginx/` non è invece oggetto di alcun glob.
-    fn default_site_backup() -> String {
-        format!("/etc/nginx/default-site.bak.{}", unix_timestamp())
+    fn default_site_backup(&self) -> String {
+        format!(
+            "{}/default-site.bak.{}",
+            self.layout().default_site_backup_dir.display(),
+            unix_timestamp()
+        )
     }
 
     /// Toglie di mezzo il default site secondo la sua natura, registrando cosa
     /// è stato fatto perché l'undo possa disfarlo esattamente.
     fn displace_default_site(&mut self) -> Result<(), StepError> {
-        let path = Self::default_site();
+        // Nessun default site come file separato = niente da spiazzare. Su
+        // quelle famiglie il server di default vive dentro `nginx.conf`, e
+        // riscrivere la configurazione principale del cliente non è una cosa che
+        // facciamo (vedi il doc di `Fedora::nginx_layout`).
+        let Some(path) = self.default_site() else {
+            return Ok(());
+        };
         match self.snap.default_site.clone().unwrap_or_default() {
             DefaultSite::Assente => Ok(()),
 
@@ -147,7 +154,7 @@ impl NginxEnableSite {
                 // Un file vero contiene configurazione di qualcuno: si sposta,
                 // non si cancella. Un `move` fallito è un errore vero — meglio
                 // fermarsi che proseguire avendo perso il file a metà.
-                let backup = Self::default_site_backup();
+                let backup = self.default_site_backup();
                 self.ops.move_file(&path, std::path::Path::new(&backup))?;
                 self.snap.default_site = Some(DefaultSite::FileRegolare {
                     backup: Some(backup.clone()),
@@ -178,7 +185,9 @@ impl NginxEnableSite {
     /// Best-effort come ogni undo: un fallimento è un `warn!`, non un errore che
     /// ferma la pulizia degli altri step.
     fn restore_default_site(&self) {
-        let path = Self::default_site();
+        let Some(path) = self.default_site() else {
+            return;
+        };
         match &self.snap.default_site {
             Some(DefaultSite::Assente) | Some(DefaultSite::Intoccabile) => {}
 
@@ -218,7 +227,9 @@ impl NginxEnableSite {
                 if !self.snap.default_site_existed {
                     return;
                 }
-                let target = std::path::PathBuf::from(DEFAULT_SITE_TARGET);
+                let Some(target) = self.layout().default_site_standard_target else {
+                    return;
+                };
                 warn!(
                     target = %target.display(),
                     "undo: stato senza la natura del default site (pre-R11): ripristino un \
@@ -242,19 +253,27 @@ impl Step for NginxEnableSite {
             self.snap = NginxEnableSiteSnapshot::default();
             return Ok(());
         }
-        self.snap.link = if self.ops.symlink_exists(&Self::link(ctx)) {
-            PreState::Preexisting
-        } else {
-            PreState::Untracked
+        // Su una famiglia senza `sites-enabled` non c'è nessun symlink da
+        // creare: scrivere il vhost **è** abilitarlo.
+        self.snap.link = match self.link(ctx) {
+            Some(link) if self.ops.symlink_exists(&link) => PreState::Preexisting,
+            _ => PreState::Untracked,
         };
         // Informazione chiave per l'undo: cosa c'è al posto del default site.
         // Non "se c'è": *cosa*. Da questa distinzione dipende se il ripristino
         // sarà fedele o soltanto plausibile (A-V3-5).
-        let default_site = match self.ops.path_kind(&Self::default_site()) {
-            PathKind::Absent => DefaultSite::Assente,
-            PathKind::Symlink { target } => DefaultSite::Symlink { target },
-            PathKind::RegularFile => DefaultSite::FileRegolare { backup: None },
-            PathKind::Other => DefaultSite::Intoccabile,
+        //
+        // Dove il default site non è un file separato la domanda non si pone, e
+        // `Assente` è la risposta onesta: non c'è nulla che noi possiamo togliere
+        // e quindi nulla da rimettere.
+        let default_site = match self.default_site() {
+            None => DefaultSite::Assente,
+            Some(path) => match self.ops.path_kind(&path) {
+                PathKind::Absent => DefaultSite::Assente,
+                PathKind::Symlink { target } => DefaultSite::Symlink { target },
+                PathKind::RegularFile => DefaultSite::FileRegolare { backup: None },
+                PathKind::Other => DefaultSite::Intoccabile,
+            },
         };
         self.snap.default_site_existed = default_site != DefaultSite::Assente;
         self.snap.default_site = Some(default_site);
@@ -281,11 +300,22 @@ impl Step for NginxEnableSite {
         // file regolare si sposta (il suo contenuto è di qualcuno).
         self.displace_default_site()?;
 
-        self.ops.create_symlink(&Self::src(ctx), &Self::link(ctx))?;
-        if self.snap.link == PreState::Untracked {
-            self.snap.link = PreState::CreatedByUs;
+        match self.link(ctx) {
+            Some(link) => {
+                self.ops.create_symlink(&self.src(ctx), &link)?;
+                if self.snap.link == PreState::Untracked {
+                    self.snap.link = PreState::CreatedByUs;
+                }
+                info!("run: sito abilitato");
+            }
+            // Niente `sites-enabled`: il vhost scritto in `conf.d` è già
+            // caricato da nginx. Non c'è un artefatto in più da registrare, e
+            // quindi nemmeno da annullare.
+            None => info!(
+                "run: su questa famiglia il vhost è già abilitato dove è stato scritto, \
+                 nessun symlink da creare"
+            ),
         }
-        info!("run: sito abilitato");
         Ok(())
     }
 
@@ -297,8 +327,10 @@ impl Step for NginxEnableSite {
 
         // Rimuovi il nostro symlink se creato da noi.
         if self.snap.link == PreState::CreatedByUs {
-            if let Err(e) = self.ops.remove_symlink(&Self::link(ctx)) {
-                warn!(error = %e, "undo: rimozione symlink nostro fallita, proseguo (best-effort)");
+            if let Some(link) = self.link(ctx) {
+                if let Err(e) = self.ops.remove_symlink(&link) {
+                    warn!(error = %e, "undo: rimozione symlink nostro fallita, proseguo (best-effort)");
+                }
             }
         }
 

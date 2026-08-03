@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use super::{ufw::Ufw, Distro, Firewall};
+use super::{ufw::Ufw, Distro, Firewall, NginxLayout};
 use crate::error::StepError;
 
 /// Debian/Ubuntu: firewall `ufw`.
@@ -20,6 +20,22 @@ impl Debian {
 impl Distro for Debian {
     fn firewall(&self) -> &dyn Firewall {
         &self.firewall
+    }
+
+    /// Il modello `sites-available` + `sites-enabled` con il symlink, e un
+    /// default site che è un file a sé.
+    fn nginx_layout(&self) -> NginxLayout {
+        NginxLayout {
+            vhost_dir: PathBuf::from("/etc/nginx/sites-available"),
+            // `nginx.conf` include `sites-enabled/*`: **ogni** file, non solo i
+            // `.conf`. Nessuna estensione richiesta — ed è anche la ragione per
+            // cui il backup del default site non può restare lì dentro.
+            vhost_extension: "",
+            enabled_dir: Some(PathBuf::from("/etc/nginx/sites-enabled")),
+            default_site: Some(PathBuf::from("/etc/nginx/sites-enabled/default")),
+            default_site_standard_target: Some(PathBuf::from("/etc/nginx/sites-available/default")),
+            default_site_backup_dir: PathBuf::from("/etc/nginx"),
+        }
     }
 
     /// `None`: il postinst del pacchetto `postgresql` chiama `pg_createcluster` e

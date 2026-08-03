@@ -71,9 +71,66 @@ use crate::error::StepError;
 /// `init_postgres_cluster()` arrivano con le fasi che li usano: un metodo senza
 /// chiamanti è codice che nessun test può esercitare, e in questo progetto è
 /// così che nascono i rami che non possono fallire.
+/// Dove questa famiglia tiene le cose. **Dati**, non comportamento.
+///
+/// # Perché `Option` e non stringhe diverse
+///
+/// Perché due delle divergenze non sono «un percorso diverso» ma «**il concetto
+/// non esiste**». Su Fedora `sites-enabled` non ha un altro nome: non c'è, e il
+/// server di default non è un file separato — è un blocco `server` dentro
+/// `/etc/nginx/nginx.conf`.
+///
+/// Un `None` lo dice; una costante che puntasse a una directory inventata
+/// mentirebbe, e lo step andrebbe a creare symlink in un posto che nginx non
+/// legge. La differenza va **rappresentata nei dati**, non nascosta in un ramo.
+#[derive(Debug, Clone)]
+pub struct NginxLayout {
+    /// Dove si scrive il vhost.
+    pub vhost_dir: PathBuf,
+    /// Estensione che il file deve avere per essere caricato.
+    ///
+    /// Vuota su Debian (`sites-enabled/*` include qualunque file); `.conf` su
+    /// Fedora, dove `nginx.conf` include `conf.d/*.conf` — **solo** quelli. Un
+    /// vhost senza estensione lì sarebbe invisibile, e nulla lo direbbe.
+    pub vhost_extension: &'static str,
+    /// La directory dei siti **abilitati**, se il concetto esiste.
+    pub enabled_dir: Option<PathBuf>,
+    /// Il default site come file separato, se il concetto esiste.
+    pub default_site: Option<PathBuf>,
+    /// Il target *standard di distribuzione* del default site.
+    ///
+    /// Serve **solo** come ripiego per gli stati persistiti prima della R11, che
+    /// registravano l'esistenza ma non il target.
+    pub default_site_standard_target: Option<PathBuf>,
+    /// Dove finisce il backup di un default site che è un **file regolare**.
+    ///
+    /// Deliberatamente fuori da `enabled_dir`: nginx include quella directory
+    /// con un glob, quindi un backup lasciato lì verrebbe caricato lo stesso e
+    /// la porta 80 resterebbe occupata — lo stesso difetto con un altro nome.
+    pub default_site_backup_dir: PathBuf,
+}
+
+impl NginxLayout {
+    /// Il percorso del vhost per questa versione di Odoo.
+    pub fn vhost_path(&self, version_short: &str) -> PathBuf {
+        self.vhost_dir
+            .join(format!("odoo{version_short}{}", self.vhost_extension))
+    }
+
+    /// Il percorso del symlink che abilita il sito, se la famiglia ha il concetto.
+    pub fn enabled_link(&self, version_short: &str) -> Option<PathBuf> {
+        self.enabled_dir
+            .as_ref()
+            .map(|dir| dir.join(format!("odoo{version_short}{}", self.vhost_extension)))
+    }
+}
+
 pub trait Distro {
     /// Lo strumento di firewall di questa famiglia.
     fn firewall(&self) -> &dyn Firewall;
+
+    /// Dove questa famiglia tiene la configurazione di nginx.
+    fn nginx_layout(&self) -> NginxLayout;
 
     /// Dove vive il cluster PostgreSQL, **se** questa famiglia richiede di
     /// inizializzarlo a mano. `None` = il pacchetto lo crea e lo avvia da sé.
