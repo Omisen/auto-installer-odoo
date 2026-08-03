@@ -306,6 +306,10 @@ jobs:
           # l'installer esige), git (clone dei sorgenti), jq (le asserzioni
           # leggono il manifesto), procps-ng (`ps`).
           #
+          # `diffutils` porta `cmp`/`diff`: senza, il confronto byte-per-byte
+          # del manifesto (A-V3-1) non può eseguire — e `cmp` assente esce
+          # non-zero esattamente come `cmp` che trova una differenza.
+          #
           # `iproute` porta `ss`, e non è un dettaglio: senza, il preflight
           # sulle porte scrive «ss/netstat/lsof assenti: assumo libera» e
           # **non può fallire**. È la firma ricorrente di questo progetto
@@ -314,7 +318,7 @@ jobs:
           # controllo sulle porte e la lettura del manifesto, e con `ss` assente
           # quel test non distingue l'ordine corretto da quello rotto.
           RUN dnf -y install --setopt=install_weak_deps=False \
-                systemd sudo git jq procps-ng iproute authselect \
+                systemd sudo git jq procps-ng iproute diffutils authselect \
            && dnf clean all
           # Unit che in un container non hanno senso e fallirebbero, portando
           # systemd a `degraded` per rumore invece che per una ragione vera.

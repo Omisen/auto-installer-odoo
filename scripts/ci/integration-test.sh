@@ -237,9 +237,18 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   group "Verifica dell'installazione"
 
   assert "utente di sistema '$OS_USER' creato" id "$OS_USER"
-  assert "sorgenti in $INSTALL_DIR" test -d "$INSTALL_DIR/odoo"
-  assert "virtualenv creato" test -x "$INSTALL_DIR/sandbox/bin/python3"
-  assert "config generata" test -f "$INSTALL_DIR/odoo${VER_SHORT}.conf"
+  # `sudo`, e non per abitudine: `/opt/odoo` è `0750 odoo:odoo`, quindi
+  # l'utente che esegue questo script non ha il diritto di ATTRAVERSARLA. Un
+  # `test -d` non privilegiato lì dentro non risponde «non c'è», risponde
+  # «permesso negato» — e `assert` traduce entrambi in un rosso identico.
+  #
+  # Sui runner nativi passavano, il che significa che passavano per una
+  # proprietà dell'ambiente e non perché la domanda fosse posta bene; su Fedora
+  # il conto è arrivato. Un controllo va fatto con i privilegi che la domanda
+  # richiede, altrimenti misura i permessi di chi lo esegue.
+  assert "sorgenti in $INSTALL_DIR" sudo test -d "$INSTALL_DIR/odoo"
+  assert "virtualenv creato" sudo test -x "$INSTALL_DIR/sandbox/bin/python3"
+  assert "config generata" sudo test -f "$INSTALL_DIR/odoo${VER_SHORT}.conf"
   assert "unit systemd installata" test -f "$UNIT_FILE"
   assert "servizio attivo" systemctl is-active --quiet "$UNIT"
   assert "servizio abilitato" systemctl is-enabled --quiet "$UNIT"
@@ -402,12 +411,21 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   fi
 
   sudo cp "$STATE" "$WORK/manifest-after.json"
-  if sudo cmp -s "$WORK/manifest-before.json" "$WORK/manifest-after.json"; then
+  # `cmp` esce non-zero sia se i file DIFFERISCONO sia se non riesce a
+  # confrontarli (assente, illeggibile). Distinguere i due casi non è pedanteria:
+  # `diffutils` mancava nell'immagine Fedora e questo blocco ha accusato il
+  # manifesto di essere cambiato quando in realtà nessuno l'aveva guardato. Un
+  # controllo che non può eseguire deve dire «non ho potuto», mai «è andata
+  # male» — è la stessa distinzione fra cecità e assenza di A5.1-bis.
+  if ! command -v cmp >/dev/null 2>&1; then
+    fail "impossibile confrontare il manifesto: 'cmp' non è installato \
+(pacchetto diffutils). Il controllo su A-V3-1 NON è stato eseguito"
+  elif sudo cmp -s "$WORK/manifest-before.json" "$WORK/manifest-after.json"; then
     ok "il manifesto è rimasto identico byte-per-byte"
   else
     fail "il manifesto è cambiato dopo un'installazione rifiutata: \
 l'istanza potrebbe non essere più disinstallabile (A-V3-1)"
-    sudo diff "$WORK/manifest-before.json" "$WORK/manifest-after.json" || true
+    sudo diff "$WORK/manifest-before.json" "$WORK/manifest-after.json" 2>/dev/null || true
   fi
 
   # Il rifiuto deve venire dal MANIFESTO, non da un effetto collaterale.
