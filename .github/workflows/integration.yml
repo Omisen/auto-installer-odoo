@@ -300,6 +300,10 @@ jobs:
             scenario: nginx
             env_file: configs/ci-nginx.env
             firewalld: "yes"
+            # Lo scenario DICHIARA di volere il firewall: se non fosse attivo,
+            # le verifiche su A-V3-7 salterebbero e il job passerebbe senza aver
+            # provato ciò per cui esiste. Con questo, si ferma e lo dice.
+            fw_required: "1"
 
     steps:
       - name: Checkout
@@ -539,6 +543,7 @@ jobs:
           docker exec -u tester -w /work fedora-test \
             env MODE=full BIN=./bin/odoo-installer \
                 ENV_FILE='${{ matrix.env_file }}' \
+                FW_REQUIRED='${{ matrix.fw_required }}' \
             bash scripts/ci/integration-test.sh
 
       - name: Log dell'installer, se presente
@@ -655,6 +660,11 @@ jobs:
         env:
           MODE: full
           ENV_FILE: configs/ci-nginx.env
+          # Questo job ATTIVA ufw da sé nello step precedente: trovarlo inattivo
+          # non sarebbe una circostanza della macchina ma un difetto del job, e
+          # saltare in silenzio le verifiche lascerebbe A-V3-7 scoperto proprio
+          # nello scenario scritto per esercitarlo.
+          FW_REQUIRED: "1"
         run: bash scripts/ci/integration-test.sh
 
       # Il file del cliente dev'essere tornato **identico**, non "di solito

@@ -246,7 +246,27 @@ else
   FW_NAME=ufw
   FW_ACTIVE=0
 fi
+# `FW_REQUIRED=1` — lo scenario DICHIARA che il firewall dev'essere attivo.
+#
+# Senza, un firewall che non si alza fa saltare le verifiche e lascia il job
+# **verde**: il rischio non è un controllo che non può fallire, ma un controllo
+# che può non essere ESEGUITO senza che nulla lo dica. È la variante di A-R9-1
+# («nello scenario per cui l'ho scritto, viene eseguito?») applicata a un intero
+# blocco di asserzioni invece che a una sola.
+#
+# Lo scenario che chiede il firewall è anche l'unico che lo esercita: se non c'è,
+# non prova ciò per cui esiste, e proseguire per venti minuti di installazione
+# per poi non poterlo dire è peggio che fermarsi subito. Fermata immediata,
+# quindi, e non un `fail` accodato agli altri: questa non è un'asserzione
+# sull'installer, è una precondizione dello scenario.
+FW_REQUIRED="${FW_REQUIRED:-0}"
 if [ "$WITH_NGINX" = "true" ] && [ "$FW_ACTIVE" = "0" ]; then
+  if [ "$FW_REQUIRED" = "1" ]; then
+    echo "::error::$FW_NAME non è attivo, ma questo scenario lo richiede \
+(FW_REQUIRED=1): le verifiche su A-V3-7 verrebbero saltate e il job passerebbe \
+senza aver provato ciò per cui esiste"
+    exit 1
+  fi
   info "$FW_NAME non attivo: le verifiche sul firewall verranno saltate"
 fi
 # L'output si cattura: da qui si legge il **diario** dell'esecuzione (quali step
