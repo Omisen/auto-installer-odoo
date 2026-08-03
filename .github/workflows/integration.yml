@@ -274,14 +274,32 @@ jobs:
   # cui esiste è peggio di un job assente (la lezione di R7).
   # ---------------------------------------------------------------------------
   fedora:
-    name: install + rollback (${{ matrix.image }})
+    name: install + rollback (${{ matrix.image }}, ${{ matrix.scenario }})
     needs: build-musl
     runs-on: ubuntu-latest
     timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
-        image: ["fedora:41"]
+        # Due scenari, non uno. Lo scenario `nginx` è l'unico modo di esercitare
+        # `Firewalld`: sui runner e nella VM di sviluppo `firewall-cmd` non c'è,
+        # quindi le sue cinque operazioni sono vissute finora solo sui mock — la
+        # stessa situazione di B-V3-7 per nginx su Debian, e in questo progetto
+        # è dove i difetti sopravvivono.
+        #
+        # `configs/ci-nginx.env` è lo stesso file che usa il job Debian: un test
+        # garantisce che differisca da `ci.env` solo per WITH_NGINX e
+        # NGINX_SERVER_NAME, così un rosso che compare solo qui è attribuibile a
+        # nginx e a nient'altro.
+        include:
+          - image: "fedora:41"
+            scenario: base
+            env_file: configs/ci.env
+            firewalld: "no"
+          - image: "fedora:41"
+            scenario: nginx
+            env_file: configs/ci-nginx.env
+            firewalld: "yes"
 
     steps:
       - name: Checkout
@@ -306,6 +324,14 @@ jobs:
           # l'installer esige), git (clone dei sorgenti), jq (le asserzioni
           # leggono il manifesto), procps-ng (`ps`).
           #
+          # `firewalld` + `nftables` + `dbus-daemon`: su una Fedora vera firewalld
+          # è preinstallato, quindi averlo nell'immagine è fedele e non uno
+          # sconto. Viene AVVIATO solo nello scenario `nginx` — è lì che
+          # `nginx-firewall` ha qualcosa da fare. `nftables` è il backend e
+          # `dbus-daemon` il canale su cui `firewall-cmd` parla col demone:
+          # senza uno dei due firewalld parte e poi non risponde, che è il modo
+          # peggiore di fallire.
+          #
           # `diffutils` porta `cmp`/`diff`: senza, il confronto byte-per-byte
           # del manifesto (A-V3-1) non può eseguire — e `cmp` assente esce
           # non-zero esattamente come `cmp` che trova una differenza.
@@ -319,6 +345,7 @@ jobs:
           # quel test non distingue l'ordine corretto da quello rotto.
           RUN dnf -y install --setopt=install_weak_deps=False \
                 systemd sudo git jq procps-ng iproute diffutils authselect \
+                firewalld nftables dbus-daemon \
            && dnf clean all
           # Unit che in un container non hanno senso e fallirebbero, portando
           # systemd a `degraded` per rumore invece che per una ragione vera.
@@ -469,10 +496,49 @@ jobs:
           ' || true
           exit 1
 
+      # Firewalld ATTIVO, con la trappola deliberata. È l'analogo esatto di ciò
+      # che R17 ha fatto per `ufw` su Debian, e serve alla stessa asserzione:
+      # `8080/tcp` già aperta CONTIENE la stringa `80/tcp`, quindi un confronto
+      # per sottostringa concluderebbe che la porta 80 è già aperta. Da lì la
+      # regola non entrerebbe nel delta, il `run` non la aprirebbe, e nginx
+      # resterebbe irraggiungibile **senza alcun errore** (A-V3-7).
+      #
+      # `Firewalld::rule_exists` legge il PERMANENTE, quindi la trappola si
+      # mette permanente e si ricarica: una porta aperta solo a runtime
+      # sparirebbe e il test non chiederebbe la stessa cosa che chiede la
+      # produzione.
+      - name: Firewalld attivo, con 8080/tcp già aperta (trappola per A-V3-7)
+        if: matrix.firewalld == 'yes'
+        run: |
+          set -eux
+          docker exec fedora-test systemctl start firewalld || true
+
+          for _ in $(seq 1 20); do
+            if docker exec fedora-test firewall-cmd --state >/dev/null 2>&1; then break; fi
+            sleep 2
+          done
+
+          # Un firewalld che non si alza va DETTO, non aggirato: se lo scenario
+          # saltasse in silenzio le verifiche sul firewall, questo job
+          # prometterebbe una copertura che non ha — ed è esattamente il difetto
+          # che R7 ha trovato nella CI (un test che asseriva il residuo come
+          # atteso è peggio di un test assente).
+          if ! docker exec fedora-test firewall-cmd --state; then
+            echo "::error::firewalld non è partito nel container: lo scenario nginx non eserciterebbe Firewalld, che è la sola ragione per cui esiste"
+            docker exec fedora-test systemctl status firewalld --no-pager -l || true
+            docker exec fedora-test journalctl -u firewalld -n 50 --no-pager || true
+            exit 1
+          fi
+
+          docker exec fedora-test firewall-cmd --permanent --add-port=8080/tcp
+          docker exec fedora-test firewall-cmd --reload
+          docker exec fedora-test firewall-cmd --permanent --list-ports
+
       - name: Installazione + rollback reali
         run: |
           docker exec -u tester -w /work fedora-test \
             env MODE=full BIN=./bin/odoo-installer \
+                ENV_FILE='${{ matrix.env_file }}' \
             bash scripts/ci/integration-test.sh
 
       - name: Log dell'installer, se presente
@@ -485,7 +551,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: installer-log-fedora-${{ strategy.job-index }}
+          name: installer-log-fedora-${{ matrix.scenario }}
           path: installer-*.log
           if-no-files-found: ignore
 

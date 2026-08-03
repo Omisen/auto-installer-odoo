@@ -171,11 +171,22 @@ fi
 # domanda non si pone, e fingere che si ponga produrrebbe asserzioni su un file
 # che non esiste — verdi per la ragione sbagliata.
 if [ "$PKG_FAMILY" = rpm ]; then
-  DEFAULT_SITE=/dev/null
+  HAS_DEFAULT_SITE=0
+  DEFAULT_SITE=""
+  # Su rpm `conf.d` è **già** la directory attiva: nginx la include per intero,
+  # quindi non esiste nessun symlink da abilitare (`Fedora::nginx_layout` →
+  # `enabled_dir: None`).
+  VHOST="/etc/nginx/conf.d/odoo${VER_SHORT}.conf"
+  VHOST_LINK=""
 else
+  HAS_DEFAULT_SITE=1
   DEFAULT_SITE=/etc/nginx/sites-enabled/default
+  VHOST="/etc/nginx/sites-available/odoo${VER_SHORT}"
+  VHOST_LINK="/etc/nginx/sites-enabled/odoo${VER_SHORT}"
 fi
-if [ -L "$DEFAULT_SITE" ]; then
+if [ "$HAS_DEFAULT_SITE" = "0" ]; then
+  DEFAULT_SITE_BEFORE="n/d (su rpm il default site non è un file separato)"
+elif [ -L "$DEFAULT_SITE" ]; then
   DEFAULT_SITE_BEFORE="symlink:$(readlink "$DEFAULT_SITE")"
 elif [ -f "$DEFAULT_SITE" ]; then
   DEFAULT_SITE_BEFORE="file"
@@ -202,18 +213,41 @@ info "pacchetti installati prima:     $(wc -l < "$WORK/pkgs-before.txt")"
 
 # ufw è ATTIVO? Solo allora `nginx-firewall` fa qualcosa: sui runner di default
 # ufw è installato ma inattivo, e lo step esce subito (A-V3-7 mai esercitato).
+# Le porte aperte, **una per riga**, con la stessa domanda che pone la
+# produzione. Su firewalld si legge il PERMANENTE e non il runtime, perché è
+# quello che interroga `Firewalld::rule_exists`: un test che chiedesse al
+# runtime potrebbe dire «aperta» dove l'installer vede «chiusa» (o viceversa) e
+# misurerebbe una cosa diversa da quella che deve proteggere. È la lezione del
+# mock di ufw in R13 — un test fedele allo strumento, non a un'idea dello
+# strumento.
+fw_open_ports() {
+  if [ "$PKG_FAMILY" = rpm ]; then
+    sudo firewall-cmd --permanent --list-ports 2>/dev/null | tr ' ' '\n' | sed '/^$/d'
+  else
+    # La prima colonna è `To`; le intestazioni non combaciano mai con un token
+    # tipo `80/tcp`, quindi non serve escluderle per nome.
+    sudo ufw status 2>/dev/null | awk '{print $1}'
+  fi
+}
+
 if [ "$PKG_FAMILY" = rpm ]; then
-  # firewalld: le verifiche sul firewall su questa famiglia non sono ancora
-  # scritte (il job Fedora nasce senza firewalld installato). Dichiararlo qui
-  # invece di far passare le asserzioni ufw a vuoto.
-  UFW_ACTIVE=0
-  [ "$WITH_NGINX" = "true" ] && info "famiglia rpm: le verifiche sul firewall non sono ancora scritte, saltate"
+  FW_NAME=firewalld
+  if command -v firewall-cmd >/dev/null 2>&1 && sudo firewall-cmd --state >/dev/null 2>&1; then
+    FW_ACTIVE=1
+    sudo firewall-cmd --permanent --list-ports | sed 's/^/  firewalld· porte: /'
+  else
+    FW_ACTIVE=0
+  fi
 elif command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
-  UFW_ACTIVE=1
+  FW_NAME=ufw
+  FW_ACTIVE=1
   sudo ufw status | sed 's/^/  ufw· /'
 else
-  UFW_ACTIVE=0
-  [ "$WITH_NGINX" = "true" ] && info "ufw non attivo: le verifiche sul firewall verranno saltate"
+  FW_NAME=ufw
+  FW_ACTIVE=0
+fi
+if [ "$WITH_NGINX" = "true" ] && [ "$FW_ACTIVE" = "0" ]; then
+  info "$FW_NAME non attivo: le verifiche sul firewall verranno saltate"
 fi
 # L'output si cattura: da qui si legge il **diario** dell'esecuzione (quali step
 # sono stati raggiunti, quali pacchetti aggiunti). Il manifesto NON serve a
@@ -321,11 +355,12 @@ fi
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]; then
   group "Verifica Nginx"
 
-  VHOST="/etc/nginx/sites-available/odoo${VER_SHORT}"
-  VHOST_LINK="/etc/nginx/sites-enabled/odoo${VER_SHORT}"
-
   assert "vhost generato in $VHOST" sudo test -f "$VHOST"
-  assert "sito abilitato ($VHOST_LINK)" sudo test -L "$VHOST_LINK"
+  if [ -n "$VHOST_LINK" ]; then
+    assert "sito abilitato ($VHOST_LINK)" sudo test -L "$VHOST_LINK"
+  else
+    info "nessun symlink da verificare: su rpm il vhost vive già in conf.d"
+  fi
   assert "la configurazione nginx è valida (nginx -t)" sudo nginx -t
   assert "nginx attivo" systemctl is-active --quiet nginx
 
@@ -346,7 +381,9 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
   fi
 
   # Il default site è stato tolto di mezzo: è ciò che libera la porta 80.
-  refute "il default site è stato disattivato" sudo test -e "$DEFAULT_SITE"
+  if [ "$HAS_DEFAULT_SITE" = "1" ]; then
+    refute "il default site è stato disattivato" sudo test -e "$DEFAULT_SITE"
+  fi
 
   # Firewall: la porta 80 dev'essere stata aperta (A-V3-7).
   #
@@ -354,12 +391,12 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
   # il vecchio `status.contains("80/tcp")`, la presenza di `8080/tcp` faceva
   # risultare la 80 già aperta: non entrava nel delta, non veniva aperta, e
   # nginx restava irraggiungibile **senza alcun errore**.
-  if [ "$UFW_ACTIVE" = "1" ]; then
-    if sudo ufw status | awk '{print $1}' | grep -qx "80/tcp"; then
-      ok "regola ufw 80/tcp aperta (A-V3-7: non confusa con 8080/tcp)"
+  if [ "$FW_ACTIVE" = "1" ]; then
+    if fw_open_ports | grep -qx "80/tcp"; then
+      ok "regola $FW_NAME 80/tcp aperta (A-V3-7: non confusa con 8080/tcp)"
     else
-      fail "la porta 80 NON è stata aperta su ufw: nginx resta irraggiungibile"
-      sudo ufw status || true
+      fail "la porta 80 NON è stata aperta su $FW_NAME: nginx resta irraggiungibile"
+      fw_open_ports | sed 's/^/    porta· /' || true
     fi
   fi
 
@@ -605,9 +642,15 @@ fi
 # terzi**: rimuoverlo per liberare la porta 80 è lecito, non rimetterlo a posto
 # no. Fino a questa fase nessuna esecuzione reale l'aveva mai verificato.
 if [ "$WITH_NGINX" = "true" ]; then
-  refute "il vhost è stato rimosso" sudo test -f "/etc/nginx/sites-available/odoo${VER_SHORT}"
-  refute "il sito è stato disabilitato" sudo test -e "/etc/nginx/sites-enabled/odoo${VER_SHORT}"
+  refute "il vhost è stato rimosso" sudo test -f "$VHOST"
+  if [ -n "$VHOST_LINK" ]; then
+    refute "il sito è stato disabilitato" sudo test -e "$VHOST_LINK"
+  fi
 
+  # Su rpm il default site non è un file separato: non c'è nessun ritorno da
+  # verificare, e inventare l'asserzione produrrebbe un verde per la ragione
+  # sbagliata.
+  if [ "$HAS_DEFAULT_SITE" = "1" ]; then
   case "$DEFAULT_SITE_BEFORE" in
     assente)
       refute "nessun default site inventato dal rollback" sudo test -e "$DEFAULT_SITE"
@@ -630,20 +673,21 @@ configurazione che A-V3-5 descrive"
       fi
       ;;
   esac
+  fi
 
   # Firewall dopo il rollback: si chiude ciò che abbiamo aperto, e **solo**
   # quello. Una regola preesistente del cliente non si tocca mai — è la stessa
   # regola del delta apt, applicata al firewall.
-  if [ "$UFW_ACTIVE" = "1" ]; then
-    if sudo ufw status | awk '{print $1}' | grep -qx "80/tcp"; then
-      fail "la regola 80/tcp aperta da noi è rimasta dopo il rollback"
+  if [ "$FW_ACTIVE" = "1" ]; then
+    if fw_open_ports | grep -qx "80/tcp"; then
+      fail "la regola 80/tcp aperta da noi è rimasta dopo il rollback ($FW_NAME)"
     else
-      ok "la regola ufw 80/tcp è stata richiusa"
+      ok "la regola $FW_NAME 80/tcp è stata richiusa"
     fi
-    if sudo ufw status | awk '{print $1}' | grep -qx "8080/tcp"; then
-      ok "la regola preesistente 8080/tcp è intatta"
+    if fw_open_ports | grep -qx "8080/tcp"; then
+      ok "la regola preesistente 8080/tcp è intatta ($FW_NAME)"
     else
-      fail "il rollback ha rimosso una regola ufw che non aveva aperto lui"
+      fail "il rollback ha rimosso una regola $FW_NAME che non aveva aperto lui"
     fi
   fi
 
