@@ -2,7 +2,7 @@
 name = "odoo-installer"
 version = "2.2.0"
 edition = "2021"
-description = "Installer Odoo con rollback chirurgico (port Rust)"
+description = "Installer Odoo con rollback chirurgico (Ubuntu/Debian/Fedora)"
 license = "MIT"
 
 # Metadati per `cargo deb`: producono un .deb che deposita SOLO il binario CLI
@@ -17,7 +17,8 @@ maintainer = "Omisen"
 copyright = "2026, Omisen"
 license-file = ["LICENSE", "0"]
 extended-description = """\
-Installer per Odoo (16/17/18/19) su Ubuntu/Debian, con rollback transazionale. \
+Installer per Odoo (16/17/18/19) su Ubuntu, Debian e Fedora, con rollback \
+transazionale. \
 Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, \
 systemd e Nginx opzionale; annulla in modo pulito in caso di errore. \
 Il pacchetto installa solo il tool a riga di comando: l'installazione di Odoo \
@@ -28,6 +29,23 @@ depends = "$auto"
 assets = [
     ["target/release/odoo-installer", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/odoo-installer/README", "644"],
+]
+
+# Metadati per `cargo generate-rpm`: la controparte rpm del blocco sopra, con la
+# stessa promessa — il pacchetto deposita SOLO il binario CLI, non installa
+# servizi, non crea utenti, non tocca PostgreSQL/nginx. Quelle cose le fa
+# l'installer a runtime, ed è la ragione per cui non ci sono `requires`: il
+# binario è musl statico e non dipende da nulla del sistema.
+#
+# `assets` non eredita da `[package.metadata.deb]`: i due strumenti non si
+# parlano, e i percorsi vanno scritti due volte. C'è un test che li confronta,
+# perché due liste che devono coincidere e nessuno che lo verifichi è il modo
+# in cui si finisce per pubblicare un `.rpm` che non contiene il binario.
+[package.metadata.generate-rpm]
+summary = "Installer Odoo con rollback chirurgico (Ubuntu/Debian/Fedora)"
+assets = [
+    { source = "target/release/odoo-installer", dest = "/usr/bin/odoo-installer", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/odoo-installer/README", mode = "644" },
 ]
 
 [lib]

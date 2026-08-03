@@ -85,6 +85,26 @@ sudo odoo-installer                                          # ora è nel PATH
 sudo odoo-installer --config production.env --with-nginx
 ```
 
+### Opzione A-ter — pacchetto `.rpm` (esperienza `dnf` nativa)
+
+Su Fedora, la stessa cosa con l'altra confezione. È **lo stesso binario** del `.deb` e del
+`tar.gz` — musl statico, nessuna dipendenza — impacchettato per l'altro gestore.
+
+```bash
+VER=v2.2.0                       # sostituisci con l'ultima versione
+rpm=odoo-installer-2.2.0-1.x86_64.rpm
+base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
+
+curl -fsSL -O "${base}/${rpm}" -O "${base}/${rpm}.sha256"
+sha256sum -c "${rpm}.sha256"     # deve dire: OK
+
+sudo dnf install ./"${rpm}"
+
+sudo odoo-installer                                          # ora è nel PATH
+```
+
+Rimovibile con `sudo dnf remove odoo-installer`. Come il `.deb`, deposita **solo** il binario CLI.
+
 ### Opzione B — build da sorgente
 
 ```bash
@@ -482,6 +502,7 @@ minuti per job. Copertura e limiti:
 |---|---|---|
 | Ubuntu 22.04 / 24.04 | runner nativi (VM con systemd) | ciclo di vita completo: installazione, servizio attivo, Odoo che risponde, seconda installazione rifiutata, disinstallazione, sistema pulito |
 | Debian 12 / 11 | container | portabilità: nomi dei pacchetti apt, pin wkhtmltopdf per codename, e la pulizia. **Non** l'avvio del servizio: in un container systemd non è PID 1 |
+| Fedora 41 | container **privilegiato con systemd come PID 1** | ciclo di vita completo sull'altra famiglia: `dnf`, i nomi dei pacchetti rpm, l'**inizializzazione del cluster** PostgreSQL (che su Fedora il pacchetto non fa), il `.rpm` di wkhtmltopdf, e la disinstallazione. Serve PID 1 perché senza si fermerebbe *prima* dell'init del cluster — cioè prima della divergenza più rischiosa |
 | Con Nginx | runner nativo, `ufw` attivo | i cinque step Nginx: vhost, `nginx -t`, la porta 80 che serve Odoo, le regole firewall. In matrice sulle **due nature** del default site (symlink e file regolare), perché il rollback deve ripristinare entrambe |
 | Utente `odoo` preesistente | runner nativo | la home consegnata a un utente che c'è già, e il rifiuto esplicito quando `/opt/odoo` preesiste di root. Al rollback l'utente **sopravvive**: non era nostro |
 | Ctrl-C reale | runner nativo | un `SIGINT` mandato a metà installazione: l'installer deve annullare da sé e lasciare il sistema pulito |

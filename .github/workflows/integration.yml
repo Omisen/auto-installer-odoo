@@ -250,6 +250,117 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # Fedora: il ciclo di vita completo, con systemd come PID 1.
+  #
+  # GitHub non offre runner Fedora, e il job `container:` qui sopra non basta —
+  # lì systemd non è PID 1, quindi l'installazione si fermerebbe per costruzione
+  # a `setup-postgres`. Su Fedora quel limite morderebbe **più forte** che su
+  # Debian: si fermerebbe *prima* dell'init del cluster, cioè proprio la
+  # divergenza più rischiosa di tutto il lavoro multi-distro (M3).
+  #
+  # Da qui la scelta: un container avviato a mano con `/usr/sbin/init` come
+  # comando, `--privileged` e i cgroup dell'host. Le immagini Fedora includono
+  # systemd, quindi lì può fare PID 1 davvero — e il ciclo installazione →
+  # servizio attivo → rollback diventa verificabile.
+  #
+  # **Se systemd non si alza**, il job fallisce esplicitamente invece di
+  # degradare a sonda in silenzio: un job che passa senza aver provato ciò per
+  # cui esiste è peggio di un job assente (la lezione di R7).
+  # ---------------------------------------------------------------------------
+  fedora:
+    name: install + rollback (${{ matrix.image }})
+    needs: build-musl
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ["fedora:41"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: odoo-installer-musl
+          path: bin
+
+      - name: Avvia il container con systemd come PID 1
+        run: |
+          set -eux
+          chmod +x bin/odoo-installer
+          docker run -d --name fedora-test \
+            --privileged \
+            --cgroupns=host \
+            -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
+            -v "$GITHUB_WORKSPACE":/work \
+            -w /work \
+            "${{ matrix.image }}" /usr/sbin/init
+
+          # systemd ci mette qualche secondo ad arrivare a regime. `degraded` va
+          # bene: in un container alcune unit non partono (e non ci servono), ma
+          # il gestore dei servizi funziona — che è tutto ciò che l'installer
+          # chiede.
+          for _ in $(seq 1 30); do
+            stato="$(docker exec fedora-test systemctl is-system-running 2>/dev/null || true)"
+            case "$stato" in running|degraded) break ;; esac
+            sleep 2
+          done
+
+          stato="$(docker exec fedora-test systemctl is-system-running 2>/dev/null || true)"
+          echo "systemd: ${stato:-non disponibile}"
+          case "$stato" in
+            running|degraded) ;;
+            *)
+              echo "::error::systemd non è arrivato a regime nel container: senza PID 1 questo job proverebbe meno di quanto promette"
+              docker logs fedora-test | tail -50
+              exit 1
+              ;;
+          esac
+
+      - name: Prerequisiti del container
+        run: |
+          set -eux
+          # `sudo` (l'installer lo esige), `git` (clone dei sorgenti), `jq` (le
+          # asserzioni leggono il manifesto), `procps-ng` (`ss`/`ps` per i
+          # preflight sulle porte). `systemd` c'è già: è il PID 1.
+          docker exec fedora-test dnf install -y --setopt=install_weak_deps=False \
+            sudo git jq procps-ng
+
+      - name: Utente non-root con sudo (come su una macchina vera)
+        run: |
+          set -eux
+          docker exec fedora-test useradd -m -s /bin/bash tester
+          docker exec fedora-test bash -c "echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester"
+          docker exec fedora-test chmod 440 /etc/sudoers.d/tester
+          docker exec fedora-test chown -R tester:tester /work
+
+      - name: Installazione + rollback reali
+        run: |
+          docker exec -u tester -w /work fedora-test \
+            env MODE=full BIN=./bin/odoo-installer \
+            bash scripts/ci/integration-test.sh
+
+      - name: Log dell'installer, se presente
+        if: always()
+        run: |
+          tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
+          docker cp "fedora-test:/var/log/odoo-installer.log" "installer-$tag.log" 2>/dev/null || true
+
+      - name: Carica il log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-fedora-${{ strategy.job-index }}
+          path: installer-*.log
+          if-no-files-found: ignore
+
+      - name: Ferma il container
+        if: always()
+        run: docker rm -f fedora-test || true
+
+  # ---------------------------------------------------------------------------
   # La fase Nginx, che nessuna esecuzione reale aveva mai toccato (B-V3-7).
   #
   # `configs/ci.env` ha `WITH_NGINX="false"`: i cinque step nginx uscivano al

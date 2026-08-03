@@ -97,14 +97,33 @@ pg_query() { sudo -u postgres psql -tAc "$1" 2>/dev/null || true; }
 
 pg_reachable() { sudo -u postgres psql -tAc 'select 1' >/dev/null 2>&1; }
 
+# La famiglia del gestore di pacchetti, letta dal sistema.
+#
+# Lo script gira su entrambe: rende per-famiglia le tre domande che dipendono dal
+# gestore — «è installato?», «cosa c'è installato?», «dove sta il default site di
+# nginx?» — e lascia tutto il resto invariato, perché tutto il resto non dipende
+# dal gestore.
+case "$(. /etc/os-release && echo "$ID")" in
+  fedora|rhel|centos|almalinux|rocky) PKG_FAMILY=rpm ;;
+  *)                                  PKG_FAMILY=deb ;;
+esac
+info "famiglia di pacchetti: $PKG_FAMILY"
+
 # "Installato" con la stessa definizione che usa l'installer
-# (`SystemOps::dpkg_is_installed`). Non è pedanteria: `dpkg -s` esce **0** anche
+# (`PackageManager::is_installed`). Non è pedanteria: `dpkg -s` esce **0** anche
 # su un pacchetto rimosso che ha ancora i file di configurazione
 # (`deinstall ok config-files`), e con quella definizione un purge mancato
 # potrebbe passare per riuscito. Le asserzioni devono misurare ciò che
 # l'installer considera presente, non qualcosa di simile.
+#
+# Su rpm il problema non si pone — non esiste lo stato «rimosso ma configurato»
+# — e `rpm -q` è già la domanda esatta.
 pkg_installed() {
-  dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
+  if [ "$PKG_FAMILY" = rpm ]; then
+    rpm -q -- "$1" >/dev/null 2>&1
+  else
+    dpkg-query -W -f='${Status}' "$1" 2>/dev/null | grep -q 'install ok installed'
+  fi
 }
 
 # --- fase 1: installazione ---------------------------------------------------
@@ -139,7 +158,16 @@ else
 fi
 
 # Nginx: cosa c'era al posto del default site, prima di noi (A-V3-5).
-DEFAULT_SITE=/etc/nginx/sites-enabled/default
+#
+# Su rpm il default site **non è un file separato**: è un blocco `server` dentro
+# `nginx.conf`, e l'installer non lo tocca (vedi `Fedora::nginx_layout`). Lì la
+# domanda non si pone, e fingere che si ponga produrrebbe asserzioni su un file
+# che non esiste — verdi per la ragione sbagliata.
+if [ "$PKG_FAMILY" = rpm ]; then
+  DEFAULT_SITE=/dev/null
+else
+  DEFAULT_SITE=/etc/nginx/sites-enabled/default
+fi
 if [ -L "$DEFAULT_SITE" ]; then
   DEFAULT_SITE_BEFORE="symlink:$(readlink "$DEFAULT_SITE")"
 elif [ -f "$DEFAULT_SITE" ]; then
@@ -155,15 +183,25 @@ fi
 # pacchetto che c'era prima deve mancare dopo**. Non dipende da cosa abbiamo
 # registrato noi, quindi non può passare per il motivo sbagliato.
 pkgs_installed_now() {
-  dpkg-query -W -f='${Package}\t${Status}\n' 2>/dev/null \
-    | awk -F'\t' '$2=="install ok installed"{print $1}' | sort -u
+  if [ "$PKG_FAMILY" = rpm ]; then
+    rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort -u
+  else
+    dpkg-query -W -f='${Package}\t${Status}\n' 2>/dev/null \
+      | awk -F'\t' '$2=="install ok installed"{print $1}' | sort -u
+  fi
 }
 pkgs_installed_now > "$WORK/pkgs-before.txt"
 info "pacchetti installati prima:     $(wc -l < "$WORK/pkgs-before.txt")"
 
 # ufw è ATTIVO? Solo allora `nginx-firewall` fa qualcosa: sui runner di default
 # ufw è installato ma inattivo, e lo step esce subito (A-V3-7 mai esercitato).
-if command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
+if [ "$PKG_FAMILY" = rpm ]; then
+  # firewalld: le verifiche sul firewall su questa famiglia non sono ancora
+  # scritte (il job Fedora nasce senza firewalld installato). Dichiararlo qui
+  # invece di far passare le asserzioni ufw a vuoto.
+  UFW_ACTIVE=0
+  [ "$WITH_NGINX" = "true" ] && info "famiglia rpm: le verifiche sul firewall non sono ancora scritte, saltate"
+elif command -v ufw >/dev/null 2>&1 && sudo ufw status 2>/dev/null | grep -q "Status: active"; then
   UFW_ACTIVE=1
   sudo ufw status | sed 's/^/  ufw· /'
 else

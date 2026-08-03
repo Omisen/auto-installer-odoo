@@ -135,14 +135,24 @@ fn fedora_is_accepted_from_its_minimum_version() {
 /// La soglia è aperta verso l'alto **anche** su Fedora — un rifiuto senza prova
 /// blocca il caso buono (A5.1-bis) — ma «accettiamo» non vuol dire «tacciamo».
 ///
-/// Finché la CI Fedora non esiste, `NEWEST_TESTED_FEDORA` vale «nessuna release
-/// provata» e l'avviso scatta **sempre**. È la verità, ed è l'informazione che
-/// serve a chi installa quando qualcosa non torna.
+/// Da M5 la CI gira il ciclo completo su **Fedora 41**, quindi quella release
+/// non è più «non provata»: l'avviso deve tacere lì e parlare oltre. Prima di
+/// M5 la costante valeva «nessuna release provata» e l'avviso scattava sempre —
+/// era la verità di allora, e il cambiamento è il senso della fase.
 #[test]
-fn every_fedora_is_flagged_as_untested_until_the_ci_exists() {
+fn only_a_fedora_newer_than_the_ci_one_is_flagged() {
     assert!(
-        is_newer_than_tested("fedora", "40"),
-        "nessuna Fedora è ancora stata provata dalla CI: va detto"
+        !is_newer_than_tested("fedora", "41"),
+        "la CI installa davvero su Fedora 41: avvisare qui sarebbe un allarme falso"
+    );
+    assert!(
+        !is_newer_than_tested("fedora", "40"),
+        "40 è la soglia minima e non è più recente della provata"
+    );
+    assert!(
+        is_newer_than_tested("fedora", "42"),
+        "una release oltre quella provata va segnalata: è l'informazione che serve \
+         quando i nomi dei pacchetti o il pin di wkhtmltopdf non tornano"
     );
     assert!(is_newer_than_tested("fedora", "99"));
 }

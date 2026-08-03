@@ -211,7 +211,7 @@ fn the_integration_script_is_executable_and_syntactically_valid() {
 
 const WORKFLOW: &str = ".github/workflows/integration.yml";
 
-/// `NEWEST_TESTED_UBUNTU` / `NEWEST_TESTED_DEBIAN` dicono all'utente su cosa
+/// `NEWEST_TESTED_*` dicono all'utente su cosa
 /// l'installer viene provato davvero. Se divergessero dalla matrice della CI,
 /// l'avviso mentirebbe in una delle due direzioni: tacerebbe su una release non
 /// provata, o allarmerebbe su una che proviamo.
@@ -220,7 +220,9 @@ const WORKFLOW: &str = ".github/workflows/integration.yml";
 /// test lo rende obbligatorio invece che auspicabile.
 #[test]
 fn the_newest_tested_releases_match_the_ci_matrix() {
-    use odoo_installer::checks::{NEWEST_TESTED_DEBIAN, NEWEST_TESTED_UBUNTU};
+    use odoo_installer::checks::{
+        NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_UBUNTU,
+    };
 
     let wf = std::fs::read_to_string(WORKFLOW).expect("il workflow di integrazione deve esistere");
 
@@ -245,6 +247,19 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
         debian_max, NEWEST_TESTED_DEBIAN,
         "la CI gira su Debian {debian_max:?} ma la costante dice {NEWEST_TESTED_DEBIAN:?}"
     );
+
+    // Fedora: `image: ["fedora:41"]`. La terza famiglia entra nella stessa
+    // guardia delle altre due — se restasse fuori, la costante potrebbe
+    // divergere dalla matrice senza che nulla lo dica, ed è esattamente la
+    // situazione che questo test esiste per impedire.
+    let fedora_max = versions_in(&wf, "fedora:")
+        .into_iter()
+        .max()
+        .expect("la CI deve girare su almeno una Fedora");
+    assert_eq!(
+        fedora_max, NEWEST_TESTED_FEDORA,
+        "la CI gira su Fedora {fedora_max:?} ma la costante dice {NEWEST_TESTED_FEDORA:?}"
+    );
 }
 
 /// Tutte le versioni che seguono `prefisso` nel testo, come `(major, minor)`.
@@ -267,4 +282,93 @@ fn versions_in(text: &str, prefisso: &str) -> Vec<(u32, u32)> {
         out.push((major, minor));
     }
     out
+}
+
+// --- M5: le due confezioni devono contenere la stessa cosa ------------------
+
+/// `.deb` e `.rpm` depositano **lo stesso binario nello stesso posto**.
+///
+/// I due strumenti (`cargo deb`, `cargo generate-rpm`) non si parlano e leggono
+/// blocchi di metadati diversi: la lista degli asset è scritta due volte, in due
+/// sintassi diverse, nello stesso file. Due liste che devono coincidere e
+/// nessuno che lo verifichi è il modo in cui si finisce per pubblicare un `.rpm`
+/// che non contiene il binario — e nessuno se ne accorge finché un utente non
+/// prova a installarlo.
+///
+/// Non si verifica il *contenuto* dei pacchetti (servirebbe generarli, e i due
+/// strumenti non sono installati qui): si verifica che le due dichiarazioni
+/// promettano la stessa cosa.
+#[test]
+fn the_deb_and_the_rpm_ship_the_same_binary() {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+
+    let blocco = |intestazione: &str| -> String {
+        let inizio = manifest
+            .find(intestazione)
+            .unwrap_or_else(|| panic!("manca il blocco {intestazione}"));
+        let resto = &manifest[inizio + intestazione.len()..];
+        let fine = resto.find("\n[").unwrap_or(resto.len());
+        resto[..fine].to_string()
+    };
+
+    let deb = blocco("[package.metadata.deb]");
+    let rpm = blocco("[package.metadata.generate-rpm]");
+
+    for (nome, testo, destinazione) in [
+        // cargo-deb: ["sorgente", "destinazione/", "mode"]
+        ("deb", &deb, "usr/bin/"),
+        // cargo-generate-rpm: { source, dest, mode }
+        ("rpm", &rpm, "/usr/bin/odoo-installer"),
+    ] {
+        assert!(
+            testo.contains("target/release/odoo-installer"),
+            "{nome}: deve impacchettare il binario compilato, non altro"
+        );
+        assert!(
+            testo.contains(destinazione),
+            "{nome}: il binario deve finire in /usr/bin, o il comando non è nel PATH"
+        );
+        assert!(
+            testo.contains("755"),
+            "{nome}: un binario senza bit di esecuzione non è un binario"
+        );
+        assert!(
+            testo.contains("README"),
+            "{nome}: la doc accompagna il pacchetto in entrambe le confezioni"
+        );
+    }
+
+    // La promessa che vale per tutte e due: impacchettano il TOOL, non Odoo.
+    // Nessun servizio, nessuna dipendenza su postgres/nginx — quelle le crea
+    // l'installer a runtime, ed è ciò che rende il pacchetto innocuo da
+    // installare.
+    //
+    // Si guardano le **righe di dichiarazione**, non il testo intero: la
+    // descrizione nomina PostgreSQL e nginx a ragione (l'installer li
+    // configura), e un controllo che cercasse quelle parole ovunque
+    // fallirebbe su una frase corretta. Prima versione di questo test: proprio
+    // così.
+    let dichiarazioni = |testo: &str, chiavi: &[&str]| -> String {
+        testo
+            .lines()
+            .filter(|riga| {
+                let r = riga.trim_start();
+                chiavi.iter().any(|k| r.starts_with(k))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    for (nome, testo) in [("deb", &deb), ("rpm", &rpm)] {
+        assert!(
+            !testo.contains("systemd-units"),
+            "{nome}: il pacchetto non installa servizi"
+        );
+        let deps = dichiarazioni(testo, &["depends", "requires", "recommends", "suggests"]);
+        assert!(
+            !deps.contains("postgresql") && !deps.contains("nginx") && !deps.contains("python"),
+            "{nome}: nessuna dipendenza su ciò che l'installer gestisce a runtime, \
+             trovato: {deps}"
+        );
+    }
 }

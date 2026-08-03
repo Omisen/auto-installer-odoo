@@ -102,3 +102,40 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" "$DEB" "$DEB.sha256" --clobber
+
+  # Il .rpm, per la famiglia Fedora: stessa promessa del .deb — impacchetta il
+  # TOOL, non Odoo. Chi vuole `dnf install ./odoo-installer-x.y.z.x86_64.rpm` e
+  # il comando nel PATH usa questo.
+  #
+  # Nessuna dipendenza dichiarata: il binario è musl statico, ed è lo **stesso
+  # artefatto** che finisce nel .deb e nel tar.gz. Un solo binario, tre
+  # confezioni.
+  rpm:
+    needs: create-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+      - name: musl toolchain
+        run: sudo apt-get update && sudo apt-get install -y musl-tools
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
+      - name: Installa cargo-generate-rpm
+        run: cargo install cargo-generate-rpm --locked
+      - name: Build release (musl, statico)
+        run: cargo build --release --target x86_64-unknown-linux-musl --locked
+      - name: Genera il .rpm (senza ricompilare)
+        run: cargo generate-rpm --target x86_64-unknown-linux-musl
+      - name: Checksum SHA-256
+        run: |
+          rpm="$(ls target/x86_64-unknown-linux-musl/generate-rpm/*.rpm)"
+          ( cd "$(dirname "$rpm")" && sha256sum "$(basename "$rpm")" > "$(basename "$rpm").sha256" )
+          echo "RPM=$rpm" >> "$GITHUB_ENV"
+      - name: Carica .rpm + checksum sulla Release
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh release upload "${GITHUB_REF_NAME}" "$RPM" "$RPM.sha256" --clobber
+

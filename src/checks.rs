@@ -239,12 +239,12 @@ pub const NEWEST_TESTED_UBUNTU: (u32, u32) = (24, 4);
 pub const NEWEST_TESTED_DEBIAN: (u32, u32) = (12, 0);
 /// L'ultima Fedora su cui la CI di integrazione gira davvero.
 ///
-/// **Oggi la CI Fedora non esiste** (arriva in M5): questa costante dice quindi
-/// «nessuna release provata», e ogni Fedora accettata produce l'avviso di
-/// [`is_newer_than_tested`]. È la verità, ed è l'informazione che serve a chi
-/// installa. Quando il job esisterà, qui andrà la sua release — e il test che
-/// lega le costanti alla matrice della CI coprirà anche questa.
-pub const NEWEST_TESTED_FEDORA: (u32, u32) = (0, 0);
+/// Il job `fedora` di `integration.yml` esegue il ciclo completo — installazione,
+/// servizio attivo, rollback — in un container con systemd come PID 1. Come per
+/// le altre due famiglie, questa costante **insegue la matrice del workflow**, e
+/// un test lo rende obbligatorio invece che auspicabile: se divergessero,
+/// l'avviso di [`is_newer_than_tested`] mentirebbe in una delle due direzioni.
+pub const NEWEST_TESTED_FEDORA: (u32, u32) = (41, 0);
 
 /// La release è **più recente** dell'ultima che abbiamo davvero provato?
 ///
