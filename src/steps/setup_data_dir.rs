@@ -50,7 +50,7 @@ use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::steps::generate_config;
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Snapshot persistito dello step.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -73,10 +73,6 @@ pub struct SetupDataDir {
 }
 
 impl SetupDataDir {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -92,12 +88,6 @@ impl SetupDataDir {
             &ctx.odoo_home,
             &generate_config::data_dir(ctx),
         )
-    }
-}
-
-impl Default for SetupDataDir {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

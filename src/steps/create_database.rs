@@ -17,7 +17,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Crea il database `db_name` (reversibile) con owner `db_user`.
 pub struct CreateDatabase {
@@ -26,21 +26,11 @@ pub struct CreateDatabase {
 }
 
 impl CreateDatabase {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
             prestate: PreState::Untracked,
         }
-    }
-}
-
-impl Default for CreateDatabase {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

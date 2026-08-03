@@ -71,7 +71,7 @@ use tracing::info;
 use crate::context::Context;
 use crate::error::StepError;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 const VENV_SUBDIR: &str = "sandbox";
 const REPO_SUBDIR: &str = "odoo";
@@ -86,10 +86,6 @@ pub struct InstallPythonRequirements {
 }
 
 impl InstallPythonRequirements {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -133,12 +129,6 @@ impl InstallPythonRequirements {
         self.ops.create_private_file(&path, content)?;
         self.ops.chown_named(&path, user, user)?;
         Ok(path)
-    }
-}
-
-impl Default for InstallPythonRequirements {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

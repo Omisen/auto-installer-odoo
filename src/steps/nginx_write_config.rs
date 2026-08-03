@@ -11,7 +11,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 const VHOST_TEMPLATE: &str = include_str!("../../templates/nginx.conf.tpl");
 const SITES_AVAILABLE: &str = "/etc/nginx/sites-available";
@@ -30,9 +30,6 @@ pub struct NginxWriteConfig {
 }
 
 impl NginxWriteConfig {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -47,12 +44,6 @@ impl NginxWriteConfig {
     /// atomico), con nome imprevedibile e creazione `O_EXCL | O_NOFOLLOW`.
     fn temp_path(dest: &std::path::Path) -> std::path::PathBuf {
         crate::system_ops::private_temp_path(dest, "odoo")
-    }
-}
-
-impl Default for NginxWriteConfig {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -192,7 +192,9 @@ fn the_cache_is_undone_after_everything_that_could_write_into_it() {
     // `setup-cache-dir` deve stare PRESTO nella sequenza per essere rimossa TARDI
     // nel rollback — dopo che il servizio è fermo, il venv è sparito e nessuno
     // può più ricreare la cache appena cancellata.
-    let names = odoo_installer::steps::canonical_step_names();
+    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+        .expect("la famiglia Debian ha un backend");
+    let names = odoo_installer::steps::canonical_step_names(&make_ops);
     let pos = |name: &str| {
         names
             .iter()

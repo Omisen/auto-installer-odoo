@@ -20,10 +20,9 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 const NGINX_SERVICE: &str = "nginx";
-const NGINX_PACKAGE: &str = "nginx";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NginxInstallSnapshot {
@@ -37,20 +36,16 @@ pub struct NginxInstall {
 }
 
 impl NginxInstall {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
+    /// Il pacchetto di nginx secondo il gestore di questa famiglia.
+    fn package(&self) -> String {
+        self.ops.packages().catalog().nginx
     }
+
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
             snap: NginxInstallSnapshot::default(),
         }
-    }
-}
-
-impl Default for NginxInstall {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -64,7 +59,7 @@ impl Step for NginxInstall {
             self.snap = NginxInstallSnapshot::default(); // tutto Untracked
             return Ok(());
         }
-        self.snap.installed = if self.ops.dpkg_is_installed(NGINX_PACKAGE) {
+        self.snap.installed = if self.ops.packages().is_installed(&self.package()) {
             PreState::Preexisting
         } else {
             PreState::Untracked
@@ -88,7 +83,7 @@ impl Step for NginxInstall {
             return Ok(());
         }
         if self.snap.installed == PreState::Untracked {
-            self.ops.apt_install(&[NGINX_PACKAGE])?;
+            self.ops.packages().install(&[self.package().as_str()])?;
             self.snap.installed = PreState::CreatedByUs;
         }
         if self.snap.enabled == PreState::Untracked {
@@ -115,12 +110,12 @@ impl Step for NginxInstall {
         // purge solo con --aggressive-rollback (coerenza D3).
         if self.snap.installed == PreState::CreatedByUs {
             if ctx.aggressive_rollback {
-                crate::steps::purge_with_dpkg_recovery(
-                    self.ops.as_ref(),
+                crate::steps::remove_with_recovery(
+                    self.ops.packages(),
                     "nginx-install",
-                    &[NGINX_PACKAGE],
+                    &[self.package().as_str()],
                 );
-                if let Err(e) = self.ops.apt_autoremove() {
+                if let Err(e) = self.ops.packages().remove_orphans() {
                     warn!(error = %e, "undo: autoremove fallito, proseguo (best-effort)");
                 }
             } else {

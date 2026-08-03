@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
+use odoo_installer::distro::ufw::rule_in_status as ufw_rule_in_status;
 use odoo_installer::state::{trust_verdict, InstallConfig};
-use odoo_installer::system_ops::ufw_rule_in_status;
 
 // --- A-V3-7: `80/tcp` non è dentro `8080/tcp` --------------------------------
 

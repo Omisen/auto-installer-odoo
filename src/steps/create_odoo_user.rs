@@ -28,7 +28,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{OwnerId, RealSystemOps, SystemOps, UserSpec};
+use crate::system_ops::{OwnerId, SystemOps, UserSpec};
 
 /// Permessi della home (owner rwx, group r-x, other ---).
 const HOME_MODE: u32 = 0o750;
@@ -53,10 +53,6 @@ pub struct CreateOdooUser {
 }
 
 impl CreateOdooUser {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     /// Costruttore con `SystemOps` iniettabile (usato dai test con un mock).
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
@@ -124,12 +120,6 @@ impl CreateOdooUser {
             user = ctx.odoo_user,
             home = ctx.odoo_home.display()
         )))
-    }
-}
-
-impl Default for CreateOdooUser {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

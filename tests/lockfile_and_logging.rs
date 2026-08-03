@@ -198,7 +198,8 @@ fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
         dry_run: false,
         ..Default::default()
     };
-    let mut step = PrepareOptRoot::new();
+    let mut step =
+        PrepareOptRoot::with_ops(Box::new(odoo_installer::system_ops::RealSystemOps::debian()));
     step.snapshot(&ctx).expect("snapshot");
     step.run(&ctx).expect("run");
 
@@ -239,7 +240,8 @@ fn lock_inside_the_home_is_what_made_the_undo_dead_code() {
         dry_run: false,
         ..Default::default()
     };
-    let mut step = PrepareOptRoot::new();
+    let mut step =
+        PrepareOptRoot::with_ops(Box::new(odoo_installer::system_ops::RealSystemOps::debian()));
     step.snapshot(&ctx).expect("snapshot");
     step.run(&ctx).expect("run");
     step.undo(&ctx).expect("undo");

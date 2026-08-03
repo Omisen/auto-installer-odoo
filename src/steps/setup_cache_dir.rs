@@ -51,7 +51,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Nome della directory cache nella home dell'utente `odoo`.
 const CACHE_SUBDIR: &str = ".cache";
@@ -75,10 +75,6 @@ pub struct SetupCacheDir {
 }
 
 impl SetupCacheDir {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -89,12 +85,6 @@ impl SetupCacheDir {
     /// `<odoo_home>/.cache`.
     pub fn cache_dir(ctx: &Context) -> std::path::PathBuf {
         ctx.odoo_home.join(CACHE_SUBDIR)
-    }
-}
-
-impl Default for SetupCacheDir {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -16,7 +16,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Template dell'unit, incorporato nel binario.
 const SERVICE_TEMPLATE: &str = include_str!("../../templates/odoo.service.tpl");
@@ -42,9 +42,15 @@ pub struct SetupSystemd {
 }
 
 impl SetupSystemd {
-    pub fn new() -> Self {
+    /// Costruttore di **produzione**: attende che il servizio si assesti prima di
+    /// verificarne lo stato.
+    ///
+    /// [`Self::with_ops`] azzera l'attesa perché i test non devono dormire; usarlo
+    /// per il `run` farebbe interrogare `is-active` nell'istante stesso dello
+    /// start, cioè quando un servizio reale non è ancora salito.
+    pub fn for_run(ops: Box<dyn SystemOps>) -> Self {
         Self {
-            ops: Box::new(RealSystemOps::new()),
+            ops,
             settle_secs: DEFAULT_SETTLE_SECS,
             snap: SystemdSnapshot::default(),
         }
@@ -80,12 +86,6 @@ impl SetupSystemd {
         if self.settle_secs > 0 {
             std::thread::sleep(std::time::Duration::from_secs(self.settle_secs));
         }
-    }
-}
-
-impl Default for SetupSystemd {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

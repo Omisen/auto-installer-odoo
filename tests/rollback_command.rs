@@ -107,6 +107,15 @@ fn chain_from_factory(model: &SystemModel, names: &[&str]) -> Vec<Box<dyn Step>>
 /// `odoo-installer rollback` dopo un'**interruzione**. Il caso "installazione
 /// conclusa e poi disinstallata" ha il suo test dedicato
 /// (`a_successful_installation_leaves_a_state_that_can_still_be_rolled_back`).
+/// La sequenza canonica non dipende dalla famiglia (una sola per tutte), ma per
+/// costruirla serve comunque una fabbrica di `ops`: qui quella di produzione,
+/// che nei costruttori non esegue alcun comando.
+fn canonical_len() -> usize {
+    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+        .expect("la famiglia Debian ha un backend");
+    steps::canonical_step_names(&make_ops).len()
+}
+
 fn install(model: &SystemModel, names: &[&str], ctx: &Context) {
     let mut steps = chain_from_factory(model, names);
     Installer::new()
@@ -141,8 +150,9 @@ fn the_factory_covers_the_whole_canonical_sequence() {
     // romperebbe nulla in installazione: si scoprirebbe mesi dopo, su una
     // macchina cliente, come "quel pezzo non è stato rimosso". Questo test lo
     // fa fallire subito.
-    let make_ops = steps::real_ops;
-    for name in steps::canonical_step_names() {
+    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+        .expect("la famiglia Debian ha un backend");
+    for name in steps::canonical_step_names(&make_ops) {
         assert!(
             steps::step_by_name(&name, &make_ops).is_some(),
             "'{name}' è nella sequenza canonica ma la factory non sa costruirlo: \
@@ -153,7 +163,8 @@ fn the_factory_covers_the_whole_canonical_sequence() {
 
 #[test]
 fn the_factory_rejects_an_unknown_name() {
-    let make_ops = steps::real_ops;
+    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+        .expect("la famiglia Debian ha un backend");
     assert!(steps::step_by_name("passo-inventato", &make_ops).is_none());
 }
 
@@ -244,10 +255,10 @@ fn rollback_from_a_partial_state_undoes_exactly_those_steps() {
     let state = InstallState::load(&state_path).expect("load");
     assert_eq!(state.completed.len(), 5, "lo stato registra solo i 5 step");
     assert_eq!(
-        rollback::install_status(&state),
+        rollback::install_status(&state, canonical_len()),
         InstallStatus::Interrupted {
             done: 5,
-            total: steps::canonical_step_names().len()
+            total: canonical_len()
         },
         "il comando deve saper dire all'utente che l'installazione era a metà"
     );
@@ -565,7 +576,9 @@ fn the_state_file_carries_the_config_and_no_passwords() {
 
 #[test]
 fn install_status_recognises_a_complete_installation() {
-    let names = steps::canonical_step_names();
+    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+        .expect("la famiglia Debian ha un backend");
+    let names = steps::canonical_step_names(&make_ops);
     let state = InstallState {
         completed: names
             .iter()
@@ -580,7 +593,7 @@ fn install_status_recognises_a_complete_installation() {
         finished: false,
     };
     assert_eq!(
-        rollback::install_status(&state),
+        rollback::install_status(&state, canonical_len()),
         InstallStatus::Complete { steps: names.len() },
         "tutti gli step canonici presenti = installazione da disinstallare, \
          non residui da ripulire"
@@ -617,7 +630,7 @@ fn a_successful_installation_leaves_a_state_that_can_still_be_rolled_back() {
     let state = InstallState::load(&state_path).expect("lo stato deve sopravvivere al successo");
     assert!(state.finished, "l'installazione riuscita marca lo stato");
     assert_eq!(
-        rollback::install_status(&state),
+        rollback::install_status(&state, canonical_len()),
         InstallStatus::Complete { steps: CHAIN.len() },
         "il flag ha la precedenza sul conteggio: questa catena è più corta di \
          quella canonica ma l'installazione è comunque completa"

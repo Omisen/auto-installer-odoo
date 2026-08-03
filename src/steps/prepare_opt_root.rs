@@ -46,7 +46,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Permessi della directory radice appena creata (owned root in attesa
 /// dell'utente).
@@ -67,22 +67,12 @@ pub struct PrepareOptRoot {
 }
 
 impl PrepareOptRoot {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     /// Costruttore con `SystemOps` iniettabile (usato dai test con un mock).
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
             prestate: PreState::default(),
         }
-    }
-}
-
-impl Default for PrepareOptRoot {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

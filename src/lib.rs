@@ -19,6 +19,7 @@ pub mod error;
 pub mod interrupt;
 pub mod lockfile;
 pub mod logging;
+pub mod packaging;
 pub mod progress;
 pub mod prompt;
 pub mod rollback;

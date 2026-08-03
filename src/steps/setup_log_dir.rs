@@ -13,7 +13,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Permessi della log dir (owner rwx, group r-x, other ---).
 const LOG_DIR_MODE: u32 = 0o750;
@@ -25,22 +25,12 @@ pub struct SetupLogDir {
 }
 
 impl SetupLogDir {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     /// Costruttore con `SystemOps` iniettabile (usato dai test con un mock).
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
             prestate: PreState::Untracked,
         }
-    }
-}
-
-impl Default for SetupLogDir {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -19,7 +19,7 @@ use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// La riga esatta che aggiungiamo (match `grep -Fqx`).
 const PATH_LINE: &str = r#"export PATH="$HOME/.local/bin:$PATH""#;
@@ -41,9 +41,6 @@ pub struct PatchBashrc {
 }
 
 impl PatchBashrc {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -61,12 +58,6 @@ impl PatchBashrc {
             StepError::Precondition(format!("impossibile determinare la home per '{user}'"))
         })?;
         Ok((user, std::path::PathBuf::from(home).join(".bashrc")))
-    }
-}
-
-impl Default for PatchBashrc {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

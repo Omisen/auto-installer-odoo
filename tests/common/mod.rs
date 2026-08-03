@@ -12,9 +12,12 @@ pub mod model;
 use std::cell::Cell;
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
+use odoo_installer::distro::{Distro, Firewall};
 use odoo_installer::error::StepError;
+use odoo_installer::packaging::{Availability, PackageCatalog, PackageManager};
 use odoo_installer::progress::ProgressReporter;
 use odoo_installer::system_ops::{
     Downloader, OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec,
@@ -261,6 +264,11 @@ pub type OpLog = Arc<Mutex<Vec<Op>>>;
 pub struct MockSystemOps {
     log: OpLog,
     cfg: MockConfig,
+    // I due confini del supporto multi-distro. Sono campi e non oggetti a sé
+    // perché `SystemOps::packages`/`distro` restituiscono riferimenti: il mock
+    // deve possederli, e condividerne lo stato (vedi `MockPackageManager`).
+    packages: MockPackageManager,
+    distro: MockDistro,
     // Stato del servizio con interior mutability: start/stop/enable/disable lo
     // aggiornano, così la verifica post-start di SetupPostgres funziona.
     active: Cell<bool>,
@@ -269,13 +277,6 @@ pub struct MockSystemOps {
     git_clone_calls: Cell<u32>,
     // Schema DB: flippa a true dopo odoo_init_base.
     db_initialized: Cell<bool>,
-    // Stato di dpkg: parte da cfg.dpkg_broken, lo rimettono a posto
-    // apt_fix_broken / dpkg_configure_all / apt_install_deb_file.
-    dpkg_broken: Cell<bool>,
-    // Indice apt: parte da cfg.apt_index_populated e lo accende `apt_update`.
-    // È ciò che rende il mock capace di riprodurre la sequenza reale
-    // "bootstrap aggiorna → i deps trovano i candidati" (A5.1-bis).
-    index_populated: Cell<bool>,
 }
 
 /// L'errore che apt restituisce quando `dpkg` è in stato inconsistente —
@@ -302,17 +303,29 @@ impl MockSystemOps {
         let active = Cell::new(cfg.service_active);
         let enabled = Cell::new(cfg.service_enabled);
         let db_initialized = Cell::new(cfg.db_initialized);
-        let dpkg_broken = Cell::new(cfg.dpkg_broken);
-        let index_populated = Cell::new(cfg.apt_index_populated);
+        let dpkg_broken = Rc::new(Cell::new(cfg.dpkg_broken));
+        let index_populated = Rc::new(Cell::new(cfg.apt_index_populated));
+        let packages = MockPackageManager {
+            log: Arc::clone(&log),
+            cfg: cfg.clone(),
+            dpkg_broken: Rc::clone(&dpkg_broken),
+            index_populated: Rc::clone(&index_populated),
+        };
+        let distro = MockDistro {
+            firewall: MockFirewall {
+                log: Arc::clone(&log),
+                cfg: cfg.clone(),
+            },
+        };
         MockSystemOps {
             log,
             cfg,
+            packages,
+            distro,
             active,
             enabled,
             git_clone_calls: Cell::new(0),
             db_initialized,
-            dpkg_broken,
-            index_populated,
         }
     }
 
@@ -337,6 +350,177 @@ impl MockSystemOps {
                 stderr: stderr.to_string(),
             }
         }
+    }
+}
+
+/// Il gestore di pacchetti del mock.
+///
+/// Vive accanto a [`MockSystemOps`] e ne **condivide** il log e lo stato
+/// mutabile (`dpkg_broken`, `index_populated`): i test asseriscono su una sola
+/// sequenza di `Op`, e la sequenza reale intreccia comandi di packaging e non.
+/// Due log separati renderebbero inverificabile proprio l'ordine — che è ciò
+/// che il pattern delta e il recovery di `dpkg` mettono in gioco.
+pub struct MockPackageManager {
+    log: OpLog,
+    cfg: MockConfig,
+    dpkg_broken: Rc<Cell<bool>>,
+    index_populated: Rc<Cell<bool>>,
+}
+
+impl MockPackageManager {
+    fn record(&self, op: Op) {
+        if let Ok(mut entries) = self.log.lock() {
+            entries.push(op);
+        }
+    }
+}
+
+impl PackageManager for MockPackageManager {
+    fn is_installed(&self, pkg: &str) -> bool {
+        self.cfg.installed_packages.contains(pkg)
+    }
+    fn refresh_index(&self) -> Result<(), StepError> {
+        self.record(Op::AptUpdate);
+        if self.cfg.apt_update_fails {
+            return Err(StepError::CommandFailed {
+                command: "apt-get update".to_string(),
+                status: "100".to_string(),
+                stderr: "E: Some index files failed to download (simulato)".to_string(),
+            });
+        }
+        // L'update popola l'indice: da qui in poi le interrogazioni rispondono.
+        self.index_populated.set(true);
+        Ok(())
+    }
+    /// Risponde come apt: prima il candidato reale, poi il ripiego virtuale.
+    ///
+    /// Senza indice **nessuna** interrogazione risponde — è il caso che in campo
+    /// ha prodotto il falso positivo su un pacchetto standard (A5.1-bis), e il
+    /// mock deve saperlo riprodurre o quel difetto tornerebbe invisibile.
+    fn availability(&self, pkg: &str) -> Availability {
+        if !self.index_populated.get() {
+            return Availability::Absent;
+        }
+        if self.cfg.virtual_packages.contains(pkg) {
+            return Availability::VirtualOnly;
+        }
+        if self.cfg.packages_without_candidate.contains(pkg) {
+            return Availability::Absent;
+        }
+        Availability::Real
+    }
+    fn index_is_queryable(&self) -> bool {
+        self.index_populated.get()
+    }
+    fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        self.record(Op::AptInstall(pkgs.iter().map(|s| s.to_string()).collect()));
+        Ok(())
+    }
+    fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        self.record(Op::AptPurge(pkgs.iter().map(|s| s.to_string()).collect()));
+        // Modella A-RT-2: con dpkg rotto apt si rifiuta di operare, finché un
+        // fix-broken (o un `dpkg --configure -a`) non lo rimette a posto.
+        if self.dpkg_broken.get() {
+            return Err(unmet_dependencies("apt-get purge"));
+        }
+        Ok(())
+    }
+    fn remove_orphans(&self) -> Result<(), StepError> {
+        self.record(Op::AptAutoremove);
+        Ok(())
+    }
+    fn try_repair(&self) -> Result<(), StepError> {
+        self.record(Op::AptFixBroken);
+        if self.cfg.fix_broken_fails {
+            return Err(unmet_dependencies("apt-get install -f"));
+        }
+        self.dpkg_broken.set(false);
+        Ok(())
+    }
+    fn try_deep_repair(&self) -> Result<(), StepError> {
+        self.record(Op::DpkgConfigureAll);
+        if self.cfg.dpkg_configure_fails {
+            return Err(unmet_dependencies("dpkg --configure -a"));
+        }
+        self.dpkg_broken.set(false);
+        Ok(())
+    }
+    fn install_local_file(&self, path: &Path) -> Result<(), StepError> {
+        self.record(Op::AptInstallDebFile(path.to_path_buf()));
+        if self.cfg.apt_install_deb_fails {
+            return Err(StepError::CommandFailed {
+                command: "apt-get install -y -- <deb>".to_string(),
+                status: "100".to_string(),
+                stderr: "impossibile installare il .deb (simulato)".to_string(),
+            });
+        }
+        // apt risolve le dipendenze: dpkg resta consistente.
+        self.dpkg_broken.set(false);
+        Ok(())
+    }
+    fn catalog(&self) -> PackageCatalog {
+        // Il catalogo di produzione della famiglia Debian: i test sugli step
+        // devono vedere gli stessi nomi che vedrebbe un'installazione vera.
+        odoo_installer::packaging::apt::AptBackend.catalog()
+    }
+}
+
+/// Il firewall del mock.
+pub struct MockFirewall {
+    log: OpLog,
+    cfg: MockConfig,
+}
+
+impl MockFirewall {
+    fn record(&self, op: Op) {
+        if let Ok(mut entries) = self.log.lock() {
+            entries.push(op);
+        }
+    }
+}
+
+impl Firewall for MockFirewall {
+    fn available(&self) -> bool {
+        self.cfg.ufw_available
+    }
+    fn is_active(&self) -> bool {
+        self.cfg.ufw_active
+    }
+    /// Risponde **come il vero `ufw`**: rende un output in stile `ufw status` a
+    /// partire dalle regole configurate e lo interroga con la stessa funzione
+    /// che usa la produzione.
+    ///
+    /// Prima era `existing_ufw_rules.contains(rule)`, cioè un'appartenenza a un
+    /// insieme: una semantica ideale che il comando reale non ha. È il motivo
+    /// per cui nessun test poteva accorgersi di A-V3-7 — il confronto per
+    /// sottostringa sbagliava su `8080/tcp`, ma il mock non lo riproduceva.
+    fn rule_exists(&self, rule: &str) -> Result<bool, StepError> {
+        let mut status = String::from("Status: active\n\nTo   Action   From\n--   ------   ----\n");
+        for existing in &self.cfg.existing_ufw_rules {
+            status.push_str(&format!(
+                "{existing}                   ALLOW       Anywhere\n"
+            ));
+        }
+        Ok(odoo_installer::distro::ufw::rule_in_status(&status, rule))
+    }
+    fn allow(&self, rule: &str) -> Result<(), StepError> {
+        self.record(Op::UfwAllow(rule.to_string()));
+        Ok(())
+    }
+    fn delete(&self, rule: &str) -> Result<(), StepError> {
+        self.record(Op::UfwDelete(rule.to_string()));
+        Ok(())
+    }
+}
+
+/// Le convenzioni di distribuzione del mock.
+pub struct MockDistro {
+    firewall: MockFirewall,
+}
+
+impl Distro for MockDistro {
+    fn firewall(&self) -> &dyn Firewall {
+        &self.firewall
     }
 }
 
@@ -405,88 +589,14 @@ impl SystemOps for MockSystemOps {
         Ok(())
     }
 
-    fn dpkg_is_installed(&self, pkg: &str) -> bool {
-        self.cfg.installed_packages.contains(pkg)
+    fn packages(&self) -> &dyn PackageManager {
+        &self.packages
     }
-    fn apt_update(&self) -> Result<(), StepError> {
-        self.record(Op::AptUpdate);
-        if self.cfg.apt_update_fails {
-            return Err(StepError::CommandFailed {
-                command: "apt-get update".to_string(),
-                status: "100".to_string(),
-                stderr: "E: Some index files failed to download (simulato)".to_string(),
-            });
-        }
-        // L'update popola l'indice: da qui in poi le interrogazioni rispondono.
-        self.index_populated.set(true);
-        Ok(())
+
+    fn distro(&self) -> &dyn Distro {
+        &self.distro
     }
-    fn apt_has_real_candidate(&self, pkg: &str) -> bool {
-        // Senza indice nessuna interrogazione risponde: è il caso che in campo
-        // ha prodotto il falso positivo su un pacchetto standard.
-        if !self.index_populated.get() {
-            return false;
-        }
-        !self.cfg.packages_without_candidate.contains(pkg)
-            && !self.cfg.virtual_packages.contains(pkg)
-    }
-    fn apt_can_install(&self, pkg: &str) -> bool {
-        if !self.index_populated.get() {
-            return false;
-        }
-        // I virtuali sono installabili anche senza candidato reale.
-        self.cfg.virtual_packages.contains(pkg)
-            || !self.cfg.packages_without_candidate.contains(pkg)
-    }
-    fn apt_index_is_populated(&self) -> bool {
-        self.index_populated.get()
-    }
-    fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        self.record(Op::AptInstall(pkgs.iter().map(|s| s.to_string()).collect()));
-        Ok(())
-    }
-    fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        self.record(Op::AptPurge(pkgs.iter().map(|s| s.to_string()).collect()));
-        // Modella A-RT-2: con dpkg rotto apt si rifiuta di operare, finché un
-        // fix-broken (o un `dpkg --configure -a`) non lo rimette a posto.
-        if self.dpkg_broken.get() {
-            return Err(unmet_dependencies("apt-get purge"));
-        }
-        Ok(())
-    }
-    fn apt_autoremove(&self) -> Result<(), StepError> {
-        self.record(Op::AptAutoremove);
-        Ok(())
-    }
-    fn apt_fix_broken(&self) -> Result<(), StepError> {
-        self.record(Op::AptFixBroken);
-        if self.cfg.fix_broken_fails {
-            return Err(unmet_dependencies("apt-get install -f"));
-        }
-        self.dpkg_broken.set(false);
-        Ok(())
-    }
-    fn dpkg_configure_all(&self) -> Result<(), StepError> {
-        self.record(Op::DpkgConfigureAll);
-        if self.cfg.dpkg_configure_fails {
-            return Err(unmet_dependencies("dpkg --configure -a"));
-        }
-        self.dpkg_broken.set(false);
-        Ok(())
-    }
-    fn apt_install_deb_file(&self, path: &Path) -> Result<(), StepError> {
-        self.record(Op::AptInstallDebFile(path.to_path_buf()));
-        if self.cfg.apt_install_deb_fails {
-            return Err(StepError::CommandFailed {
-                command: "apt-get install -y -- <deb>".to_string(),
-                status: "100".to_string(),
-                stderr: "impossibile installare il .deb (simulato)".to_string(),
-            });
-        }
-        // apt risolve le dipendenze: dpkg resta consistente.
-        self.dpkg_broken.set(false);
-        Ok(())
-    }
+
     fn wkhtmltopdf_version(&self) -> Option<String> {
         self.cfg.wk_version.clone()
     }
@@ -568,39 +678,6 @@ impl SystemOps for MockSystemOps {
         } else {
             PathKind::Absent
         }
-    }
-    fn ufw_available(&self) -> bool {
-        self.cfg.ufw_available
-    }
-    fn ufw_is_active(&self) -> bool {
-        self.cfg.ufw_active
-    }
-    /// Risponde **come il vero `ufw`**: rende un output in stile `ufw status` a
-    /// partire dalle regole configurate e lo interroga con la stessa funzione
-    /// che usa la produzione.
-    ///
-    /// Prima era `existing_ufw_rules.contains(rule)`, cioè un'appartenenza a un
-    /// insieme: una semantica ideale che il comando reale non ha. È il motivo
-    /// per cui nessun test poteva accorgersi di A-V3-7 — il confronto per
-    /// sottostringa sbagliava su `8080/tcp`, ma il mock non lo riproduceva.
-    fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError> {
-        let mut status = String::from("Status: active\n\nTo   Action   From\n--   ------   ----\n");
-        for existing in &self.cfg.existing_ufw_rules {
-            status.push_str(&format!(
-                "{existing}                   ALLOW       Anywhere\n"
-            ));
-        }
-        Ok(odoo_installer::system_ops::ufw_rule_in_status(
-            &status, rule,
-        ))
-    }
-    fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
-        self.record(Op::UfwAllow(rule.to_string()));
-        Ok(())
-    }
-    fn ufw_delete(&self, rule: &str) -> Result<(), StepError> {
-        self.record(Op::UfwDelete(rule.to_string()));
-        Ok(())
     }
     fn nginx_test(&self) -> bool {
         self.cfg.nginx_test_ok

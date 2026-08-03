@@ -14,7 +14,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{self, Downloader, RealDownloader, RealSystemOps, SystemOps};
+use crate::system_ops::{self, Downloader, SystemOps};
 
 /// Versione pinnata (tag della release GitHub).
 const WK_VERSION: &str = "0.12.6.1-3";
@@ -145,15 +145,6 @@ pub struct InstallWkhtmltopdf {
 }
 
 impl InstallWkhtmltopdf {
-    pub fn new() -> Self {
-        Self::with_parts(
-            Box::new(RealSystemOps::new()),
-            Box::new(RealDownloader::new()),
-            default_checksums(),
-            std::env::temp_dir(),
-        )
-    }
-
     /// Costruttore con dipendenze iniettabili (usato dai test).
     pub fn with_parts(
         ops: Box<dyn SystemOps>,
@@ -255,14 +246,8 @@ impl InstallWkhtmltopdf {
         //
         // L'integrità resta garantita: apt installa **questo** file, che
         // abbiamo appena verificato contro il pin TOFU.
-        self.ops.apt_install_deb_file(tmp)?;
+        self.ops.packages().install_local_file(tmp)?;
         Ok(())
-    }
-}
-
-impl Default for InstallWkhtmltopdf {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -316,8 +301,8 @@ impl Step for InstallWkhtmltopdf {
             info!("undo (dry-run): apt purge {WK_PACKAGE}");
             return Ok(());
         }
-        crate::steps::purge_with_dpkg_recovery(
-            self.ops.as_ref(),
+        crate::steps::remove_with_recovery(
+            self.ops.packages(),
             "install-wkhtmltopdf",
             &[WK_PACKAGE],
         );

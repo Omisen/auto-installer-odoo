@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 
-use odoo_installer::checks::{self, OsInfo};
+use odoo_installer::checks;
 use odoo_installer::cli::{Cli, Command, RollbackArgs};
 use odoo_installer::config::{self, AdminConfirm, RawConfig, ResolvedConfig};
 use odoo_installer::context::Context;
@@ -88,7 +88,30 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     print_configuration(&ctx);
 
-    let mut steps = steps::build_steps();
+    // L'OS si legge **prima** di ogni altra cosa, perché da qui esce la famiglia
+    // e dalla famiglia escono i backend con cui gli step sono costruiti. È una
+    // lettura pura di `/etc/os-release`: non muta nulla e non richiede root,
+    // quindi può stare anche prima del ramo `--dry-run`, che della famiglia ha
+    // comunque bisogno per costruire il piano.
+    //
+    // NON si intromette fra i tre preflight di A-R9-1 (`check_caller` →
+    // `decide_start` → `run_environment_checks`): sta sopra tutti, non dipende
+    // dal manifesto e il suo errore non è confondibile con un altro problema.
+    let os_info = checks::check_os().map_err(|e| anyhow!(e))?;
+    ctx.os_family = os_info.family;
+
+    // I backend per questa famiglia. Il `None` si gestisce **una volta**, qui,
+    // con un messaggio: da lì in poi la fabbrica non può fallire, ed è ciò che
+    // rende possibile costruire gli step senza che nessuno di loro debba sapere
+    // su che distribuzione sta girando.
+    let make_ops = odoo_installer::system_ops::backend_factory(ctx.os_family).ok_or_else(|| {
+        anyhow!(
+            "questa versione dell'installer non ha un backend per la famiglia '{}': \
+             non posso installare né rimuovere pacchetti su questo sistema",
+            ctx.os_family
+        )
+    })?;
+    let mut steps = steps::build_steps(&make_ops);
 
     // --- dry-run: mostra il piano, non muta nulla, non persiste stato ---------
     // Il piano non ha progresso da mostrare: solo log.
@@ -143,11 +166,7 @@ fn run_install(cli: &Cli) -> Result<()> {
     // questa eccezione un'installazione interrotta dopo lo step 17 non sarebbe
     // più riprendibile — il resume di R8 morirebbe sul suo stesso servizio.
     let port_is_ours = matches!(&start, Start::Resume(state) if state.owns_the_http_port());
-    let os_info = run_environment_checks(&ctx, port_is_ours)?;
-    // La famiglia si valorizza qui, una volta sola, e da qui in poi è ciò che
-    // gli step useranno per decidere comandi e convenzioni — e ciò che finirà
-    // nel manifesto per gli `undo` di domani. Mai dedotta step per step.
-    ctx.os_family = os_info.family;
+    run_environment_checks(&ctx, port_is_ours, &make_ops)?;
     ctx.os_info = Some(os_info);
 
     // Conferma finale interattiva prima di mutare il sistema.
@@ -378,9 +397,11 @@ fn archive_manifest(path: &Path) -> Result<PathBuf> {
 /// ascolto è il nostro, e rifiutarsi di proseguire per un conflitto con noi
 /// stessi renderebbe irriprendibile proprio l'installazione che stiamo
 /// riprendendo.
-fn run_environment_checks(ctx: &Context, port_is_ours: bool) -> Result<OsInfo> {
-    let os_info = checks::check_os().map_err(|e| anyhow!(e))?;
-
+fn run_environment_checks(
+    ctx: &Context,
+    port_is_ours: bool,
+    make_ops: &dyn Fn() -> Box<dyn odoo_installer::system_ops::SystemOps>,
+) -> Result<()> {
     let required_gb = std::env::var("MIN_DISK_GB")
         .ok()
         .and_then(|s| s.parse::<u64>().ok())
@@ -396,15 +417,12 @@ fn run_environment_checks(ctx: &Context, port_is_ours: bool) -> Result<OsInfo> {
         // Se nginx sta già servendo, la 80 è sua: non è un conflitto, è il
         // programma che stiamo per configurare (A-V3-15). La domanda si fa solo
         // quando serve davvero.
-        let nginx_already_serving = ctx.with_nginx && {
-            use odoo_installer::system_ops::SystemOps;
-            odoo_installer::system_ops::RealSystemOps::new().service_is_active("nginx")
-        };
+        let nginx_already_serving = ctx.with_nginx && make_ops().service_is_active("nginx");
         checks::check_ports(ctx.port, ctx.with_nginx, nginx_already_serving)
             .map_err(|e| anyhow!(e))?;
     }
     checks::check_commands().map_err(|e| anyhow!(e))?;
-    Ok(os_info)
+    Ok(())
 }
 
 /// Stampa il riepilogo della configurazione finale (replica di
@@ -591,7 +609,27 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         eprintln!("Attenzione: {avviso}");
     }
 
-    print_rollback_summary(&state, &state_path, &config, args);
+    // I backend con cui gli `undo` lavoreranno: scelti dalla famiglia **del
+    // manifesto**, non da questa macchina. Se questo binario non ne ha uno, ci
+    // si ferma qui invece di eseguire i comandi di un'altra famiglia: rimuovere
+    // pacchetti con il gestore sbagliato non rimuove niente e lo dichiara fatto.
+    let make_ops =
+        odoo_installer::system_ops::backend_factory(config.os_family).ok_or_else(|| {
+            anyhow!(
+            "il manifesto descrive un'installazione su '{}', ma questa versione dell'installer \
+             non ha un backend per quella famiglia: non posso annullarla. Usa un binario che la \
+             supporti.",
+            config.os_family
+        )
+        })?;
+
+    print_rollback_summary(
+        &state,
+        &state_path,
+        &config,
+        args,
+        steps::canonical_step_names(&make_ops).len(),
+    );
 
     let interactive = prompt::is_interactive();
 
@@ -632,7 +670,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         } else {
             Box::new(LogReporter)
         };
-        rollback::rollback_from_state(&state, &ctx, &steps::real_ops, reporter.as_ref())
+        rollback::rollback_from_state(&state, &ctx, &make_ops, reporter.as_ref())
     };
 
     print_rollback_report(&report, args.dry_run);
@@ -672,10 +710,11 @@ fn print_rollback_summary(
     state_path: &Path,
     config: &odoo_installer::state::InstallConfig,
     args: &RollbackArgs,
+    canonical_steps: usize,
 ) {
     println!();
     println!("================================================================");
-    match rollback::install_status(state) {
+    match rollback::install_status(state, canonical_steps) {
         InstallStatus::Complete { steps } => {
             println!("Installazione COMPLETA ({steps} step): verrà disinstallata.")
         }

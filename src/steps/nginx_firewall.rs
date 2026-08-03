@@ -14,7 +14,7 @@ use tracing::{info, warn};
 use crate::context::Context;
 use crate::error::StepError;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NginxFirewallSnapshot {
@@ -28,9 +28,6 @@ pub struct NginxFirewall {
 }
 
 impl NginxFirewall {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -48,21 +45,15 @@ impl NginxFirewall {
 
     /// ufw è utilizzabile (installato e attivo)?
     fn ufw_usable(&self) -> bool {
-        if !self.ops.ufw_available() {
+        if !self.ops.distro().firewall().available() {
             warn!("ufw non trovato: apertura firewall saltata (apri manualmente 80/443)");
             return false;
         }
-        if !self.ops.ufw_is_active() {
+        if !self.ops.distro().firewall().is_active() {
             warn!("ufw presente ma non attivo: apertura firewall saltata");
             return false;
         }
         true
-    }
-}
-
-impl Default for NginxFirewall {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -78,7 +69,7 @@ impl Step for NginxFirewall {
         }
         // Delta = regole desiderate che NON sono già presenti.
         for rule in Self::desired_rules(ctx) {
-            if !self.ops.ufw_rule_exists(rule)? {
+            if !self.ops.distro().firewall().rule_exists(rule)? {
                 self.snap.delta.push(rule.to_string());
             }
         }
@@ -96,7 +87,7 @@ impl Step for NginxFirewall {
             return Ok(());
         }
         for rule in &self.snap.delta {
-            self.ops.ufw_allow(rule)?;
+            self.ops.distro().firewall().allow(rule)?;
         }
         Ok(())
     }
@@ -108,7 +99,7 @@ impl Step for NginxFirewall {
         }
         // Rimuovi SOLO il delta: mai una regola preesistente del cliente.
         for rule in &self.snap.delta {
-            if let Err(e) = self.ops.ufw_delete(rule) {
+            if let Err(e) = self.ops.distro().firewall().delete(rule) {
                 warn!(rule = %rule, error = %e, "undo: rimozione regola ufw fallita, proseguo (best-effort)");
             }
         }

@@ -14,7 +14,9 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
+use odoo_installer::distro::{Distro, Firewall};
 use odoo_installer::error::StepError;
+use odoo_installer::packaging::{Availability, PackageCatalog, PackageManager};
 use odoo_installer::system_ops::{OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
 
 /// Stato del sistema modellato. `PartialEq` per confrontare inizio/fine.
@@ -77,21 +79,35 @@ pub struct SystemModel {
     /// altri) ma **fuori** da `ModelState`, quindi invisibile al confronto
     /// inizio/fine. Aggiornare l'indice non è un artefatto da annullare.
     apt_index_populated: Arc<Mutex<bool>>,
+    packages: ModelPackages,
+    distro: ModelDistro,
 }
 
 impl SystemModel {
     pub fn new(state: ModelState) -> Self {
         let apt_index_populated = Arc::new(Mutex::new(!state.apt_index_stale));
-        SystemModel {
-            state: Arc::new(Mutex::new(state)),
-            apt_index_populated,
-        }
+        Self::from_parts(Arc::new(Mutex::new(state)), apt_index_populated)
     }
     /// Un altro handle allo stesso stato (per un altro step).
     pub fn handle(&self) -> SystemModel {
+        Self::from_parts(
+            Arc::clone(&self.state),
+            Arc::clone(&self.apt_index_populated),
+        )
+    }
+    fn from_parts(state: Arc<Mutex<ModelState>>, apt_index_populated: Arc<Mutex<bool>>) -> Self {
         SystemModel {
-            state: Arc::clone(&self.state),
-            apt_index_populated: Arc::clone(&self.apt_index_populated),
+            packages: ModelPackages {
+                state: Arc::clone(&state),
+                apt_index_populated: Arc::clone(&apt_index_populated),
+            },
+            distro: ModelDistro {
+                firewall: ModelFirewall {
+                    state: Arc::clone(&state),
+                },
+            },
+            state,
+            apt_index_populated,
         }
     }
     /// Snapshot dello stato corrente (per il confronto inizio/fine).
@@ -137,6 +153,136 @@ fn enabled_sites(state: &ModelState) -> HashSet<PathBuf> {
         .collect()
 }
 
+/// Il gestore di pacchetti del modello: condivide lo stesso stato del
+/// [`SystemModel`] che lo possiede, così `apt-get install` di uno step si vede
+/// dall'undo di un altro — che è tutto il punto di questo modello.
+#[derive(Clone)]
+pub struct ModelPackages {
+    state: Arc<Mutex<ModelState>>,
+    apt_index_populated: Arc<Mutex<bool>>,
+}
+
+impl PackageManager for ModelPackages {
+    fn is_installed(&self, pkg: &str) -> bool {
+        self.state.lock().expect("l").packages.contains(pkg)
+    }
+    fn availability(&self, pkg: &str) -> Availability {
+        if !self.index_is_queryable() {
+            return Availability::Absent;
+        }
+        let s = self.state.lock().expect("l");
+        if s.virtual_packages.contains(pkg) {
+            Availability::VirtualOnly
+        } else if s.packages_without_candidate.contains(pkg) {
+            Availability::Absent
+        } else {
+            Availability::Real
+        }
+    }
+    fn index_is_queryable(&self) -> bool {
+        *self.apt_index_populated.lock().expect("l")
+    }
+    fn refresh_index(&self) -> Result<(), StepError> {
+        *self.apt_index_populated.lock().expect("l") = true;
+        Ok(())
+    }
+    fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        let mut s = self.state.lock().expect("l");
+        for p in pkgs {
+            s.packages.insert(p.to_string());
+        }
+        Ok(())
+    }
+    fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
+        let mut s = self.state.lock().expect("l");
+        // A-RT-2: su un dpkg rotto apt si rifiuta di operare. È ciò che sulla VM
+        // di prova lasciava installati i 24 pacchetti del delta.
+        if s.dpkg_broken {
+            return Err(unmet_dependencies());
+        }
+        for p in pkgs {
+            s.packages.remove(*p);
+            if *p == "wkhtmltox" {
+                s.wk_version = None;
+            }
+        }
+        Ok(())
+    }
+    fn remove_orphans(&self) -> Result<(), StepError> {
+        Ok(())
+    }
+    fn try_repair(&self) -> Result<(), StepError> {
+        let mut s = self.state.lock().expect("l");
+        // Installa le dipendenze mancanti e configura ciò che era a metà.
+        let deps = std::mem::take(&mut s.pending_deps);
+        s.packages.extend(deps);
+        s.dpkg_broken = false;
+        Ok(())
+    }
+    fn try_deep_repair(&self) -> Result<(), StepError> {
+        self.state.lock().expect("l").dpkg_broken = false;
+        Ok(())
+    }
+    fn install_local_file(&self, _path: &Path) -> Result<(), StepError> {
+        let mut s = self.state.lock().expect("l");
+        if s.dpkg_broken {
+            return Err(unmet_dependencies());
+        }
+        // apt risolve le dipendenze di sistema del .deb in un colpo solo: il
+        // pacchetto è configurato e dpkg resta consistente.
+        s.packages.insert("wkhtmltox".to_string());
+        let deps = std::mem::take(&mut s.pending_deps);
+        s.packages.extend(deps);
+        s.wk_version = Some("0.12.6.1".to_string());
+        Ok(())
+    }
+    fn catalog(&self) -> PackageCatalog {
+        odoo_installer::packaging::apt::AptBackend.catalog()
+    }
+}
+
+/// Il firewall del modello.
+#[derive(Clone)]
+pub struct ModelFirewall {
+    state: Arc<Mutex<ModelState>>,
+}
+
+impl Firewall for ModelFirewall {
+    fn available(&self) -> bool {
+        self.state.lock().expect("l").ufw_available
+    }
+    fn is_active(&self) -> bool {
+        self.state.lock().expect("l").ufw_active
+    }
+    fn rule_exists(&self, rule: &str) -> Result<bool, StepError> {
+        Ok(self.state.lock().expect("l").ufw_rules.contains(rule))
+    }
+    fn allow(&self, rule: &str) -> Result<(), StepError> {
+        self.state
+            .lock()
+            .expect("l")
+            .ufw_rules
+            .insert(rule.to_string());
+        Ok(())
+    }
+    fn delete(&self, rule: &str) -> Result<(), StepError> {
+        self.state.lock().expect("l").ufw_rules.remove(rule);
+        Ok(())
+    }
+}
+
+/// Le convenzioni di distribuzione del modello.
+#[derive(Clone)]
+pub struct ModelDistro {
+    firewall: ModelFirewall,
+}
+
+impl Distro for ModelDistro {
+    fn firewall(&self) -> &dyn Firewall {
+        &self.firewall
+    }
+}
+
 impl SystemOps for SystemModel {
     // --- query ---------------------------------------------------------------
     fn user_exists(&self, user: &str) -> bool {
@@ -155,25 +301,11 @@ impl SystemOps for SystemModel {
             s.paths.iter().any(|e| under(e, path)) || s.symlinks.iter().any(|e| under(e, path));
         Ok(!has_child)
     }
-    fn dpkg_is_installed(&self, pkg: &str) -> bool {
-        self.state.lock().expect("l").packages.contains(pkg)
+    fn packages(&self) -> &dyn PackageManager {
+        &self.packages
     }
-    fn apt_has_real_candidate(&self, pkg: &str) -> bool {
-        if !self.apt_index_is_populated() {
-            return false;
-        }
-        let s = self.state.lock().expect("l");
-        !s.packages_without_candidate.contains(pkg) && !s.virtual_packages.contains(pkg)
-    }
-    fn apt_can_install(&self, pkg: &str) -> bool {
-        if !self.apt_index_is_populated() {
-            return false;
-        }
-        let s = self.state.lock().expect("l");
-        s.virtual_packages.contains(pkg) || !s.packages_without_candidate.contains(pkg)
-    }
-    fn apt_index_is_populated(&self) -> bool {
-        *self.apt_index_populated.lock().expect("l")
+    fn distro(&self) -> &dyn Distro {
+        &self.distro
     }
     fn wkhtmltopdf_version(&self) -> Option<String> {
         self.state.lock().expect("l").wk_version.clone()
@@ -222,15 +354,6 @@ impl SystemOps for SystemModel {
             return PathKind::Other;
         }
         PathKind::Absent
-    }
-    fn ufw_available(&self) -> bool {
-        self.state.lock().expect("l").ufw_available
-    }
-    fn ufw_is_active(&self) -> bool {
-        self.state.lock().expect("l").ufw_active
-    }
-    fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError> {
-        Ok(self.state.lock().expect("l").ufw_rules.contains(rule))
     }
     fn nginx_test(&self) -> bool {
         true
@@ -395,60 +518,6 @@ impl SystemOps for SystemModel {
         entry.push('\n');
         Ok(())
     }
-    fn apt_update(&self) -> Result<(), StepError> {
-        *self.apt_index_populated.lock().expect("l") = true;
-        Ok(())
-    }
-    fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        let mut s = self.state.lock().expect("l");
-        for p in pkgs {
-            s.packages.insert(p.to_string());
-        }
-        Ok(())
-    }
-    fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        let mut s = self.state.lock().expect("l");
-        // A-RT-2: su un dpkg rotto apt si rifiuta di operare. È ciò che sulla VM
-        // di prova lasciava installati i 24 pacchetti del delta.
-        if s.dpkg_broken {
-            return Err(unmet_dependencies());
-        }
-        for p in pkgs {
-            s.packages.remove(*p);
-            if *p == "wkhtmltox" {
-                s.wk_version = None;
-            }
-        }
-        Ok(())
-    }
-    fn apt_autoremove(&self) -> Result<(), StepError> {
-        Ok(())
-    }
-    fn apt_fix_broken(&self) -> Result<(), StepError> {
-        let mut s = self.state.lock().expect("l");
-        // Installa le dipendenze mancanti e configura ciò che era a metà.
-        let deps = std::mem::take(&mut s.pending_deps);
-        s.packages.extend(deps);
-        s.dpkg_broken = false;
-        Ok(())
-    }
-    fn dpkg_configure_all(&self) -> Result<(), StepError> {
-        self.state.lock().expect("l").dpkg_broken = false;
-        Ok(())
-    }
-    fn apt_install_deb_file(&self, _path: &Path) -> Result<(), StepError> {
-        let mut s = self.state.lock().expect("l");
-        if s.dpkg_broken {
-            return Err(unmet_dependencies());
-        }
-        // apt risolve le dipendenze di sistema del .deb in un colpo solo: il
-        // pacchetto è configurato e dpkg resta consistente.
-        s.packages.insert("wkhtmltox".to_string());
-        let deps = std::mem::take(&mut s.pending_deps);
-        s.packages.extend(deps);
-        s.wk_version = Some("0.12.6.1".to_string());
-        Ok(())
-    }
     fn service_enable(&self, service: &str) -> Result<(), StepError> {
         self.state
             .lock()
@@ -495,18 +564,6 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn daemon_reload(&self) -> Result<(), StepError> {
-        Ok(())
-    }
-    fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
-        self.state
-            .lock()
-            .expect("l")
-            .ufw_rules
-            .insert(rule.to_string());
-        Ok(())
-    }
-    fn ufw_delete(&self, rule: &str) -> Result<(), StepError> {
-        self.state.lock().expect("l").ufw_rules.remove(rule);
         Ok(())
     }
     fn pg_create_role(&self, role: &str, _pw: Option<&str>) -> Result<(), StepError> {

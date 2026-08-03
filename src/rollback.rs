@@ -122,8 +122,12 @@ pub enum InstallStatus {
 /// canonica resta come ripiego per gli stati scritti prima che il flag
 /// esistesse: è un'euristica (la sequenza cambia fra versioni), quindi non ha
 /// la precedenza.
-pub fn install_status(state: &InstallState) -> InstallStatus {
-    let total = steps::canonical_step_names().len();
+///
+/// `total` è la lunghezza della sequenza canonica
+/// ([`steps::canonical_step_names`]), passata invece che ricavata qui dentro:
+/// così questa resta una funzione **pura**, verificabile senza costruire
+/// ventitré step — e senza dover nominare una famiglia per contare dei nomi.
+pub fn install_status(state: &InstallState, total: usize) -> InstallStatus {
     let done = state.completed.len();
     if state.finished || done >= total {
         InstallStatus::Complete { steps: done }

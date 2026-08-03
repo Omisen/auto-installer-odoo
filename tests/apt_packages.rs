@@ -6,12 +6,13 @@ use std::collections::HashSet;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
 use odoo_installer::context::Context;
+use odoo_installer::packaging::apt::{
+    BOOTSTRAP_PACKAGES, ODOO_DEPENDENCIES, ODOO_OPTIONAL_DEPENDENCIES,
+};
+use odoo_installer::packaging::PackageSpec;
 use odoo_installer::state::{InstallState, StepRecord};
 use odoo_installer::step::Step;
-use odoo_installer::steps::apt_packages::{
-    AptDeltaSnapshot, AptPackagesStep, PackageSpec, UndoPolicy, BOOTSTRAP_PACKAGES,
-    ODOO_DEPENDENCIES, ODOO_OPTIONAL_DEPENDENCIES,
-};
+use odoo_installer::steps::apt_packages::{AptDeltaSnapshot, AptPackagesStep, UndoPolicy};
 use odoo_installer::system_ops::{has_installable_candidate, total_package_names};
 
 use common::model::{ModelState, SystemModel};

@@ -42,7 +42,7 @@ use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
-use crate::system_ops::{PathKind, RealSystemOps, SystemOps};
+use crate::system_ops::{PathKind, SystemOps};
 
 const SITES_AVAILABLE: &str = "/etc/nginx/sites-available";
 const SITES_ENABLED: &str = "/etc/nginx/sites-enabled";
@@ -97,9 +97,6 @@ pub struct NginxEnableSite {
 }
 
 impl NginxEnableSite {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -232,12 +229,6 @@ impl NginxEnableSite {
                 }
             }
         }
-    }
-}
-
-impl Default for NginxEnableSite {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

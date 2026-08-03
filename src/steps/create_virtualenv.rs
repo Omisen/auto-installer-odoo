@@ -11,7 +11,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 const VENV_SUBDIR: &str = "sandbox";
 
@@ -22,10 +22,6 @@ pub struct CreateVirtualenv {
 }
 
 impl CreateVirtualenv {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -35,12 +31,6 @@ impl CreateVirtualenv {
 
     fn venv_dir(ctx: &Context) -> std::path::PathBuf {
         ctx.install_dir.join(VENV_SUBDIR)
-    }
-}
-
-impl Default for CreateVirtualenv {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

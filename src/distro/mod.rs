@@ -38,7 +38,65 @@
 //! auto-rilevare il gestore da quale binario esiste (su una macchina con
 //! entrambi darebbe la risposta sbagliata **in silenzio**).
 
+pub mod debian;
+pub mod ufw;
+
 use serde::{Deserialize, Serialize};
+
+use crate::error::StepError;
+
+/// Il confine **convenzioni di distribuzione**, secondo dei due.
+///
+/// Astrae ciò che diverge fra famiglie *senza* essere packaging: dove stanno i
+/// file, quali concetti esistono, quale strumento governa il firewall. Si
+/// ottiene dal confine esistente con
+/// [`SystemOps::distro`](crate::system_ops::SystemOps::distro), come il gestore
+/// di pacchetti: non è una seconda porta verso il sistema.
+///
+/// # Perché è separato da [`crate::packaging`]
+///
+/// Perché sono divergenze di **natura** diversa. «Con quale comando si installa
+/// un pacchetto» e «in quale directory nginx cerca i vhost» non hanno nulla in
+/// comune se non il fatto di dipendere dalla distribuzione: unirle darebbe
+/// un'astrazione che astrae due cose, e il primo che deve aggiungere una riga
+/// non saprebbe da che parte guardare.
+///
+/// # Cresce a fasi, e non prima di avere consumatori
+///
+/// Oggi espone solo il firewall. `layout()` (percorsi nginx) e
+/// `init_postgres_cluster()` arrivano con le fasi che li usano: un metodo senza
+/// chiamanti è codice che nessun test può esercitare, e in questo progetto è
+/// così che nascono i rami che non possono fallire.
+pub trait Distro {
+    /// Lo strumento di firewall di questa famiglia.
+    fn firewall(&self) -> &dyn Firewall;
+}
+
+/// Lo strumento di firewall, in cinque domande.
+///
+/// La mappatura è 1:1 sui comandi, e il **token della regola è lo stesso** sulle
+/// due famiglie: `ufw allow 80/tcp` e `firewall-cmd --add-port=80/tcp` accettano
+/// la stessa stringa, e la elencano nella stessa forma. Per questo lo step
+/// `nginx-firewall` — cioè il pattern delta, cioè la protezione — non cambia di
+/// una riga quando cambia lo strumento sotto.
+///
+/// È un trait e non un gruppo di costanti perché ciò che diverge sono i
+/// **comandi** e il loro modello (firewalld distingue runtime e permanente, e ha
+/// le zone): una costante non saprebbe esprimerlo, e comprimerlo in un metodo
+/// che «di solito» fa la cosa giusta è il tipo di scorciatoia da cui è nato
+/// A-V3-7.
+pub trait Firewall {
+    /// Lo strumento è installato?
+    fn available(&self) -> bool;
+    /// Lo strumento è **attivo**? Se non lo è, non tocchiamo il firewall.
+    fn is_active(&self) -> bool;
+    /// La regola è già presente? (Se sì, non è nostra e l'undo non la toccherà.)
+    fn rule_exists(&self, rule: &str) -> Result<bool, StepError>;
+    /// Apre la regola.
+    fn allow(&self, rule: &str) -> Result<(), StepError>;
+    /// Richiude la regola. Chiamata **solo** sul delta.
+    fn delete(&self, rule: &str) -> Result<(), StepError>;
+}
 
 /// La famiglia di distribuzione a cui appartiene il sistema.
 ///

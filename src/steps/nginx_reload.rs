@@ -17,7 +17,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 const NGINX_SERVICE: &str = "nginx";
 
@@ -33,20 +33,11 @@ pub struct NginxReload {
 }
 
 impl NginxReload {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
             snap: NginxReloadSnapshot::default(),
         }
-    }
-}
-
-impl Default for NginxReload {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

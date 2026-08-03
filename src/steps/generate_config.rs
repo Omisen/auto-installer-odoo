@@ -19,7 +19,7 @@ use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Template `odoo.conf`, incorporato nel binario.
 const CONFIG_TEMPLATE: &str = include_str!("../../templates/odoo.conf.tpl");
@@ -40,10 +40,6 @@ pub struct GenerateConfig {
 }
 
 impl GenerateConfig {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -67,12 +63,6 @@ impl GenerateConfig {
     /// che porta le password.
     fn temp_path(dest: &std::path::Path) -> std::path::PathBuf {
         crate::system_ops::private_temp_path(dest, "odoo.conf")
-    }
-}
-
-impl Default for GenerateConfig {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

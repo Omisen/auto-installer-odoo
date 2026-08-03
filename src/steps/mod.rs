@@ -10,10 +10,11 @@
 
 use tracing::{info, warn};
 
+use crate::packaging::PackageManager;
 use crate::step::Step;
-use crate::system_ops::{Downloader, RealDownloader, RealSystemOps, SystemOps};
+use crate::system_ops::{Downloader, RealDownloader, SystemOps};
 
-/// Purga pacchetti in un `undo`, **recuperando `dpkg`** se è in stato
+/// Rimuove pacchetti in un `undo`, **recuperando il gestore** se è in stato
 /// inconsistente. Best-effort: non fallisce mai, logga cosa resta.
 ///
 /// # Perché serve (A-RT-2, trovato in campo)
@@ -25,47 +26,56 @@ use crate::system_ops::{Downloader, RealDownloader, RealSystemOps, SystemOps};
 /// sistema non torna pulito — la promessa chirurgica violata proprio nello
 /// scenario in cui serve di più. Sulla VM di prova restarono 24 pacchetti.
 ///
-/// Perciò: `apt-get install -f` prima del purge (no-op innocuo se `dpkg` è già
-/// sano) e, se il purge fallisce lo stesso, un secondo tentativo dopo un
-/// `dpkg --configure -a`. Se nemmeno così funziona si prosegue — l'undo è
+/// Perciò: riparazione prima della rimozione (no-op innocuo se il gestore è già
+/// sano) e, se la rimozione fallisce lo stesso, un secondo tentativo dopo la
+/// riparazione profonda. Se nemmeno così funziona si prosegue — l'undo è
 /// best-effort (invariante 3) — ma si elenca **esattamente** cosa è rimasto,
 /// perché è materiale che l'utente dovrà rimuovere a mano.
 ///
-/// Vive qui e non in `SystemOps` perché è **politica di rollback**, non un
-/// comando di sistema: il confine resta una mappatura 1:1 sui comandi, e i
-/// test possono asserire la sequenza esatta.
-pub fn purge_with_dpkg_recovery(ops: &dyn SystemOps, step: &str, pkgs: &[&str]) {
+/// # È politica, non comando
+///
+/// Vive qui e non dietro [`PackageManager`] perché è **politica di rollback**:
+/// il confine resta una mappatura 1:1 sui comandi, e i test possono asserire la
+/// sequenza esatta. Su un gestore senza uno stato «scompattato ma non
+/// configurato», `try_repair`/`try_deep_repair` sono no-op e la sequenza
+/// degenera in «prova a rimuovere, riprova una volta, poi elenca i residui»:
+/// un degrado onesto, in cui la parte che conta davvero — **il report dei
+/// residui** — resta identica per tutte le famiglie.
+pub fn remove_with_recovery(pm: &dyn PackageManager, step: &str, pkgs: &[&str]) {
     if pkgs.is_empty() {
         return;
     }
 
     // Recovery preventivo: apt non opera su un dpkg rotto.
-    if let Err(e) = ops.apt_fix_broken() {
-        warn!(step, error = %e, "undo: fix-broken preventivo fallito, tento comunque il purge");
+    if let Err(e) = pm.try_repair() {
+        warn!(step, error = %e, "undo: riparazione preventiva fallita, tento comunque la rimozione");
     }
 
-    let Err(first) = ops.apt_purge(pkgs) else {
+    let Err(first) = pm.remove(pkgs) else {
         return;
     };
-    warn!(step, error = %first, "undo: purge fallito, tento il recovery di dpkg e riprovo");
+    warn!(step, error = %first, "undo: rimozione fallita, tento il recovery del gestore e riprovo");
 
     // `dpkg --configure -a` copre i pacchetti scompattati ma non configurati,
     // dove `apt-get install -f` da solo non basta.
-    if let Err(e) = ops.dpkg_configure_all() {
-        warn!(step, error = %e, "undo: dpkg --configure -a fallito");
+    if let Err(e) = pm.try_deep_repair() {
+        warn!(step, error = %e, "undo: riparazione profonda fallita");
     }
-    if let Err(e) = ops.apt_fix_broken() {
-        warn!(step, error = %e, "undo: fix-broken di recovery fallito");
+    if let Err(e) = pm.try_repair() {
+        warn!(step, error = %e, "undo: riparazione di recovery fallita");
     }
 
-    match ops.apt_purge(pkgs) {
-        Ok(()) => info!(step, "undo: purge riuscito dopo il recovery di dpkg"),
+    match pm.remove(pkgs) {
+        Ok(()) => info!(
+            step,
+            "undo: rimozione riuscita dopo il recovery del gestore"
+        ),
         Err(second) => warn!(
             step,
             error = %second,
             residui = ?pkgs,
-            "undo: purge fallito anche dopo il recovery di dpkg, proseguo (best-effort). \
-             Questi pacchetti restano installati: rimuovili a mano dopo aver sistemato dpkg \
+            "undo: rimozione fallita anche dopo il recovery del gestore, proseguo (best-effort). \
+             Questi pacchetti restano installati: rimuovili a mano dopo aver sistemato il gestore \
              (`sudo apt-get install -f`)"
         ),
     }
@@ -168,45 +178,80 @@ pub type OpsFactory<'a> = &'a dyn Fn() -> Box<dyn SystemOps>;
 /// funzioni, e un test di parità lo verifica — aggiungere uno step qui senza
 /// aggiungerlo là fa fallire la build dei test, non un rollback su una macchina
 /// cliente.
-pub fn build_steps() -> Vec<Box<dyn Step>> {
+///
+/// # Perché prende la fabbrica delle `ops`
+///
+/// Perché è così che la famiglia della distribuzione entra nel programma **una
+/// volta**, da `main`, invece di essere decisa dentro ventidue costruttori.
+/// `Step::new()` non esiste più: un costruttore cieco che desse apt a chiunque
+/// sarebbe il default silenzioso che il supporto multi-distro esiste per
+/// evitare.
+///
+/// # La sequenza è **una sola** per tutte le famiglie
+///
+/// La famiglia cambia *cosa fa* uno step, mai *quali step esistono*. Uno step
+/// inerte su una famiglia è un pattern che il progetto ha già (i cinque step
+/// nginx senza `--with-nginx`, `setup-log-dir` senza logfile) e il suo
+/// `PreState` resta `Untracked`, che è la verità. Sequenze diverse per famiglia
+/// significherebbero manifesti di forma diversa, e un rollback che deve
+/// indovinare con quale sequenza l'installazione era stata fatta.
+///
+/// **I nomi degli step non si rinominano, mai**: sono la chiave con cui si
+/// ricostruiscono gli step di installazioni già in campo.
+pub fn build_steps(make_ops: OpsFactory<'_>) -> Vec<Box<dyn Step>> {
     vec![
-        Box::new(prepare_opt_root::PrepareOptRoot::new()),
-        Box::new(create_odoo_user::CreateOdooUser::new()),
-        Box::new(setup_log_dir::SetupLogDir::new()),
+        Box::new(prepare_opt_root::PrepareOptRoot::with_ops(make_ops())),
+        Box::new(create_odoo_user::CreateOdooUser::with_ops(make_ops())),
+        Box::new(setup_log_dir::SetupLogDir::with_ops(make_ops())),
         // Presto di proposito: lo snapshot deve vedere la home PRIMA che
         // qualunque programma lanciato come `odoo` ci scriva una cache. Essere
         // presto qui significa essere tardi nell'undo, che è dove serve
         // (A-R5-3).
-        Box::new(setup_cache_dir::SetupCacheDir::new()),
-        Box::new(apt_packages::AptPackagesStep::bootstrap()),
-        Box::new(apt_packages::AptPackagesStep::odoo_dependencies()),
-        Box::new(install_wkhtmltopdf::InstallWkhtmltopdf::new()),
+        Box::new(setup_cache_dir::SetupCacheDir::with_ops(make_ops())),
+        Box::new(apt_packages::AptPackagesStep::bootstrap_with_ops(make_ops())),
+        Box::new(apt_packages::AptPackagesStep::odoo_dependencies_with_ops(
+            make_ops(),
+        )),
+        Box::new(install_wkhtmltopdf::InstallWkhtmltopdf::with_parts(
+            make_ops(),
+            Box::new(RealDownloader::new()) as Box<dyn Downloader>,
+            install_wkhtmltopdf::default_checksums(),
+            std::env::temp_dir(),
+        )),
         // PostgreSQL: undo inverso CreateDatabase → CreateDbRole → SetupPostgres.
-        Box::new(setup_postgres::SetupPostgres::new()),
-        Box::new(create_db_role::CreateDbRole::new()),
-        Box::new(create_database::CreateDatabase::new()),
+        Box::new(setup_postgres::SetupPostgres::with_ops(make_ops())),
+        Box::new(create_db_role::CreateDbRole::with_ops(make_ops())),
+        Box::new(create_database::CreateDatabase::with_ops(make_ops())),
         // Sorgenti: clone → venv → pip (undo pip no-op; venv rm; clone rm).
-        Box::new(clone_odoo_repo::CloneOdooRepo::new()),
-        Box::new(create_virtualenv::CreateVirtualenv::new()),
-        Box::new(install_python_requirements::InstallPythonRequirements::new()),
+        //
+        // `for_run` e non `with_ops`: il clone di produzione ha retry con
+        // backoff, quello dei test no. Vedi il doc di `CloneOdooRepo::for_run`.
+        Box::new(clone_odoo_repo::CloneOdooRepo::for_run(make_ops())),
+        Box::new(create_virtualenv::CreateVirtualenv::with_ops(make_ops())),
+        Box::new(install_python_requirements::InstallPythonRequirements::with_ops(make_ops())),
         // Config + init schema (undo init no-op: pulizia dal dropdb di Fase 5).
-        Box::new(generate_config::GenerateConfig::new()),
+        Box::new(generate_config::GenerateConfig::with_ops(make_ops())),
         // Il filestore va creato prima che Odoo lo crei da sé: solo così è un
         // artefatto registrato, e quindi annullabile (A-R5-3). Deve stare dopo
         // `create-database`, da cui legge se il DB è nostro.
-        Box::new(setup_data_dir::SetupDataDir::new()),
-        Box::new(initialize_odoo_database::InitializeOdooDatabase::new()),
+        Box::new(setup_data_dir::SetupDataDir::with_ops(make_ops())),
+        Box::new(initialize_odoo_database::InitializeOdooDatabase::with_ops(
+            make_ops(),
+        )),
         // Servizio systemd (undo: stop → disable → rm → daemon-reload).
-        Box::new(setup_systemd::SetupSystemd::new()),
+        // `for_run`: in produzione si attende che il servizio si assesti.
+        Box::new(setup_systemd::SetupSystemd::for_run(make_ops())),
         // Nginx (opzionale, gated): install → vhost → enable → firewall → reload.
-        Box::new(nginx_install::NginxInstall::new()),
-        Box::new(nginx_write_config::NginxWriteConfig::new()),
-        Box::new(nginx_enable_site::NginxEnableSite::new()),
-        Box::new(nginx_firewall::NginxFirewall::new()),
-        Box::new(nginx_reload::NginxReload::new()),
+        Box::new(nginx_install::NginxInstall::with_ops(make_ops())),
+        Box::new(nginx_write_config::NginxWriteConfig::with_ops(make_ops())),
+        Box::new(nginx_enable_site::NginxEnableSite::with_ops(make_ops())),
+        Box::new(nginx_firewall::NginxFirewall::with_ops(make_ops())),
+        Box::new(nginx_reload::NginxReload::with_ops(make_ops())),
         // Comando helper `odoo` + patch PATH nel .bashrc dell'utente.
-        Box::new(write_control_script::WriteControlScript::new()),
-        Box::new(patch_bashrc::PatchBashrc::new()),
+        Box::new(write_control_script::WriteControlScript::with_ops(
+            make_ops(),
+        )),
+        Box::new(patch_bashrc::PatchBashrc::with_ops(make_ops())),
     ]
 }
 
@@ -224,6 +269,12 @@ pub fn build_steps() -> Vec<Box<dyn Step>> {
 /// Il downloader di `install-wkhtmltopdf` è sempre quello reale: l'undo purga un
 /// pacchetto, non scarica nulla, quindi non c'è nulla da iniettare. Stessa
 /// ragione per la tabella dei checksum, presa dai pin di produzione.
+///
+/// Per lo stesso motivo `clone-odoo-repo` e `setup-systemd` si costruiscono con
+/// `with_ops` e non con `for_run`: i parametri che li distinguono — backoff fra i
+/// retry del clone, attesa di assestamento del servizio — servono al `run`, e qui
+/// si sta ricostruendo uno step **per annullarlo**. Rimuovere una directory e
+/// fermare un servizio non hanno bisogno di attese.
 pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step>> {
     let step: Box<dyn Step> = match name {
         "prepare-opt-root" => Box::new(prepare_opt_root::PrepareOptRoot::with_ops(make_ops())),
@@ -272,18 +323,16 @@ pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step
     Some(step)
 }
 
-/// Fabbrica di produzione: [`RealSystemOps`] per ogni step.
-pub fn real_ops() -> Box<dyn SystemOps> {
-    Box::new(RealSystemOps::new())
-}
-
 /// I nomi degli step della sequenza canonica, nell'ordine di esecuzione.
 ///
 /// Derivato da [`build_steps`] invece che scritto a mano: una lista parallela
 /// diventerebbe stantìa senza che nulla se ne accorga, e qui il costo è un giro
 /// di costruttori senza effetti collaterali.
-pub fn canonical_step_names() -> Vec<String> {
-    build_steps().iter().map(|s| s.name().to_string()).collect()
+pub fn canonical_step_names(make_ops: OpsFactory<'_>) -> Vec<String> {
+    build_steps(make_ops)
+        .iter()
+        .map(|s| s.name().to_string())
+        .collect()
 }
 
 pub mod apt_packages;

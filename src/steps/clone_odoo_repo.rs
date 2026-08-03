@@ -21,7 +21,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{OdooSourceState, RealSystemOps, SystemOps};
+use crate::system_ops::{OdooSourceState, SystemOps};
 
 const ODOO_GIT_URL: &str = "https://github.com/odoo/odoo.git";
 const REPO_SUBDIR: &str = "odoo";
@@ -51,13 +51,18 @@ pub struct CloneOdooRepo {
 }
 
 impl CloneOdooRepo {
-    pub fn new() -> Self {
-        let depth = env_u32("GIT_DEPTH", DEFAULT_DEPTH);
-        let retries = env_u32("GIT_CLONE_RETRIES", DEFAULT_RETRIES);
+    /// Costruttore di **produzione**: legge i parametri di rete dall'ambiente e
+    /// applica il backoff reale fra un tentativo di clone e il successivo.
+    ///
+    /// Non è la stessa cosa di [`Self::with_ops`], che azzera il backoff perché i
+    /// test non devono dormire. Costruire questo step per il `run` con il
+    /// costruttore dei test renderebbe il retry di R2 **inutile**: tre tentativi
+    /// istantanei su una rete che non risponde sono un tentativo solo.
+    pub fn for_run(ops: Box<dyn SystemOps>) -> Self {
         Self {
-            ops: Box::new(RealSystemOps::new()),
-            retries,
-            depth,
+            ops,
+            retries: env_u32("GIT_CLONE_RETRIES", DEFAULT_RETRIES),
+            depth: env_u32("GIT_DEPTH", DEFAULT_DEPTH),
             backoff_base_secs: DEFAULT_BACKOFF_SECS,
             snap: CloneSnapshot::default(),
             had_invalid_dir: false,
@@ -86,12 +91,6 @@ impl CloneOdooRepo {
                 failed_attempt as u64 * self.backoff_base_secs,
             ));
         }
-    }
-}
-
-impl Default for CloneOdooRepo {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

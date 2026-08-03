@@ -6,14 +6,17 @@
 //! L'undo rimuove **solo il delta** — i pacchetti che NON c'erano prima e che
 //! quindi abbiamo aggiunto noi — mai i preesistenti.
 //!
-//! Due configurazioni (una lista in un solo posto, come `_apt_packages_odoo`):
-//! - [`AptPackagesStep::bootstrap`] — utility comuni (git/curl/wget/gettext).
-//!   Undo **non purga** di default (decisione D3): non si disinstalla git/curl
-//!   da una macchina cliente per un rollback. Purga solo con
-//!   `--aggressive-rollback`.
-//! - [`AptPackagesStep::odoo_dependencies`] — i ~30 pacchetti dev di Odoo. È il
-//!   **delta pesante**: l'undo purga il delta, e **solo** il delta (nessun
-//!   `apt-get autoremove` globale — vedi `purge_delta`, A3.2).
+//! Due configurazioni, e la lista di ciascuna arriva dal **catalogo del gestore
+//! di pacchetti** ([`crate::packaging::PackageCatalog`]), non da una costante di
+//! questo file: i nomi dei pacchetti sono conoscenza del gestore quanto lo sono
+//! i comandi.
+//! - [`AptPackagesStep::bootstrap_with_ops`] — utility comuni
+//!   (git/curl/wget/gettext). Undo **non purga** di default (decisione D3): non
+//!   si disinstalla git/curl da una macchina cliente per un rollback. Purga solo
+//!   con `--aggressive-rollback`.
+//! - [`AptPackagesStep::odoo_dependencies_with_ops`] — i ~30 pacchetti dev di
+//!   Odoo. È il **delta pesante**: l'undo purga il delta, e **solo** il delta
+//!   (nessuna rimozione delle orfane — vedi `purge_delta`, A3.2).
 //!
 //! # Nomi di pacchetto portabili (A5.1)
 //!
@@ -26,20 +29,20 @@
 //!
 //! Perciò la lista non è di nomi ma di [`PackageSpec`]: un gruppo di
 //! **alternative in ordine di preferenza**. Lo `snapshot` risolve ogni gruppo a
-//! un nome concreto interrogando apt
-//! ([`SystemOps::apt_has_real_candidate`], con il ripiego di
-//! [`SystemOps::apt_can_install`] per i nomi virtuali), e da lì in poi tutto il
-//! resto della macchina — install, delta, purge, persistenza — lavora su nomi
-//! già risolti e non sa nemmeno che esistessero alternative.
+//! un nome concreto interrogando il gestore
+//! ([`PackageManager::availability`](crate::packaging::PackageManager::availability)),
+//! e da lì in poi tutto il resto della macchina — install, delta, purge,
+//! persistenza — lavora su nomi già risolti e non sa nemmeno che esistessero
+//! alternative.
 //!
 //! Le tre regole della risoluzione, in quest'ordine (il perché sta sul metodo
 //! `resolve`):
 //! 1. se una delle alternative è **già installata**, vince quella. Un cliente
 //!    che ha `libtiff-dev` non si vede installare anche `libtiff5-dev`, e il
 //!    delta resta onesto (niente da purgare: non l'abbiamo messo noi).
-//! 2. altrimenti vince la prima con un candidato **reale**.
-//! 3. altrimenti la prima che apt sa installare comunque, cioè un nome
-//!    **virtuale** — ripiego, perché un nome virtuale non è purgabile
+//! 2. altrimenti vince la prima con disponibilità **reale**.
+//! 3. altrimenti la prima che il gestore sa installare comunque, cioè un nome
+//!    **virtuale** — ripiego, perché un nome virtuale non è rimovibile
 //!    (A5.1-bis).
 //!
 //! Se nessuna alternativa è disponibile lo step **fallisce nello snapshot**,
@@ -52,151 +55,9 @@ use tracing::{info, warn};
 
 use crate::context::Context;
 use crate::error::StepError;
+use crate::packaging::{Availability, PackageSpec};
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
-
-/// Prerequisiti bootstrap: utility comuni a basso rischio.
-///
-/// Ogni voce è un gruppo di alternative in ordine di preferenza (vedi
-/// [`PackageSpec`]); questi quattro nomi sono stabili su tutte le release
-/// supportate, quindi non hanno fallback.
-pub const BOOTSTRAP_PACKAGES: &[&[&str]] = &[&["git"], &["curl"], &["wget"], &["gettext-base"]];
-
-/// Dipendenze di sistema di Odoo (lista canonica, da `system.sh`).
-///
-/// Ogni voce è un gruppo di alternative in ordine di preferenza: il primo nome
-/// installabile vince. I gruppi con più di un nome sono quelli che cambiano tra
-/// release — le divergenze osservate in campo su Debian 11/12 (A5.1).
-pub const ODOO_DEPENDENCIES: &[&[&str]] = &[
-    &["git"],
-    &["curl"],
-    &["wget"],
-    &["python3-pip"],
-    &["python3-dev"],
-    &["python3-venv"],
-    &["python3-wheel"],
-    &["python3-setuptools"],
-    &["build-essential"],
-    &["gettext-base"],
-    // Su Ubuntu 24.04 `libfreetype6-dev` è diventato un nome puramente virtuale
-    // (`Provides` di `libfreetype-dev`): installabile ma non purgabile. Il nome
-    // reale come alternativa fa sì che il delta contenga qualcosa che l'undo
-    // possa davvero rimuovere (A5.1-bis).
-    &["libfreetype6-dev", "libfreetype-dev"],
-    &["libxml2-dev"],
-    &["libzip-dev"],
-    &["libldap2-dev"],
-    &["libsasl2-dev"],
-    &["libjpeg-dev"],
-    &["zlib1g-dev"],
-    &["libpq-dev"],
-    &["libxslt1-dev"],
-    // Rinominato senza il soname: Ubuntu 22.04 ha entrambi, Debian 12 solo il
-    // secondo.
-    &["libtiff5-dev", "libtiff-dev"],
-    // Su Ubuntu è un pacchetto di transizione verso `libjpeg-turbo8-dev`; su
-    // Debian 12 non esiste e la copertura la dà `libjpeg-dev`, già in lista.
-    &["libjpeg8-dev", "libjpeg-turbo8-dev", "libjpeg-dev"],
-    &["libopenjp2-7-dev"],
-    &["liblcms2-dev"],
-    &["libwebp-dev"],
-    &["libharfbuzz-dev"],
-    &["libfribidi-dev"],
-    &["libxcb1-dev"],
-    &["libev-dev"],
-    &["libc-ares-dev"],
-];
-
-/// Dipendenze **opzionali**: utili ma non essenziali all'avvio di Odoo.
-///
-/// Se nessuna alternativa del gruppo è installabile su questa release, lo step
-/// lo dice con un `warn!` e prosegue, invece di fermare l'installazione.
-///
-/// Qui c'è `node-less`, il compilatore degli asset `.less`. Odoo moderno usa
-/// SCSS (compilato in-process da libsass) e parte senza `lessc`; il pacchetto è
-/// però stato rimosso da alcune release Debian, e una dipendenza da "nice to
-/// have" non deve trasformarsi in un'installazione impossibile. La distinzione
-/// esiste **solo** per questo caso: tutto ciò che serve davvero sta nella lista
-/// obbligatoria, dove un nome mancante è un errore.
-pub const ODOO_OPTIONAL_DEPENDENCIES: &[&[&str]] = &[&["node-less"]];
-
-/// Un requisito di pacchetto: uno o più nomi **alternativi**, in ordine di
-/// preferenza, che soddisfano lo stesso bisogno.
-///
-/// Possiede le `String` invece di prendere `&'static str` perché i test
-/// costruiscono gruppi a runtime; le liste di produzione restano `const` (vedi
-/// [`ODOO_DEPENDENCIES`]) e passano da [`PackageSpec::group`].
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PackageSpec {
-    alternatives: Vec<String>,
-    /// `false` = se nessuna alternativa è installabile si prosegue senza.
-    required: bool,
-}
-
-impl PackageSpec {
-    /// Un solo nome, nessuna alternativa: se manca, lo step si ferma.
-    pub fn one(name: &str) -> Self {
-        Self::any(&[name])
-    }
-
-    /// Alternative in ordine di preferenza (la prima è il nome preferito).
-    pub fn any(alternatives: &[&str]) -> Self {
-        PackageSpec {
-            alternatives: alternatives.iter().map(|s| s.to_string()).collect(),
-            required: true,
-        }
-    }
-
-    /// Come [`PackageSpec::any`], ma un gruppo interamente non disponibile è un
-    /// warning e non un errore (vedi [`ODOO_OPTIONAL_DEPENDENCIES`]).
-    pub fn optional(alternatives: &[&str]) -> Self {
-        PackageSpec {
-            required: false,
-            ..Self::any(alternatives)
-        }
-    }
-
-    /// Converte un gruppo delle liste `const` in un `PackageSpec` obbligatorio.
-    pub fn group(group: &[&str]) -> Self {
-        Self::any(group)
-    }
-
-    /// Le alternative, in ordine di preferenza.
-    pub fn alternatives(&self) -> &[String] {
-        &self.alternatives
-    }
-
-    /// `true` se un gruppo senza alternative disponibili deve fermare lo step.
-    pub fn is_required(&self) -> bool {
-        self.required
-    }
-
-    /// Il nome preferito (il primo del gruppo), per i messaggi diagnostici.
-    /// Un gruppo vuoto non è costruibile dalle liste di produzione; se ci
-    /// arrivasse comunque, qui vale `"<gruppo vuoto>"` invece di panicare.
-    pub fn preferred(&self) -> &str {
-        self.alternatives
-            .first()
-            .map(String::as_str)
-            .unwrap_or("<gruppo vuoto>")
-    }
-}
-
-/// Converte una lista canonica (`&[&[&str]]`) in specs obbligatori.
-pub fn specs(groups: &[&[&str]]) -> Vec<PackageSpec> {
-    groups.iter().map(|g| PackageSpec::group(g)).collect()
-}
-
-/// Le specs complete delle dipendenze Odoo: obbligatorie + opzionali.
-pub fn odoo_dependency_specs() -> Vec<PackageSpec> {
-    let mut all = specs(ODOO_DEPENDENCIES);
-    all.extend(
-        ODOO_OPTIONAL_DEPENDENCIES
-            .iter()
-            .map(|g| PackageSpec::optional(g)),
-    );
-    all
-}
+use crate::system_ops::SystemOps;
 
 /// Esito della risoluzione di un gruppo di alternative su questo sistema.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -226,7 +87,7 @@ fn unavailable_packages_error(unavailable: &[PackageSpec], index_populated: bool
         .collect();
     let cause = if index_populated {
         "I nomi elencati non esistono su questa release: aggiungi il nome corretto come \
-         alternativa in ODOO_DEPENDENCIES (A5.1)"
+         alternativa nel catalogo della famiglia (A5.1)"
     } else {
         "L'indice apt non è interrogabile (liste vuote o illeggibili), quindi NON è detto che i \
          pacchetti manchino davvero: esegui 'apt-get update' e riprova. Se l'update non produce \
@@ -241,6 +102,16 @@ fn unavailable_packages_error(unavailable: &[PackageSpec], index_populated: bool
         },
         groups.join(", "),
     ))
+}
+
+/// Rimuove i duplicati **conservando l'ordine** (vince la prima occorrenza).
+///
+/// Pura, così la si verifica sulle sequenze che contano senza far girare uno
+/// step. `Vec::dedup` non basta: rimuove solo i duplicati **consecutivi**, e qui
+/// i due `libjpeg-dev` sono a sei posizioni di distanza.
+pub fn dedup_keeping_order(names: &mut Vec<String>) {
+    let mut visti = std::collections::HashSet::new();
+    names.retain(|name| visti.insert(name.clone()));
 }
 
 /// Politica di undo per l'insieme di pacchetti.
@@ -282,15 +153,16 @@ pub struct AptPackagesStep {
 
 impl AptPackagesStep {
     /// Prerequisiti bootstrap (undo non purga senza `--aggressive-rollback`).
-    pub fn bootstrap() -> Self {
-        Self::bootstrap_with_ops(Box::new(RealSystemOps::new()))
-    }
-
+    ///
+    /// La lista **non** e' piu' una costante di questo file: e' cio' che il
+    /// gestore di pacchetti risponde quando gli si chiede il catalogo. I nomi
+    /// dei pacchetti sono conoscenza del gestore quanto lo sono i comandi.
     pub fn bootstrap_with_ops(ops: Box<dyn SystemOps>) -> Self {
+        let bootstrap = ops.packages().catalog().bootstrap;
         let mut step = Self::with_specs(
             ops,
             "bootstrap-prerequisites",
-            specs(BOOTSTRAP_PACKAGES),
+            bootstrap,
             UndoPolicy::KeepUnlessAggressive,
         );
         // È il primo step apt: è qui che l'indice va aggiornato, per tutti.
@@ -299,15 +171,12 @@ impl AptPackagesStep {
     }
 
     /// Dipendenze di sistema di Odoo (undo purga il delta, e solo il delta).
-    pub fn odoo_dependencies() -> Self {
-        Self::odoo_dependencies_with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn odoo_dependencies_with_ops(ops: Box<dyn SystemOps>) -> Self {
+        let odoo = ops.packages().catalog().odoo;
         Self::with_specs(
             ops,
             "install-system-dependencies",
-            odoo_dependency_specs(),
+            odoo,
             UndoPolicy::PurgeDelta,
         )
     }
@@ -372,24 +241,27 @@ impl AptPackagesStep {
     /// nome virtuale solo se nessuna alternativa del gruppo ne ha uno reale, e
     /// lo si dice nei log.
     fn resolve(&self, spec: &PackageSpec) -> Option<ResolvedPackage> {
+        let pm = self.ops.packages();
         if let Some(installed) = spec
             .alternatives()
             .iter()
-            .find(|name| self.ops.dpkg_is_installed(name))
+            .find(|name| pm.is_installed(name))
         {
             return Some(ResolvedPackage::AlreadyInstalled(installed.clone()));
         }
-        if let Some(real) = spec
-            .alternatives()
-            .iter()
-            .find(|name| self.ops.apt_has_real_candidate(name))
-        {
-            return Some(ResolvedPackage::Installable(real.clone()));
+        // Una sola passata: si prende il **primo** nome con disponibilità reale
+        // e si tiene da parte il primo virtuale come ripiego. Interrogare due
+        // volte l'elenco (prima tutti i reali, poi tutti i virtuali) darebbe lo
+        // stesso verdetto al doppio delle domande al gestore.
+        let mut virtuale: Option<&String> = None;
+        for name in spec.alternatives() {
+            match pm.availability(name) {
+                Availability::Real => return Some(ResolvedPackage::Installable(name.clone())),
+                Availability::VirtualOnly if virtuale.is_none() => virtuale = Some(name),
+                _ => {}
+            }
         }
-        spec.alternatives()
-            .iter()
-            .find(|name| self.ops.apt_can_install(name))
-            .map(|name| ResolvedPackage::Virtual(name.clone()))
+        virtuale.map(|name| ResolvedPackage::Virtual(name.clone()))
     }
 
     /// Aggiorna l'indice apt prima di installare (A5.1-bis).
@@ -415,11 +287,11 @@ impl AptPackagesStep {
             info!(step = self.name, "run (dry-run): apt-get update");
             return Ok(());
         }
-        let Err(e) = self.ops.apt_update() else {
+        let Err(e) = self.ops.packages().refresh_index() else {
             info!(step = self.name, "run: indice apt aggiornato");
             return Ok(());
         };
-        if self.ops.apt_index_is_populated() {
+        if self.ops.packages().index_is_queryable() {
             warn!(
                 step = self.name,
                 error = %e,
@@ -450,8 +322,8 @@ impl AptPackagesStep {
     /// dentro dai *nostri* pacchetti restano installate, il che è rumore innocuo
     /// a fronte del rischio di disinstallare roba altrui.
     ///
-    /// Il purge passa da [`purge_with_dpkg_recovery`](crate::steps::purge_with_dpkg_recovery),
-    /// che rimette in sesto `dpkg` se uno step a valle l'ha lasciato rotto:
+    /// La rimozione passa da [`remove_with_recovery`](crate::steps::remove_with_recovery),
+    /// che rimette in sesto il gestore se uno step a valle l'ha lasciato rotto:
     /// altrimenti apt rifiuta di operare e il delta resta installato (A-RT-2).
     fn purge_delta(&self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.delta.is_empty() {
@@ -463,7 +335,7 @@ impl AptPackagesStep {
             return Ok(());
         }
         let refs: Vec<&str> = self.snap.delta.iter().map(String::as_str).collect();
-        crate::steps::purge_with_dpkg_recovery(self.ops.as_ref(), self.name, &refs);
+        crate::steps::remove_with_recovery(self.ops.packages(), self.name, &refs);
         Ok(())
     }
 }
@@ -530,7 +402,7 @@ impl Step for AptPackagesStep {
         // - ogni altro step gira **dopo** l'update: se lì l'indice è ancora
         //   inservibile è un problema vero, e va detto con il messaggio giusto.
         if !unavailable.is_empty() {
-            let index_populated = self.ops.apt_index_is_populated();
+            let index_populated = self.ops.packages().index_is_queryable();
             if index_populated || !self.refresh_index {
                 return Err(unavailable_packages_error(&unavailable, index_populated));
             }
@@ -557,6 +429,23 @@ impl Step for AptPackagesStep {
                 }
             }
         }
+
+        // Deduplica (A-MD-1). Due gruppi diversi possono risolvere allo **stesso
+        // nome**: su Debian 12 sia `[libjpeg-dev]` sia
+        // `[libjpeg8-dev | libjpeg-turbo8-dev | libjpeg-dev]` cadono su
+        // `libjpeg-dev`, perché la regola «ne hai già uno?» non può aiutare —
+        // lo snapshot risolve *tutti* i gruppi prima che il `run` installi
+        // alcunché, quindi al momento della risoluzione nessuno dei due è
+        // ancora installato.
+        //
+        // Su apt il doppione è innocuo (install e purge sono idempotenti), ma il
+        // delta è la contabilità di ciò che abbiamo aggiunto e su cui l'undo è
+        // autorizzato ad agire: una contabilità con una riga doppia è una
+        // contabilità sbagliata. Si conserva l'**ordine**, tenendo la prima
+        // occorrenza, così i log restano leggibili.
+        dedup_keeping_order(&mut resolved);
+        dedup_keeping_order(&mut already_installed);
+        dedup_keeping_order(&mut delta);
 
         info!(
             step = self.name,
@@ -616,7 +505,7 @@ impl Step for AptPackagesStep {
         // Installa l'intera lista risolta: apt aggiunge solo i mancanti
         // (idempotente).
         let refs: Vec<&str> = self.resolved.iter().map(String::as_str).collect();
-        self.ops.apt_install(&refs)?;
+        self.ops.packages().install(&refs)?;
         info!(
             step = self.name,
             installed = self.snap.delta.len(),

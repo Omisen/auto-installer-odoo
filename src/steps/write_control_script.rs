@@ -12,7 +12,7 @@ use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 /// Template dello script di controllo (segnaposto sostituiti senza `format!`).
 const CONTROL_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env bash
@@ -69,9 +69,6 @@ pub struct WriteControlScript {
 }
 
 impl WriteControlScript {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -90,12 +87,6 @@ impl WriteControlScript {
             StepError::Precondition(format!("impossibile determinare la home per '{user}'"))
         })?;
         Ok((user, std::path::PathBuf::from(home)))
-    }
-}
-
-impl Default for WriteControlScript {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

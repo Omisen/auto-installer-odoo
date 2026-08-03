@@ -8,6 +8,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
 use odoo_installer::lockfile;
+// La famiglia è indifferente per questi test: esercitano le primitive di
+// filesystem (`create_private_file`, `write_private_file`), che non passano né
+// dal gestore di pacchetti né dalle convenzioni di distribuzione.
 use odoo_installer::system_ops::{argv, private_temp_path, RealSystemOps, SystemOps, UserSpec};
 
 // --- A2.1 — TOCTOU / symlink sul temporaneo privato --------------------------
@@ -25,7 +28,7 @@ fn create_private_file_never_writes_through_a_symlink() {
     let tmp = dir.path().join(".odoo18.conf.tmp");
     std::os::unix::fs::symlink(&victim, &tmp).expect("symlink");
 
-    let ops = RealSystemOps::new();
+    let ops = RealSystemOps::debian();
     let err = ops.create_private_file(&tmp, "admin_passwd = s3cret");
     assert!(err.is_err(), "l'apertura deve fallire, non seguire il link");
 
@@ -50,7 +53,7 @@ fn create_private_file_rejects_dangling_symlink() {
     let tmp = dir.path().join(".odoo18.conf.tmp");
     std::os::unix::fs::symlink(&target, &tmp).expect("symlink");
 
-    let ops = RealSystemOps::new();
+    let ops = RealSystemOps::debian();
     assert!(ops.create_private_file(&tmp, "segreto").is_err());
     assert!(!target.exists(), "non deve creare il bersaglio del link");
 }
@@ -66,7 +69,7 @@ fn create_private_file_refuses_a_preexisting_file() {
     // Permessi larghi, come li lascerebbe un attaccante per rileggere il file.
     std::fs::set_permissions(&tmp, std::fs::Permissions::from_mode(0o666)).expect("chmod");
 
-    let ops = RealSystemOps::new();
+    let ops = RealSystemOps::debian();
     assert!(ops
         .create_private_file(&tmp, "admin_passwd = s3cret")
         .is_err());
@@ -84,7 +87,7 @@ fn create_private_file_creates_0600() {
     let dir = tempfile::tempdir().expect("tempdir");
     let tmp = dir.path().join(".odoo18.conf.tmp");
 
-    let ops = RealSystemOps::new();
+    let ops = RealSystemOps::debian();
     ops.create_private_file(&tmp, "admin_passwd = s3cret")
         .expect("creazione");
 
@@ -113,7 +116,7 @@ fn private_temp_path_is_unique_and_next_to_dest() {
     assert_eq!(a.parent(), dest.parent());
     assert_eq!(b.parent(), dest.parent());
 
-    let ops = RealSystemOps::new();
+    let ops = RealSystemOps::debian();
     ops.create_private_file(&a, "uno").expect("primo temp");
     ops.create_private_file(&b, "due").expect("secondo temp");
 }

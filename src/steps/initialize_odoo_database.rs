@@ -30,7 +30,7 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 const VENV_SUBDIR: &str = "sandbox";
 const REPO_SUBDIR: &str = "odoo";
@@ -42,10 +42,6 @@ pub struct InitializeOdooDatabase {
 }
 
 impl InitializeOdooDatabase {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
-    }
-
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -65,12 +61,6 @@ impl InitializeOdooDatabase {
     fn conf(ctx: &Context) -> std::path::PathBuf {
         ctx.install_dir
             .join(format!("odoo{}.conf", ctx.odoo_version_short))
-    }
-}
-
-impl Default for InitializeOdooDatabase {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

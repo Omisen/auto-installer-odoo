@@ -15,7 +15,10 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
+use crate::distro::Distro;
+use crate::distro::OsFamily;
 use crate::error::StepError;
+use crate::packaging::PackageManager;
 
 /// Che cosa c'è a un path, guardato **senza seguire i symlink**.
 ///
@@ -374,81 +377,17 @@ pub trait SystemOps {
     fn mkdir(&self, path: &Path) -> Result<(), StepError>;
     fn rmdir(&self, path: &Path) -> Result<(), StepError>;
 
-    // --- apt / dpkg (Fase 4) -------------------------------------------------
-    /// `true` se il pacchetto risulta `install ok installed` a `dpkg-query`.
-    fn dpkg_is_installed(&self, pkg: &str) -> bool;
-    /// `apt-get update`: riscarica gli indici dei repository.
+    // --- gestore di pacchetti e convenzioni di distribuzione ----------------
+    /// Il gestore di pacchetti di questa famiglia (`apt`, `dnf`, ...).
     ///
-    /// È una mutazione (tocca `/var/lib/apt/lists`), quindi vive **solo** dentro
-    /// un `run` — mai in uno `snapshot`, che non muta per invariante (C4).
-    /// Non ha undo: un indice aggiornato non cambia nulla di ciò che è
-    /// installato, è la cache di ciò che *si potrebbe* installare. Come un
-    /// `git fetch`.
-    fn apt_update(&self) -> Result<(), StepError>;
-    /// `true` se apt ha un candidato **reale** per questo nome
-    /// (`apt-cache policy` → `Candidate:` diverso da `(none)`).
-    ///
-    /// È una query, non una mutazione: serve a scegliere *quale* nome installare
-    /// quando lo stesso pacchetto ne cambia uno tra release
-    /// (`libtiff5-dev` → `libtiff-dev`, A5.1). Senza questa domanda l'unico modo
-    /// di scoprire che un nome non esiste più è l'`apt-get install` che fallisce
-    /// sull'intero gruppo, cioè a mutazione già iniziata.
-    ///
-    /// "Reale" è la parola importante: un nome puramente **virtuale** (che
-    /// esiste solo come `Provides` di un altro pacchetto) risponde `false` pur
-    /// essendo installabile. Vedi [`SystemOps::apt_can_install`] per l'altra
-    /// metà della domanda, e la nota sul perché la distinzione conti.
-    ///
-    /// Risponde `false` anche quando `apt-cache` non è eseguibile o le liste apt
-    /// sono vuote: quel caso si distingue con
-    /// [`SystemOps::apt_index_is_populated`], non tirando a indovinare.
-    fn apt_has_real_candidate(&self, pkg: &str) -> bool;
-    /// `true` se apt **saprebbe installare** questo nome
-    /// (`apt-get install -s`: simulazione, non muta nulla).
-    ///
-    /// Risponde `true` anche per un nome puramente virtuale con un solo
-    /// fornitore — dove `apt-cache policy` dice `Candidate: (none)` ma
-    /// `apt-get install` funziona benissimo. È la domanda che conta per decidere
-    /// se un gruppo di alternative è soddisfacibile, ma è **più lenta** (fa
-    /// girare il risolutore, ~0.4s per pacchetto): si usa come ripiego quando la
-    /// via veloce ha detto no.
-    fn apt_can_install(&self, pkg: &str) -> bool;
-    /// `true` se l'indice apt contiene almeno un pacchetto
-    /// (`apt-cache stats` → `Total package names`).
-    ///
-    /// Serve a non confondere **cecità** con **assenza**: su una macchina dove
-    /// `apt-get update` non è mai stato eseguito ogni interrogazione risponde
-    /// "non disponibile", e senza questa domanda un indice vuoto diventerebbe la
-    /// diagnosi "questo pacchetto non esiste su questa release" — che è
-    /// esattamente il falso positivo A5.1-bis.
-    fn apt_index_is_populated(&self) -> bool;
-    /// `apt-get install -y --no-install-recommends <pkgs>` (idempotente).
-    fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError>;
-    /// `apt-get purge -y <pkgs>`.
-    fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError>;
-    /// `apt-get autoremove -y`.
-    fn apt_autoremove(&self) -> Result<(), StepError>;
-    /// `apt-get install -f -y`: installa le dipendenze mancanti e completa la
-    /// configurazione dei pacchetti rimasti a metà, riportando `dpkg` in stato
-    /// consistente. È il recovery che precede il purge nel rollback.
-    fn apt_fix_broken(&self) -> Result<(), StepError>;
-    /// `dpkg --configure -a`: riconfigura i pacchetti scompattati ma non
-    /// configurati. Copre il caso in cui `apt-get install -f` non basta perché
-    /// apt stesso si rifiuta di operare.
-    fn dpkg_configure_all(&self) -> Result<(), StepError>;
-    /// `apt-get install -y <path.deb>`: installa un `.deb` **locale**
-    /// risolvendone le dipendenze.
-    ///
-    /// Sostituisce `dpkg -i`, che installa il pacchetto ma **non** risolve le
-    /// dipendenze: su un sistema minimale il `.deb` resta `unconfigured` e
-    /// `dpkg` esce con errore, lasciando l'intero database dpkg in uno stato
-    /// che blocca ogni successivo comando apt (bug A-RT-1/A-RT-2, trovati sulla
-    /// VM di prova). apt fa le due cose in un colpo solo e non lascia macerie.
-    ///
-    /// Il path deve essere **assoluto** (o iniziare con `./`): apt tratta come
-    /// file solo gli argomenti che contengono una `/`, altrimenti li cerca nei
-    /// repository.
-    fn apt_install_deb_file(&self, path: &Path) -> Result<(), StepError>;
+    /// Gli undici metodi `apt_*`/`dpkg_*` che stavano qui vivono ora dietro
+    /// [`PackageManager`]: aggiungere una seconda famiglia accanto a loro
+    /// avrebbe portato il trait a 80+ metodi e sparso la scelta del gestore in
+    /// ogni chiamante — il «ramo `if fedora` sparso» travestito da metodo.
+    fn packages(&self) -> &dyn PackageManager;
+    /// Le convenzioni di distribuzione (oggi: il firewall).
+    fn distro(&self) -> &dyn Distro;
+
     /// Versione di `wkhtmltopdf` installata (es. `"0.12.6.1"`), o `None`.
     fn wkhtmltopdf_version(&self) -> Option<String>;
 
@@ -484,16 +423,6 @@ pub trait SystemOps {
     /// è lecito fare: un symlink si può rimuovere e ricreare identico, un file
     /// regolare contiene dati che vanno preservati.
     fn path_kind(&self, path: &Path) -> PathKind;
-    /// `ufw` è installato?
-    fn ufw_available(&self) -> bool;
-    /// `ufw` è attivo (`Status: active`)?
-    fn ufw_is_active(&self) -> bool;
-    /// La regola (es. `"80/tcp"`) è già presente in `ufw status`?
-    fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError>;
-    /// `ufw allow <rule>`.
-    fn ufw_allow(&self, rule: &str) -> Result<(), StepError>;
-    /// `ufw delete allow <rule>`.
-    fn ufw_delete(&self, rule: &str) -> Result<(), StepError>;
     /// `nginx -t`: la config è valida?
     fn nginx_test(&self) -> bool;
 
@@ -608,12 +537,54 @@ pub trait SystemOps {
 }
 
 /// Implementazione reale: esegue i comandi di sistema.
-#[derive(Debug, Default)]
-pub struct RealSystemOps;
+///
+/// Porta con sé i due backend scelti per la famiglia. Non deriva `Default`: un
+/// `RealSystemOps` senza famiglia non ha senso, e un default sceglierebbe apt in
+/// silenzio.
+pub struct RealSystemOps {
+    packages: Box<dyn PackageManager>,
+    distro: Box<dyn Distro>,
+}
 
 impl RealSystemOps {
-    pub fn new() -> Self {
-        Self
+    /// Le implementazioni della famiglia Debian (apt + ufw).
+    ///
+    /// Non esiste un costruttore «senza famiglia»: sceglierne una e' una
+    /// decisione, e va presa in un posto solo — [`backend_factory`], che e' il
+    /// gate. Un `new()` che desse apt a chiunque sarebbe il default silenzioso
+    /// che questo lavoro esiste per evitare.
+    pub fn debian() -> Self {
+        RealSystemOps {
+            packages: Box::new(crate::packaging::apt::AptBackend),
+            distro: Box::new(crate::distro::debian::Debian::new()),
+        }
+    }
+}
+
+/// La fabbrica dei backend per una famiglia, o `None` se **questo binario** non
+/// ne ha uno.
+///
+/// # Perche' `Option` e non un `match` con un ramo di ripiego
+///
+/// Perche' oggi la risposta per Fedora e' davvero «non ce l'ho», e un `match`
+/// che le desse apt sarebbe una bugia silenziosa: `apt-get` su una macchina
+/// senza apt fallisce in modo oscuro, e nel rollback significherebbe lasciare
+/// installato tutto cio' che c'era da rimuovere. Entrambi i rami sono **veri e
+/// raggiungibili**, quindi non c'e' nessun ramo che non puo' eseguire — e
+/// quando M2 aggiungera' il backend dnf, qui cambia una riga.
+///
+/// Restituisce un puntatore a funzione e non un valore gia' costruito perche'
+/// gli step **possiedono** le proprie `ops`: ne servono N istanze, non N
+/// riferimenti (vedi [`crate::steps::OpsFactory`]). Chi chiama gestisce il
+/// `None` **una volta**, con un messaggio, e da li' in poi ha una fabbrica che
+/// non puo' fallire.
+pub fn backend_factory(family: OsFamily) -> Option<fn() -> Box<dyn SystemOps>> {
+    match family {
+        OsFamily::Debian => Some(|| Box::new(RealSystemOps::debian()) as Box<dyn SystemOps>),
+        // M2. Finche' e' `None`, `checks::validate_os` rifiuta Fedora a monte e
+        // questo e' il fail-closed di ultima istanza — per esempio su un
+        // manifesto manomesso passato con `--state`.
+        OsFamily::Fedora => None,
     }
 }
 
@@ -656,7 +627,7 @@ fn run_command_full(
 }
 
 /// Esegue un comando esterno con env aggiuntivi e **senza** timeout.
-fn run_command_with_env(
+pub(crate) fn run_command_with_env(
     program: &str,
     args: &[&str],
     envs: &[(&str, &str)],
@@ -665,7 +636,7 @@ fn run_command_with_env(
 }
 
 /// Esegue un comando esterno senza env aggiuntivi e **senza** timeout.
-fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
+pub(crate) fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
     run_command_full(program, args, &[], None)
 }
 
@@ -691,19 +662,6 @@ pub fn run_with_timeout(program: &str, args: &[&str], limit: Duration) -> Result
 /// Adatta gli argomenti costruiti da [`argv`] alla firma di [`run_command`].
 fn as_refs(args: &[String]) -> Vec<&str> {
     args.iter().map(String::as_str).collect()
-}
-
-/// Esegue `apt-get` con l'ambiente non-interattivo (niente prompt tzdata /
-/// needrestart), come il Bash originale.
-fn run_apt(args: &[&str]) -> Result<(), StepError> {
-    run_command_with_env(
-        "apt-get",
-        args,
-        &[
-            ("DEBIAN_FRONTEND", "noninteractive"),
-            ("NEEDRESTART_MODE", "a"),
-        ],
-    )
 }
 
 /// `true` se l'output di `apt-cache policy` dichiara un candidato installabile.
@@ -741,7 +699,7 @@ pub fn total_package_names(stats_output: &str) -> Option<u64> {
 }
 
 /// Esegue un comando catturandone lo stdout (per query psql/systemctl).
-fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
+pub(crate) fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
     capture_command_with_env(program, args, &[])
 }
 
@@ -750,7 +708,7 @@ fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
 /// Esiste per `LC_ALL=C`: l'output di `apt-cache` è **localizzato**, e un parser
 /// che cerca `Candidate:` su una macchina italiana leggerebbe `Candidato:` e
 /// concluderebbe che nessun pacchetto è installabile.
-fn capture_command_with_env(
+pub(crate) fn capture_command_with_env(
     program: &str,
     args: &[&str],
     envs: &[(&str, &str)],
@@ -935,85 +893,12 @@ impl SystemOps for RealSystemOps {
         std::fs::remove_dir(path).map_err(|e| StepError::io(path, e))
     }
 
-    fn dpkg_is_installed(&self, pkg: &str) -> bool {
-        match Command::new("dpkg-query")
-            .args(["-W", "-f=${Status}", pkg])
-            .output()
-        {
-            Ok(out) if out.status.success() => {
-                String::from_utf8_lossy(&out.stdout).contains("install ok installed")
-            }
-            _ => false,
-        }
+    fn packages(&self) -> &dyn PackageManager {
+        self.packages.as_ref()
     }
 
-    fn apt_update(&self) -> Result<(), StepError> {
-        run_apt(&["update"])
-    }
-
-    fn apt_has_real_candidate(&self, pkg: &str) -> bool {
-        match capture_command_with_env("apt-cache", &["policy", "--", pkg], &[("LC_ALL", "C")]) {
-            Ok(out) => has_installable_candidate(&out),
-            // apt-cache assente o in errore: nessuna informazione → nessun
-            // candidato reale. Chi chiama non conclude nulla da solo: incrocia
-            // con `apt_can_install` e `apt_index_is_populated`.
-            Err(_) => false,
-        }
-    }
-
-    fn apt_can_install(&self, pkg: &str) -> bool {
-        // `-s` = simulate: apt calcola la soluzione e non tocca il sistema.
-        // Esce 100 con "E: Unable to locate package" se il nome non esiste, 0 se
-        // è installabile — anche quando è virtuale con un solo fornitore.
-        run_apt(&["install", "-s", "-y", "--no-install-recommends", "--", pkg]).is_ok()
-    }
-
-    fn apt_index_is_populated(&self) -> bool {
-        match capture_command_with_env("apt-cache", &["stats"], &[("LC_ALL", "C")]) {
-            Ok(out) => total_package_names(&out).is_some_and(|n| n > 0),
-            // Non riusciamo a chiederlo: trattiamolo come indice non
-            // interrogabile. Porta a un messaggio prudente ("aggiorna
-            // l'indice"), non a un verdetto di assenza.
-            Err(_) => false,
-        }
-    }
-
-    fn apt_install(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        let mut args = vec!["install", "-y", "--no-install-recommends"];
-        args.extend_from_slice(pkgs);
-        run_apt(&args)
-    }
-
-    fn apt_purge(&self, pkgs: &[&str]) -> Result<(), StepError> {
-        let mut args = vec!["purge", "-y"];
-        args.extend_from_slice(pkgs);
-        run_apt(&args)
-    }
-
-    fn apt_autoremove(&self) -> Result<(), StepError> {
-        run_apt(&["autoremove", "-y"])
-    }
-
-    fn apt_fix_broken(&self) -> Result<(), StepError> {
-        run_apt(&["install", "-f", "-y"])
-    }
-
-    fn dpkg_configure_all(&self) -> Result<(), StepError> {
-        run_command_with_env(
-            "dpkg",
-            &["--configure", "-a"],
-            &[
-                ("DEBIAN_FRONTEND", "noninteractive"),
-                ("NEEDRESTART_MODE", "a"),
-            ],
-        )
-    }
-
-    fn apt_install_deb_file(&self, path: &Path) -> Result<(), StepError> {
-        // `--` prima del path: un `.deb` in una directory il cui nome inizia
-        // con `-` non deve diventare un'opzione (stessa rete di R1).
-        let rendered = path.to_string_lossy();
-        run_apt(&["install", "-y", "--", &rendered])
+    fn distro(&self) -> &dyn Distro {
+        self.distro.as_ref()
     }
 
     fn wkhtmltopdf_version(&self) -> Option<String> {
@@ -1110,33 +995,6 @@ impl SystemOps for RealSystemOps {
         } else {
             PathKind::Other
         }
-    }
-
-    fn ufw_available(&self) -> bool {
-        Command::new("ufw")
-            .arg("--version")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false)
-    }
-
-    fn ufw_is_active(&self) -> bool {
-        capture_command("ufw", &["status"])
-            .map(|s| s.contains("Status: active"))
-            .unwrap_or(false)
-    }
-
-    fn ufw_rule_exists(&self, rule: &str) -> Result<bool, StepError> {
-        let status = capture_command("ufw", &["status"])?;
-        Ok(ufw_rule_in_status(&status, rule))
-    }
-
-    fn ufw_allow(&self, rule: &str) -> Result<(), StepError> {
-        run_command("ufw", &["allow", rule])
-    }
-
-    fn ufw_delete(&self, rule: &str) -> Result<(), StepError> {
-        run_command("ufw", &["delete", "allow", rule])
     }
 
     fn nginx_test(&self) -> bool {
@@ -1596,56 +1454,6 @@ impl Downloader for RealDownloader {
         // rimuove il file parziale.
         run_network_command("wget", &["-q", "-O", &rendered, url])
     }
-}
-
-/// La regola compare in `ufw status`? Confronto per **token**, non per
-/// sottostringa (A-V3-7).
-///
-/// # Il difetto che chiude
-///
-/// `status.contains("80/tcp")` risponde `true` su una macchina che ha soltanto
-/// una regola `8080/tcp` — un'altra app web, un reverse proxy, un runner. Da lì:
-/// la regola per la porta 80 non entra nel delta, il `run` non la apre, e nginx
-/// viene configurato e ricaricato correttamente ma resta **irraggiungibile
-/// dall'esterno**. Nel report non c'è niente di anomalo da leggere.
-///
-/// # Come si legge `ufw status`
-///
-/// ```text
-/// Status: active
-///
-/// To                         Action      From
-/// --                         ------      ----
-/// 80/tcp                     ALLOW       Anywhere
-/// 8080/tcp                   ALLOW       Anywhere
-/// 80/tcp (v6)                ALLOW       Anywhere (v6)
-/// ```
-///
-/// La regola è il **primo token** della riga (colonna `To`). Il suffisso
-/// `(v6)` è un token a parte, quindi la variante IPv6 della stessa porta
-/// combacia — ed è giusto: è la stessa regola.
-///
-/// # Cosa non distingue, dichiarato
-///
-/// Un profilo applicativo (`Nginx Full`) ha uno spazio nella colonna `To` e non
-/// verrà riconosciuto come `80/tcp`, anche se apre quella porta. La conseguenza
-/// è che aggiungeremmo `80/tcp` al delta e l'undo la rimuoverebbe: rimuoviamo
-/// solo ciò che abbiamo aggiunto noi, quindi la promessa chirurgica regge.
-pub fn ufw_rule_in_status(status: &str, rule: &str) -> bool {
-    /// I token che compaiono in prima colonna senza essere regole.
-    const INTESTAZIONI: [&str; 3] = ["To", "--", "Status:"];
-
-    // Si escludono le intestazioni per nome invece di saltare tutto ciò che
-    // precede la riga `--`. Ancorarsi al separatore sarebbe più elegante ma più
-    // fragile: se un giorno quel formato cambiasse, leggeremmo «nessuna regola»
-    // e finiremmo per mettere nel delta regole che il cliente aveva già — e
-    // l'undo le rimuoverebbe. Fra i due modi di sbagliare, quello che tocca la
-    // configurazione altrui è il peggiore.
-    status
-        .lines()
-        .filter_map(|line| line.split_whitespace().next())
-        .filter(|token| !INTESTAZIONI.contains(token))
-        .any(|to| to == rule)
 }
 
 /// Crea un file privato (`0600`) fail-closed: `O_CREAT | O_EXCL | O_NOFOLLOW`.

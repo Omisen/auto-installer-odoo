@@ -15,12 +15,9 @@ use crate::context::Context;
 use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
-use crate::system_ops::{RealSystemOps, SystemOps};
+use crate::system_ops::SystemOps;
 
 const PG_SERVICE: &str = "postgresql";
-/// Pacchetto usato come marker di "installato".
-const PG_MARKER_PACKAGE: &str = "postgresql";
-const PG_PACKAGES: &[&str] = &["postgresql", "postgresql-contrib"];
 
 /// Snapshot dei tre assi indipendenti dello stato di PostgreSQL.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,8 +37,18 @@ pub struct SetupPostgres {
 }
 
 impl SetupPostgres {
-    pub fn new() -> Self {
-        Self::with_ops(Box::new(RealSystemOps::new()))
+    /// I pacchetti che installano il server, secondo il gestore di questa
+    /// famiglia.
+    fn packages(&self) -> Vec<String> {
+        self.ops.packages().catalog().postgres
+    }
+
+    /// Il nome con cui si chiede «PostgreSQL è installato?».
+    ///
+    /// Non è il primo elemento di [`Self::packages`]: è una domanda diversa, e
+    /// su un'altra famiglia la risposta è un nome diverso.
+    fn marker_package(&self) -> String {
+        self.ops.packages().catalog().postgres_marker
     }
 
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
@@ -49,12 +56,6 @@ impl SetupPostgres {
             ops,
             snap: PostgresSnapshot::default(),
         }
-    }
-}
-
-impl Default for SetupPostgres {
-    fn default() -> Self {
-        Self::new()
     }
 }
 
@@ -66,7 +67,7 @@ impl Step for SetupPostgres {
     fn snapshot(&mut self, _ctx: &Context) -> Result<(), StepError> {
         // Per ciascun asse: se già vero prima di noi → Preexisting (undo lo
         // lascia); altrimenti Untracked (lo faremo noi → CreatedByUs dopo run).
-        self.snap.installed = if self.ops.dpkg_is_installed(PG_MARKER_PACKAGE) {
+        self.snap.installed = if self.ops.packages().is_installed(&self.marker_package()) {
             PreState::Preexisting
         } else {
             PreState::Untracked
@@ -97,7 +98,9 @@ impl Step for SetupPostgres {
         }
 
         if self.snap.installed == PreState::Untracked {
-            self.ops.apt_install(PG_PACKAGES)?;
+            let packages = self.packages();
+            let refs: Vec<&str> = packages.iter().map(String::as_str).collect();
+            self.ops.packages().install(&refs)?;
             self.snap.installed = PreState::CreatedByUs;
             info!("run: PostgreSQL installato");
         }
@@ -155,12 +158,10 @@ impl Step for SetupPostgres {
                 warn!(
                     "--aggressive-rollback: purge PostgreSQL (nessun altro database nel cluster)"
                 );
-                crate::steps::purge_with_dpkg_recovery(
-                    self.ops.as_ref(),
-                    "setup-postgres",
-                    PG_PACKAGES,
-                );
-                if let Err(e) = self.ops.apt_autoremove() {
+                let packages = self.packages();
+                let refs: Vec<&str> = packages.iter().map(String::as_str).collect();
+                crate::steps::remove_with_recovery(self.ops.packages(), "setup-postgres", &refs);
+                if let Err(e) = self.ops.packages().remove_orphans() {
                     warn!(error = %e, "undo: autoremove fallito, proseguo (best-effort)");
                 }
             } else if purge_wanted {
