@@ -113,6 +113,27 @@ jobs:
       # quindi anche alla **prima** installazione su macchina pulita, che è il
       # caso in cui A-R5-2 lasciava senza post-mortem. Lo stderr resta comunque
       # nel log del job.
+      # Il verdetto della sonda si legge dal riepilogo dell'esecuzione, non
+      # aprendo il job: un esito tollerato che nessuno guarda non è una sonda,
+      # è rumore.
+      - name: Verdetto della sonda nel riepilogo
+        if: always() && matrix.optional == 'yes'
+        run: |
+          if [ '${{ job.status }}' = 'success' ]; then
+            esito="✅ **${{ matrix.image }}: installazione e rollback riusciti.**"
+            nota="I gruppi di alternative reggono, l'rpm \`fedora37\` è ancora accettato e Odoo gira su quel Python."
+          else
+            esito="⚠️ **${{ matrix.image }}: la sonda è fallita.**"
+            nota="Non blocca la CI (release mai supportata ufficialmente), ma è il primo posto da guardare prima di dichiararla supportata. Log del job per la causa."
+          fi
+          {
+            echo "### Sonda di portabilità"
+            echo ""
+            echo "$esito"
+            echo ""
+            echo "$nota"
+          } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Log dell'installer, se presente
         if: always()
         run: sudo cp /var/log/odoo-installer.log "installer-${{ matrix.os }}.log" || true
@@ -278,6 +299,10 @@ jobs:
     needs: build-musl
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    # Solo la sonda è tollerata in rosso. Gli altri due scenari restano
+    # bloccanti: è ciò che rende vera la costante `NEWEST_TESTED_FEDORA`, e un
+    # test la lega alla matrice **escludendo** le voci marcate come sonda.
+    continue-on-error: ${{ matrix.optional == 'yes' }}
     strategy:
       fail-fast: false
       matrix:
@@ -304,6 +329,30 @@ jobs:
             # le verifiche su A-V3-7 salterebbero e il job passerebbe senza aver
             # provato ciò per cui esiste. Con questo, si ferma e lo dice.
             fw_required: "1"
+          # SONDA DI PORTABILITÀ su una release che non abbiamo mai provato.
+          #
+          # A5.3 tiene le soglie OS aperte verso l'alto: una Fedora più recente
+          # viene ACCETTATA con un avviso, perché un rifiuto senza prova blocca
+          # il caso buono. Ma «accettiamo» non deve voler dire «non sappiamo»:
+          # questa voce trasforma la domanda in un fatto una volta per push.
+          #
+          # Le tre cose che può dire, e che nessun test su mock può dire:
+          # i 31 pacchetti si risolvono ancora (i gruppi di alternative reggono
+          # le rinomine); l'`.rpm` `fedora37` viene ancora accettato da dnf
+          # sette release dopo (A5.2: il ripiego è accettabile solo perché un
+          # rpm incompatibile viene RESPINTO, non installato a metà); Odoo 18
+          # gira sul Python di quella release.
+          #
+          # NON BLOCCANTE, e la ragione non è la comodità: un rosso che ci si
+          # aspetta di vedere insegna a ignorare i rossi (è la lezione di
+          # A-V3-10, l'avviso che compariva sempre). Il verdetto finisce nel
+          # riepilogo dell'esecuzione, dove si legge senza aprire il job.
+          - image: "fedora:44" # sonda-non-bloccante
+            scenario: sonda
+            env_file: configs/ci.env
+            firewalld: "no"
+            fw_required: ""
+            optional: "yes"
 
     steps:
       - name: Checkout

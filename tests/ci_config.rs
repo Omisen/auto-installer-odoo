@@ -248,19 +248,63 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
         "la CI gira su Debian {debian_max:?} ma la costante dice {NEWEST_TESTED_DEBIAN:?}"
     );
 
-    // Fedora: `image: ["fedora:41"]`. La terza famiglia entra nella stessa
-    // guardia delle altre due — se restasse fuori, la costante potrebbe
-    // divergere dalla matrice senza che nulla lo dica, ed è esattamente la
-    // situazione che questo test esiste per impedire.
-    let fedora_max = versions_in(&wf, "fedora:")
+    // Fedora, e qui la matrice dice DUE cose diverse.
+    //
+    // Ci sono voci bloccanti (un rosso ferma tutto) e una SONDA su una release
+    // mai supportata, tollerata in rosso perché un rosso che ci si aspetta di
+    // vedere insegna a ignorare i rossi. La costante deve seguire le sole voci
+    // bloccanti: `is_newer_than_tested` promette «release su cui l'installer
+    // viene provato», e una release il cui fallimento non ferma nessuno non è
+    // provata — è osservata. Contarla direbbe il falso proprio nel senso che
+    // rende l'avviso utile.
+    let fedora_bloccanti = versions_in(&senza_sonde(&wf), "fedora:");
+    let fedora_max = fedora_bloccanti
         .into_iter()
         .max()
-        .expect("la CI deve girare su almeno una Fedora");
+        .expect("la CI deve girare su almeno una Fedora bloccante");
     assert_eq!(
         fedora_max, NEWEST_TESTED_FEDORA,
         "la CI gira su Fedora {fedora_max:?} ma la costante dice {NEWEST_TESTED_FEDORA:?}"
     );
+
+    // E il marcatore non dev'essere un modo per zittire la guardia: una sonda
+    // ha senso solo su una release PIÙ RECENTE di quelle provate davvero.
+    // Marcare una voce bloccante come sonda la farebbe sparire dal confronto
+    // qui sopra senza che nulla lo dica — la stessa forma del difetto che
+    // questo test esiste per impedire, un livello più su.
+    for sonda in versions_in(&sole_sonde(&wf), "fedora:") {
+        assert!(
+            sonda > NEWEST_TESTED_FEDORA,
+            "la sonda su Fedora {sonda:?} non è più recente di {NEWEST_TESTED_FEDORA:?}: \
+             o è una voce bloccante marcata per sbaglio come sonda, o la costante è rimasta \
+             indietro rispetto a una release ormai provata davvero"
+        );
+    }
 }
+
+/// Il workflow senza le righe marcate come sonda non bloccante.
+///
+/// Testuale e non strutturato, come tutto il resto di questa guardia: il test
+/// legge il file com'è, senza portarsi dietro un parser YAML per una domanda
+/// che si risolve guardando una riga.
+fn senza_sonde(wf: &str) -> String {
+    wf.lines()
+        .filter(|riga| !riga.contains(MARCATORE_SONDA))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Solo le righe marcate come sonda.
+fn sole_sonde(wf: &str) -> String {
+    wf.lines()
+        .filter(|riga| riga.contains(MARCATORE_SONDA))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Il commento che marca una voce di matrice come sonda tollerata in rosso.
+/// Deve combaciare con `.github/workflows/integration.yml`.
+const MARCATORE_SONDA: &str = "sonda-non-bloccante";
 
 /// Tutte le versioni che seguono `prefisso` nel testo, come `(major, minor)`.
 fn versions_in(text: &str, prefisso: &str) -> Vec<(u32, u32)> {

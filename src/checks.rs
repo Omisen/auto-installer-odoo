@@ -282,8 +282,10 @@ pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
 /// vecchia release ancora supportata da upstream al momento in cui il backend dnf
 /// è stato scritto, e sotto quella nessuno ha provato nulla. Come per le altre
 /// famiglie la soglia è aperta verso l'alto, con l'avviso di
-/// [`is_newer_than_tested`] — che su Fedora scatta **sempre**, finché la CI di
-/// quella famiglia non esiste.
+/// [`is_newer_than_tested`], che su Fedora tace fino alla 41 compresa: la CI di
+/// integrazione esegue il ciclo completo su `fedora:41`, in due scenari (con e
+/// senza nginx), quindi [`NEWEST_TESTED_FEDORA`] descrive una release davvero
+/// provata e non una speranza.
 pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
     let (major, minor) = parse_version(&info.version);
     match info.family {
