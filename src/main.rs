@@ -780,7 +780,28 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
 
     let residue = report.residue();
     if residue.is_empty() {
-        println!("Nessun residuo: il sistema è tornato allo stato precedente.");
+        match &report.home_left_behind {
+            // La promessa, non il meccanismo (A-MD-2). Tutti gli undo possono
+            // essere riusciti e la home essere ancora lì: `PrepareOptRoot`
+            // rinuncia — correttamente — davanti a una directory non vuota, e
+            // restituisce `Ok`. Dire «nessun residuo» in quel caso è dire il
+            // vero sugli undo e il falso all'utente.
+            None => println!("Nessun residuo: il sistema è tornato allo stato precedente."),
+            Some(home) => {
+                println!(
+                    "Tutti gli undo sono riusciti, ma {} esiste ancora.",
+                    home.display()
+                );
+                println!();
+                println!("Non l'abbiamo rimossa perché **non è vuota**: contiene qualcosa che");
+                println!("non abbiamo creato noi, e su roba altrui non facciamo mai `rm -rf`.");
+                println!("Guarda cosa c'è dentro e decidi tu:");
+                println!();
+                println!("    sudo ls -la {}", home.display());
+                println!();
+                println!("Tutto ciò che l'installer aveva creato è stato rimosso.");
+            }
+        }
         println!("================================================================");
         println!();
         return;

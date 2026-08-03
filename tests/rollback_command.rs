@@ -856,3 +856,104 @@ fn the_progress_advances_even_on_steps_that_cannot_be_undone() {
     // Il report resta onesto: nessuno dei due è stato annullato.
     assert!(!report.is_clean(), "due step non annullati vanno riportati");
 }
+
+// --- A-MD-2: il report verifica la PROMESSA, non solo gli esiti -------------
+//
+// Questi tre usano `MockSystemOps` e non `SystemModel`, e la ragione è un
+// dettaglio scoperto scrivendoli: `PrepareOptRoot::undo` interroga il
+// filesystem **reale** (`dir.exists()`, `fs::read_dir`) invece di passare da
+// `SystemOps`. Sotto modello quello step vede quindi la macchina che esegue i
+// test, non lo stato modellato — e un test costruito sul modello proverebbe
+// qualcosa di diverso da ciò che crede. Con il mock il controllo del report
+// (`ops.path_exists`) e la risposta sono coerenti.
+
+/// **Il difetto, osservato in campo su Fedora.** Il rollback ha dichiarato
+/// «nessun residuo: il sistema è tornato allo stato precedente» mentre
+/// `/opt/odoo` era ancora lì.
+///
+/// Nessun undo era fallito, e nemmeno poteva: `PrepareOptRoot` davanti a una
+/// directory **non vuota** rinuncia — correttamente, mai un `rm -rf` su roba di
+/// altri — e restituisce `Ok`. Il verdetto sugli esiti era vero; la promessa che
+/// l'utente legge no.
+///
+/// È la lezione di R7 rovesciata: lì un test di CI asseriva il residuo come
+/// atteso, qui è il report all'utente a dichiarare pulito ciò che non lo è. In
+/// entrambi i casi l'asserzione da scrivere per prima è quella sulla
+/// **promessa** — `/opt/odoo` non deve esistere — non quella sul **meccanismo**.
+#[test]
+fn a_surviving_home_is_reported_even_when_every_undo_succeeded() {
+    let report = rollback_con_home(true);
+
+    assert!(
+        report.is_clean(),
+        "nessun undo è fallito: sugli esiti il rollback è pulito"
+    );
+    assert_eq!(
+        report.home_left_behind.as_deref(),
+        Some(std::path::Path::new(HOME)),
+        "…ma la home è ancora lì, e il report deve dirlo: è la promessa che \
+         l'utente legge, non il conteggio degli undo"
+    );
+    assert!(
+        report.has_anything_to_report(),
+        "c'è qualcosa da comunicare, anche se tecnicamente non è un fallimento"
+    );
+}
+
+/// Quando la home sparisce davvero, non si segnala nulla: un allarme garantito
+/// insegna a ignorare gli allarmi.
+#[test]
+fn a_home_that_is_gone_is_not_reported() {
+    let report = rollback_con_home(false);
+
+    assert_eq!(
+        report.home_left_behind, None,
+        "la home è stata rimossa: non c'è nulla da segnalare"
+    );
+    assert!(!report.has_anything_to_report());
+}
+
+/// In `--dry-run` la home c'è **per costruzione** — nessun undo ha rimosso nulla
+/// — quindi segnalarla sarebbe un allarme sempre acceso.
+#[test]
+fn the_dry_run_does_not_cry_wolf_about_the_home() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut ctx = ctx(dir.path().join("state.json"));
+    ctx.dry_run = true;
+
+    let report = rollback_su_mock(&ctx, true);
+
+    assert_eq!(report.home_left_behind, None);
+}
+
+/// Esegue un rollback minimo (un solo step) su un mock che dichiara la home
+/// presente o assente.
+fn rollback_con_home(home_esiste: bool) -> rollback::RollbackReport {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx(dir.path().join("state.json"));
+    rollback_su_mock(&ctx, home_esiste)
+}
+
+fn rollback_su_mock(
+    ctx: &odoo_installer::context::Context,
+    home_esiste: bool,
+) -> rollback::RollbackReport {
+    let mut state = InstallState::default();
+    state.set_config(InstallConfig::from_context(ctx));
+    state.record(StepRecord {
+        name: "setup-log-dir".to_string(),
+        snapshot: serde_json::to_value(odoo_installer::state::PreState::Untracked)
+            .expect("serialize"),
+    });
+
+    let make_ops = || -> Box<dyn SystemOps> {
+        Box::new(
+            common::MockSystemOps::new(common::MockConfig {
+                path_exists: home_esiste,
+                ..common::MockConfig::default()
+            })
+            .0,
+        )
+    };
+    rollback::rollback_from_state(&state, ctx, &make_ops, &NoopReporter)
+}

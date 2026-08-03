@@ -27,6 +27,8 @@
 //! cliente che avevamo salvato in backup risulterebbe nostro. Lo stato da usare
 //! è quello di allora, ed è esattamente ciò che il file di stato contiene.
 
+use std::path::PathBuf;
+
 use tracing::{info, warn};
 
 use crate::context::Context;
@@ -76,6 +78,28 @@ pub struct StepOutcome {
 pub struct RollbackReport {
     /// Esiti nell'ordine in cui gli `undo` sono stati eseguiti (inverso).
     pub outcomes: Vec<StepOutcome>,
+    /// La home dell'installazione **esiste ancora** a rollback concluso?
+    ///
+    /// # Perché si guarda il sistema e non solo gli esiti (A-MD-2)
+    ///
+    /// Perché sono due domande diverse, e su una prova reale la seconda ha
+    /// mentito: il rollback ha dichiarato «nessun residuo» mentre `/opt/odoo`
+    /// era ancora lì. Tutti gli `undo` erano riusciti, compreso quello di
+    /// `PrepareOptRoot` — che davanti a una directory non vuota **rinuncia**,
+    /// correttamente e senza mai un `rm -rf`, e restituisce `Ok`. Il verdetto
+    /// sugli esiti era vero; la promessa che l'utente legge no.
+    ///
+    /// È la lezione di R7 rovesciata. Lì un test di CI asseriva il residuo come
+    /// atteso; qui è il **report all'utente** a dichiarare pulito ciò che non lo
+    /// è. Il correttivo è lo stesso: verificare la **promessa** (`/opt/odoo` non
+    /// deve esistere) e non il **meccanismo** (ogni undo è andato bene).
+    ///
+    /// Non entra in [`Self::is_clean`]: quella decide se il manifesto può essere
+    /// consumato, e un manifesto che non descrive più alcun artefatto va rimosso
+    /// comunque (R19). Tenerlo in vita per un file che **non abbiamo creato
+    /// noi** farebbe credere che ci sia ancora qualcosa da annullare, e un
+    /// secondo `rollback` non potrebbe farci nulla.
+    pub home_left_behind: Option<PathBuf>,
 }
 
 impl RollbackReport {
@@ -91,6 +115,11 @@ impl RollbackReport {
     /// consumato (rimosso), perché non descrive più nulla di vivo.
     pub fn is_clean(&self) -> bool {
         self.residue().is_empty()
+    }
+
+    /// C'è qualcosa da dire all'utente oltre al conteggio degli undo?
+    pub fn has_anything_to_report(&self) -> bool {
+        !self.is_clean() || self.home_left_behind.is_some()
     }
 
     /// Numero di step effettivamente annullati.
@@ -255,6 +284,25 @@ pub fn rollback_from_state(
         };
         reporter.undo_done(&name);
         report.outcomes.push(StepOutcome { name, outcome });
+    }
+
+    // La **promessa**, non il meccanismo: dopo tutti gli undo, `/opt/odoo` c'è
+    // ancora? È una lettura, non una mutazione, e va fatta qui perché è l'unico
+    // punto che vede il sistema a pulizia conclusa.
+    //
+    // In dry-run non si guarda: nessun undo ha rimosso nulla, quindi la
+    // directory c'è per costruzione e segnalarla sarebbe un allarme garantito
+    // che insegna a ignorare gli allarmi.
+    if !ctx.dry_run {
+        let ops = make_ops();
+        if ops.path_exists(&ctx.odoo_home) {
+            warn!(
+                home = %ctx.odoo_home.display(),
+                "rollback concluso ma la home esiste ancora: contiene qualcosa che non \
+                 abbiamo creato noi, e non la rimuoviamo (mai un rm -rf su roba altrui)"
+            );
+            report.home_left_behind = Some(ctx.odoo_home.clone());
+        }
     }
 
     report
