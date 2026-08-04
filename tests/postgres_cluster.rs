@@ -19,6 +19,7 @@ mod common;
 use common::{ops_of, MockConfig, MockSystemOps, Op};
 use odoo_installer::context::Context;
 use odoo_installer::distro::OsFamily;
+use odoo_installer::error::StepError;
 use odoo_installer::state::PreState;
 use odoo_installer::step::Step;
 use odoo_installer::steps::setup_postgres::{PostgresSnapshot, SetupPostgres};
@@ -327,4 +328,134 @@ fn initialising_where_it_is_not_needed_succeeds_quietly() {
         Debian::new().init_postgres_cluster().is_ok(),
         "su questa famiglia non c'è nulla da fare, e «nulla da fare» è un successo"
     );
+}
+
+// --- A-MD-6: le due risposte su «dov'è il cluster» ---------------------------
+
+/// `systemctl show -p Environment postgresql.service`, letto come lo legge
+/// `postgresql-setup`.
+///
+/// Il fixture è il formato **vero** del comando: una riga `Environment=` con più
+/// assegnazioni separate da spazi. Scriverlo a memoria come una riga per
+/// variabile darebbe un parser che non combacia con niente — è già successo due
+/// volte in questo progetto, e sempre così (A-R8-1-ter).
+#[test]
+fn the_declared_pgdata_is_read_the_way_postgresql_setup_reads_it() {
+    use odoo_installer::distro::fedora::pgdata_from_environment;
+    use std::path::PathBuf;
+
+    assert_eq!(
+        pgdata_from_environment("Environment=PGDATA=/var/lib/pgsql/data\n"),
+        Some(PathBuf::from("/var/lib/pgsql/data"))
+    );
+    assert_eq!(
+        pgdata_from_environment(
+            "Environment=PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj PGDATA=/srv/pg/data\n"
+        ),
+        Some(PathBuf::from("/srv/pg/data")),
+        "PGDATA non è per forza la prima variabile della riga"
+    );
+    assert_eq!(
+        pgdata_from_environment("Environment=PGDATA=/var/lib/pgsql/data PGDATA=/srv/pg/data\n"),
+        Some(PathBuf::from("/srv/pg/data")),
+        "come in systemd, l'ultima definizione vince: è così che agisce un drop-in"
+    );
+    assert_eq!(
+        pgdata_from_environment("Environment=\n"),
+        None,
+        "una unit senza PGDATA è «non lo so», non un percorso vuoto"
+    );
+    assert_eq!(
+        pgdata_from_environment(""),
+        None,
+        "e nemmeno un output assente si traduce in un percorso"
+    );
+}
+
+/// La regola: si rifiuta **solo** quando le due risposte divergono davvero.
+#[test]
+fn a_conflict_is_only_a_conflict_when_both_answers_exist_and_differ() {
+    use odoo_installer::steps::setup_postgres::cluster_path_conflict;
+    use std::path::Path;
+
+    let nostro = Path::new("/var/lib/pgsql/data");
+
+    assert!(
+        cluster_path_conflict(nostro, Some(Path::new("/var/lib/pgsql/data"))).is_none(),
+        "stesso percorso: è il caso normale di ogni Fedora"
+    );
+    assert!(
+        cluster_path_conflict(nostro, None).is_none(),
+        "«non lo so» non è un conflitto: cecità non è divergenza"
+    );
+
+    let messaggio = cluster_path_conflict(nostro, Some(Path::new("/srv/pg/data")))
+        .expect("percorsi diversi: va rifiutato");
+    assert!(
+        messaggio.contains("/srv/pg/data") && messaggio.contains("/var/lib/pgsql/data"),
+        "il messaggio deve nominare ENTRAMBI i percorsi, o non si capisce cosa non torna: \
+         {messaggio}"
+    );
+    assert!(
+        messaggio.contains("aggressive-rollback"),
+        "e deve dire qual è il danno che si sta evitando: {messaggio}"
+    );
+}
+
+/// Lo step si ferma **nello snapshot**, cioè prima di qualunque mutazione.
+///
+/// È la differenza fra una precondizione e un undo: qui non c'è niente da
+/// annullare perché non è stato fatto niente. E il caso è raggiungibile davvero
+/// — un PostgreSQL già installato con un drop-in che sposta PGDATA — che è
+/// esattamente la macchina su cui il danno sarebbe peggiore, perché in
+/// `/var/lib/pgsql/data` può esserci un cluster precedente del cliente.
+#[test]
+fn a_cluster_configured_elsewhere_stops_the_installation_before_it_starts() {
+    let cfg = MockConfig {
+        family: OsFamily::Fedora,
+        pg_declared_data_dir: Some(std::path::PathBuf::from("/srv/pg/data")),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = SetupPostgres::with_ops(Box::new(mock));
+
+    let err = step
+        .snapshot(&ctx(false))
+        .expect_err("un PGDATA diverso dal nostro deve fermare lo step");
+    assert!(
+        matches!(err, StepError::Precondition(_)),
+        "dev'essere una precondizione, non un errore qualsiasi: {err:?}"
+    );
+    assert!(
+        ops_of(&log).is_empty(),
+        "lo snapshot non deve aver mutato niente: {:?}",
+        ops_of(&log)
+    );
+}
+
+/// E quando le due risposte coincidono — o la unit non dice niente — lo step
+/// procede come ha sempre fatto.
+///
+/// È la metà che rende il controllo un controllo: senza, «rifiuta sempre»
+/// passerebbe il test qui sopra e nessuno se ne accorgerebbe.
+#[test]
+fn the_usual_fedora_is_not_stopped_by_this_check() {
+    for dichiarato in [
+        None,
+        Some(std::path::PathBuf::from(
+            odoo_installer::distro::fedora::POSTGRES_DATA_DIR,
+        )),
+    ] {
+        let cfg = MockConfig {
+            family: OsFamily::Fedora,
+            pg_declared_data_dir: dichiarato.clone(),
+            ..Default::default()
+        };
+        let (mock, _log) = MockSystemOps::new(cfg);
+        let mut step = SetupPostgres::with_ops(Box::new(mock));
+        assert!(
+            step.snapshot(&ctx(false)).is_ok(),
+            "con PGDATA {dichiarato:?} lo step deve procedere"
+        );
+    }
 }

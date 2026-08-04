@@ -37,6 +37,41 @@ use crate::system_ops::SystemOps;
 
 const PG_SERVICE: &str = "postgresql";
 
+/// Le due risposte su «dov'è il cluster» sono in conflitto? (`A-MD-6`)
+///
+/// `ours` è la costante del codice — quella che guida l'undo — e `declared` è
+/// ciò che la unit dichiara a `postgresql-setup`, quando si riesce a leggerlo.
+///
+/// Tre esiti, e il terzo è il motivo per cui questa funzione esiste separata:
+/// - coincidono → nessun problema, ed è il caso normale;
+/// - `declared` è `None` → **non lo sappiamo**, e da lì non si conclude niente:
+///   si prosegue come si è sempre fatto (cecità non è conflitto);
+/// - divergono → si rifiuta, e il messaggio nomina entrambi i percorsi.
+///
+/// Pura: il caso interessante richiederebbe una Fedora con un drop-in su
+/// `postgresql.service`, cioè una macchina che nessun test possiede.
+pub fn cluster_path_conflict(
+    ours: &std::path::Path,
+    declared: Option<&std::path::Path>,
+) -> Option<String> {
+    let declared = declared?;
+    if declared == ours {
+        return None;
+    }
+    Some(format!(
+        "il cluster PostgreSQL di questo sistema è configurato in `{}`, mentre l'installer sa \
+         gestirne uno solo in `{}`. La differenza non è cosmetica: `postgresql-setup` \
+         inizializzerebbe il primo, mentre il rollback con --aggressive-rollback rimuoverebbe il \
+         secondo — cioè una directory che non abbiamo creato noi e che su questa macchina può \
+         contenere un cluster preesistente. Mi fermo prima di toccare qualsiasi cosa. \
+         Vie d'uscita: installare su una macchina con il PGDATA di default, oppure rimuovere il \
+         drop-in che sposta PGDATA da `postgresql.service` (`systemctl show -p Environment \
+         postgresql.service` mostra quello attivo).",
+        declared.display(),
+        ours.display()
+    ))
+}
+
 /// Snapshot dei tre assi indipendenti dello stato di PostgreSQL.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostgresSnapshot {
@@ -118,6 +153,18 @@ impl Step for SetupPostgres {
         self.snap.cluster_initialized = match self.ops.distro().postgres_data_dir() {
             None => PreState::Untracked,
             Some(dir) => {
+                // Prima di leggere QUEL percorso: è davvero quello che il
+                // servizio userà? (A-MD-6) Qui la risposta c'è solo se
+                // PostgreSQL è già installato — la unit esiste — ed è proprio il
+                // caso in cui un drop-in può esserci. Rifiutare nello snapshot
+                // significa fermarsi prima di ogni mutazione: precondizione, non
+                // undo.
+                if let Some(conflitto) = cluster_path_conflict(
+                    &dir,
+                    self.ops.distro().declared_postgres_data_dir().as_deref(),
+                ) {
+                    return Err(StepError::Precondition(conflitto));
+                }
                 if self.ops.path_exists(&dir.join("PG_VERSION")) {
                     PreState::Preexisting
                 } else {
@@ -154,6 +201,18 @@ impl Step for SetupPostgres {
         if self.snap.cluster_initialized == PreState::Untracked
             && self.ops.distro().postgres_data_dir().is_some()
         {
+            // Di nuovo, e non per abbondanza: allo snapshot il pacchetto poteva
+            // non essere ancora installato, quindi la unit non esisteva e la
+            // domanda non aveva risposta. Ora esiste. È l'ultimo istante in cui
+            // si può ancora rifiutare senza aver creato un cluster.
+            if let Some(dir) = self.ops.distro().postgres_data_dir() {
+                if let Some(conflitto) = cluster_path_conflict(
+                    &dir,
+                    self.ops.distro().declared_postgres_data_dir().as_deref(),
+                ) {
+                    return Err(StepError::Precondition(conflitto));
+                }
+            }
             self.ops.distro().init_postgres_cluster()?;
             self.snap.cluster_initialized = PreState::CreatedByUs;
             info!("run: cluster PostgreSQL inizializzato");

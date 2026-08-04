@@ -186,6 +186,9 @@ pub struct MockConfig {
     pub venv_exists: bool,
     /// `python3 -m venv` disponibile?
     pub venv_available: bool,
+    /// Il PGDATA dichiarato dalla unit `postgresql.service` (A-MD-6).
+    /// `None` = «non lo so», il caso normale nei test.
+    pub pg_declared_data_dir: Option<PathBuf>,
     /// Fa fallire la `run_as_user` i cui argomenti contengono questo frammento.
     pub run_as_user_fails_on: Option<String>,
     /// La versione dell'interprete, o `None` per «non si sa» (A-MD-7).
@@ -278,6 +281,7 @@ impl Default for MockConfig {
             network_failures_are_timeouts: false,
             venv_exists: false,
             venv_available: true,
+            pg_declared_data_dir: None,
             run_as_user_fails_on: None,
             python_version: Some((3, 12)),
             requirements_content: None,
@@ -368,6 +372,7 @@ impl MockSystemOps {
             },
             family: cfg.family,
             log: Arc::clone(&log),
+            declared_pgdata: cfg.pg_declared_data_dir.clone(),
         };
         MockSystemOps {
             log,
@@ -606,6 +611,8 @@ pub struct MockDistro {
     selinux: MockSelinux,
     family: OsFamily,
     log: OpLog,
+    /// Il PGDATA che la unit dichiara (A-MD-6): `None` = non lo sappiamo.
+    declared_pgdata: Option<PathBuf>,
 }
 
 impl MockDistro {
@@ -665,6 +672,13 @@ impl Distro for MockDistro {
             OsFamily::Debian => odoo_installer::distro::debian::Debian::new().nginx_layout(),
             OsFamily::Fedora => odoo_installer::distro::fedora::Fedora::new().nginx_layout(),
         }
+    }
+
+    /// Il PGDATA che la unit dichiarerebbe (A-MD-6). `None` = non lo sappiamo,
+    /// che è il default: la stragrande maggioranza dei test non ha nulla a che
+    /// fare con questa domanda e non deve rispondervi per sbaglio.
+    fn declared_postgres_data_dir(&self) -> Option<std::path::PathBuf> {
+        self.declared_pgdata.clone()
     }
 
     fn postgres_data_dir(&self) -> Option<std::path::PathBuf> {

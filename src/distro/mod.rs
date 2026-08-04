@@ -156,6 +156,31 @@ pub trait Distro {
     /// dati invece che dedotta.
     fn postgres_data_dir(&self) -> Option<PathBuf>;
 
+    /// Il PGDATA che il **servizio dichiara**, se si riesce a leggerlo.
+    ///
+    /// # Perché esiste una seconda domanda sulla stessa cosa (`A-MD-6`)
+    ///
+    /// [`Self::postgres_data_dir`] è ciò che *noi* sappiamo: una costante del
+    /// codice, e deve restarlo perché guida un `remove_dir_all` (A-V3-8: un
+    /// percorso che arriva da un file non è dato fidato). Ma chi inizializza il
+    /// cluster è `postgresql-setup`, che il PGDATA **se lo fa dire dalla unit**
+    /// — e un amministratore può spostarlo con un drop-in.
+    ///
+    /// Finché le due risposte coincidono non c'è problema, ed è il caso normale.
+    /// Quando divergono, il danno non è teorico: `initdb` creerebbe il cluster
+    /// dove dice la unit, mentre l'undo con `--aggressive-rollback` rimuoverebbe
+    /// ricorsivamente la **costante** — cioè una directory che non abbiamo
+    /// creato noi, e che su una macchina così è proprio quella che può contenere
+    /// un cluster precedente del cliente.
+    ///
+    /// Questa funzione serve quindi a **rifiutare**, non a scegliere: il
+    /// percorso letto qui non guida nessuna rimozione. `None` è «non lo so»
+    /// (unit assente, `systemctl` non interrogabile, famiglia senza il concetto)
+    /// e da lì non si conclude niente — cecità non è assenza.
+    fn declared_postgres_data_dir(&self) -> Option<PathBuf> {
+        None
+    }
+
     /// Inizializza il cluster PostgreSQL.
     ///
     /// Chiamata **solo** quando [`Self::postgres_data_dir`] è `Some` e il

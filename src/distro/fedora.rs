@@ -112,6 +112,25 @@ impl Distro for Fedora {
         Some(PathBuf::from(POSTGRES_DATA_DIR))
     }
 
+    /// Il PGDATA dichiarato dalla unit `postgresql.service`, se leggibile.
+    ///
+    /// È la stessa fonte che consulta `postgresql-setup`: `systemctl show -p
+    /// Environment postgresql.service`, cioè `Environment=` con i drop-in già
+    /// applicati da systemd. Interrogare la stessa cosa che interroga lui è il
+    /// punto — un'altra fonte risponderebbe a un'altra domanda.
+    ///
+    /// `None` quando la unit non esiste (pacchetto non ancora installato) o
+    /// `systemctl` non risponde: casi in cui non sappiamo, non casi in cui
+    /// sappiamo che non c'è.
+    fn declared_postgres_data_dir(&self) -> Option<PathBuf> {
+        let out = capture_command(
+            "systemctl",
+            &["show", "-p", "Environment", "postgresql.service"],
+        )
+        .ok()?;
+        pgdata_from_environment(&out)
+    }
+
     /// `postgresql-setup --initdb`: crea il cluster che il pacchetto non crea.
     ///
     /// È una **mutazione**, e produce un artefatto (il data directory) che
@@ -121,4 +140,23 @@ impl Distro for Fedora {
     fn init_postgres_cluster(&self) -> Result<(), StepError> {
         run_command("postgresql-setup", &["--initdb"])
     }
+}
+
+/// Estrae `PGDATA` da una riga `Environment=…` di `systemctl show`.
+///
+/// Pura, e con un fixture preso dal comando vero: il formato è
+/// `Environment=PGDATA=/var/lib/pgsql/data PGOPTS=…`, cioè **una** riga con più
+/// assegnazioni separate da spazi — la stessa che `postgresql-setup` spezza per
+/// conto suo. Un `None` significa «in questo output PGDATA non c'è», non «non
+/// esiste»: chi chiama non deve poter confondere le due cose.
+pub fn pgdata_from_environment(output: &str) -> Option<PathBuf> {
+    output
+        .lines()
+        .filter_map(|line| line.strip_prefix("Environment="))
+        .flat_map(|env| env.split_whitespace())
+        .filter_map(|assegnazione| assegnazione.strip_prefix("PGDATA="))
+        // L'ultima vince, come in systemd: un drop-in che ridefinisce la
+        // variabile viene DOPO quella della unit di base.
+        .next_back()
+        .map(PathBuf::from)
 }
