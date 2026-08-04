@@ -44,7 +44,13 @@ servizio systemd e (opzionale) Nginx.
 
 ## Installazione rapida
 
-### Opzione A — binario precompilato (consigliata, niente Rust)
+**Quale scegliere**, in una riga: se vuoi il comando `odoo-installer` nel `PATH` e rimovibile con il
+gestore di pacchetti, prendi la confezione della tua famiglia (**B** per Ubuntu/Debian, **C** per
+Fedora); se ti basta un binario da lanciare dove l'hai scaricato, **A** va su qualsiasi distro. In
+tutti e tre i casi è **lo stesso eseguibile** — musl statico, nessuna dipendenza — e in tutti e tre
+Odoo viene installato a runtime, quando lanci il comando.
+
+### Opzione A — Qualsiasi distro: binario precompilato (consigliata, niente Rust)
 
 Scarica il binario dalla pagina **[Releases](../../releases/latest)**. Due varianti Linux x86_64:
 
@@ -69,10 +75,10 @@ sudo ./odoo-installer                                        # guidato (interatt
 sudo ./odoo-installer --config production.env --with-nginx
 ```
 
-### Opzione A-bis — pacchetto `.deb` (esperienza `apt` nativa)
+### Opzione B — Ubuntu / Debian: pacchetto `.deb` (esperienza `apt` nativa)
 
-Su Debian/Ubuntu puoi installare l'installer come pacchetto: il comando `odoo-installer`
-finisce nel `PATH` ed è rimovibile con `apt remove odoo-installer`. Il `.deb` è **statico**
+Su Ubuntu (22.04, 24.04…) e Debian (11, 12, 13…) puoi installare l'installer come pacchetto: il
+comando `odoo-installer` finisce nel `PATH` ed è rimovibile con `apt remove odoo-installer`. Il `.deb` è **statico**
 (musl), quindi gira su qualsiasi distro. Deposita **solo** il binario CLI — non installa
 servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
 
@@ -89,10 +95,10 @@ sudo odoo-installer                                          # ora è nel PATH
 sudo odoo-installer --config production.env --with-nginx
 ```
 
-### Opzione A-ter — pacchetto `.rpm` (esperienza `dnf` nativa)
+### Opzione C — Fedora: pacchetto `.rpm` (esperienza `dnf` nativa)
 
-Su Fedora, la stessa cosa con l'altra confezione. È **lo stesso binario** del `.deb` e del
-`tar.gz` — musl statico, nessuna dipendenza — impacchettato per l'altro gestore.
+Su Fedora (40, 41, …, 44) la stessa cosa con l'altra confezione. È **lo stesso binario** del `.deb`
+e del `tar.gz` — musl statico, nessuna dipendenza — impacchettato per l'altro gestore.
 
 ```bash
 curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-2.2.0-1.x86_64.rpm
@@ -107,7 +113,7 @@ sudo odoo-installer                                          # ora è nel PATH
 
 Rimovibile con `sudo dnf remove odoo-installer`. Come il `.deb`, deposita **solo** il binario CLI.
 
-### Opzione B — build da sorgente
+### Opzione D — Qualsiasi distro: build da sorgente
 
 ```bash
 # Toolchain Rust (una volta sola)
