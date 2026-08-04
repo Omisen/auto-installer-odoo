@@ -246,6 +246,42 @@ pub const NEWEST_TESTED_DEBIAN: (u32, u32) = (12, 0);
 /// l'avviso di [`is_newer_than_tested`] mentirebbe in una delle due direzioni.
 pub const NEWEST_TESTED_FEDORA: (u32, u32) = (41, 0);
 
+/// L'ultima release provata per la distribuzione `id`, col suo nome per esteso.
+///
+/// **Tabella unica**, e non per brevità: `is_newer_than_tested` decide *se*
+/// avvisare e [`untested_release_warning`] decide *cosa dire*. Con due tabelle
+/// le due risposte possono divergere in silenzio — che è esattamente A-MD-5:
+/// la soglia era giusta e il messaggio nominava un'altra famiglia.
+///
+/// Un `ID` di famiglia ignota non ci arriva: [`OsFamily::from_os_id`] l'ha già
+/// rifiutato dentro [`check_os_from`]. Il `None` non è quindi un ripiego, è
+/// l'assenza di una soglia superiore da confrontare.
+fn tested_release(id: &str) -> Option<(&'static str, (u32, u32))> {
+    match id {
+        "ubuntu" => Some(("Ubuntu", NEWEST_TESTED_UBUNTU)),
+        "debian" => Some(("Debian", NEWEST_TESTED_DEBIAN)),
+        "fedora" => Some(("Fedora", NEWEST_TESTED_FEDORA)),
+        _ => None,
+    }
+}
+
+/// Rende `(major, minor)` come lo scrive la distribuzione: `24.04`, non `24.4`.
+///
+/// Pubblica per essere provata su valori che oggi nessuna costante ha (una
+/// `(25, 10)` deve dare `25.10`, non `25.010`): il caso interessante non è
+/// raggiungibile passando dalle costanti, e verificarlo solo attraverso quelle
+/// significherebbe provare la formattazione su un unico esempio.
+///
+/// `minor == 0` si omette perché è così che si scrivono Debian e Fedora — una
+/// «Fedora 41.0» non l'ha mai chiamata così nessuno.
+pub fn format_release((major, minor): (u32, u32)) -> String {
+    if minor == 0 {
+        format!("{major}")
+    } else {
+        format!("{major}.{minor:02}")
+    }
+}
+
 /// La release è **più recente** dell'ultima che abbiamo davvero provato?
 ///
 /// Le soglie di [`validate_os`] sono aperte verso l'alto, e devono restarci: un
@@ -258,17 +294,47 @@ pub const NEWEST_TESTED_FEDORA: (u32, u32) = (41, 0);
 ///
 /// Pura: la soglia superiore si verifica senza avere quell'OS sotto mano.
 pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
-    let (major, minor) = parse_version(version);
-    let (tested_major, tested_minor) = match id {
-        "ubuntu" => NEWEST_TESTED_UBUNTU,
-        "debian" => NEWEST_TESTED_DEBIAN,
-        "fedora" => NEWEST_TESTED_FEDORA,
-        // Qui non ci arriva nulla d'altro: un `ID` di famiglia ignota è già
-        // stato rifiutato da `OsFamily::from_os_id`. Inventargli una soglia
-        // sarebbe un ramo che non può eseguire.
-        _ => return false,
-    };
-    (major, minor) > (tested_major, tested_minor)
+    release_to_flag(id, version).is_some()
+}
+
+/// La release provata **da citare**, se c'è qualcosa da segnalare.
+///
+/// Un punto solo in cui si decide *se* avvisare, e restituisce già ciò che serve
+/// per dirlo. Le due funzioni pubbliche qui sotto sono involucri: così non
+/// esiste un caso in cui una risponde «sì» e l'altra non ha nulla da nominare —
+/// né il ramo irraggiungibile che si otterrebbe facendole interrogare la tabella
+/// una per conto proprio.
+fn release_to_flag(id: &str, version: &str) -> Option<(&'static str, (u32, u32))> {
+    let (nome, provata) = tested_release(id)?;
+    (parse_version(version) > provata).then_some((nome, provata))
+}
+
+/// Il testo dell'avviso, o `None` se non c'è nulla da segnalare.
+///
+/// **A-MD-5.** Prima era una stringa cablata dentro [`check_os`] che nominava
+/// «Ubuntu 24.04, Debian 12» a chiunque — quindi anche a un utente **Fedora**,
+/// al quale l'unica informazione utile in quel momento (Fedora 41 è la release
+/// che proviamo davvero) non veniva detta. Le costanti esistevano ed erano
+/// giuste: il messaggio non le leggeva. È la classe ricorrente del progetto —
+/// *un'informazione che c'era e non è stata letta*.
+///
+/// Si nomina **solo la famiglia su cui si sta installando**: le altre due non
+/// aiutano chi legge, e nominarle è il modo in cui il difetto si ripresenta.
+///
+/// Pura e con il messaggio come valore di ritorno invece che come effetto: un
+/// avviso emesso da dentro `check_os` sarebbe verificabile solo catturando i
+/// log, e quello che qui conta è proprio il *testo* (la lezione di A-R9-1:
+/// quando il valore di un controllo sta nel perché, verificarne l'esito non
+/// verifica niente).
+pub fn untested_release_warning(id: &str, version: &str) -> Option<String> {
+    let (nome, provata) = release_to_flag(id, version)?;
+    Some(format!(
+        "questa release è più recente di {nome} {}, l'ultima su cui l'installer viene \
+         provato: l'installazione prosegue, ma nomi di pacchetti e pacchetto wkhtmltopdf \
+         potrebbero non essere quelli giusti. Se qualcosa non torna, è il primo posto \
+         dove guardare.",
+        format_release(provata)
+    ))
 }
 
 /// Applica le soglie di versione minima: Ubuntu ≥ 22.04, Debian ≥ 11.
@@ -333,15 +399,8 @@ pub fn check_os() -> Result<OsInfo, CheckError> {
         codename = ?info.codename,
         "✔ OS supportato"
     );
-    if is_newer_than_tested(&info.id, &info.version) {
-        warn!(
-            os = %info.id,
-            version = %info.version,
-            "questa release è più recente di quelle su cui l'installer viene provato \
-             (Ubuntu 24.04, Debian 12): l'installazione prosegue, ma nomi di pacchetti e \
-             pacchetto wkhtmltopdf potrebbero non essere quelli giusti. Se qualcosa non \
-             torna, è il primo posto dove guardare."
-        );
+    if let Some(avviso) = untested_release_warning(&info.id, &info.version) {
+        warn!(os = %info.id, version = %info.version, "{avviso}");
     }
     Ok(info)
 }

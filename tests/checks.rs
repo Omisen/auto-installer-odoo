@@ -4,8 +4,9 @@ use std::io::Write;
 use std::path::Path;
 
 use odoo_installer::checks::{
-    check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user,
-    is_newer_than_tested, ports_to_check, validate_os, CheckError, OsInfo,
+    check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user, format_release,
+    is_newer_than_tested, ports_to_check, untested_release_warning, validate_os, CheckError,
+    OsInfo, NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_UBUNTU,
 };
 use odoo_installer::distro::OsFamily;
 
@@ -239,4 +240,116 @@ fn a_newer_release_is_still_accepted() {
 #[test]
 fn an_unsupported_distribution_has_no_upper_threshold() {
     assert!(!is_newer_than_tested("arch", "99"));
+}
+
+// --- A-MD-5: l'avviso nomina la famiglia di chi lo legge --------------------
+
+/// Il difetto, per esteso: su Fedora 44 l'installer stampava «(Ubuntu 24.04,
+/// Debian 12)» — cioè due famiglie che non c'entrano — e **non** Fedora 41, la
+/// sola release provata e l'unica informazione utile in quel momento.
+///
+/// È anche la guardia contro il ritorno del difetto: qualunque ricablatura del
+/// testo che rinomini tutte e tre le famiglie fa fallire questo test, perché
+/// l'asserzione non è «nomina la mia» ma «nomina la mia e **non** le altre».
+#[test]
+fn the_untested_warning_names_only_the_family_being_installed() {
+    // Versione volutamente altissima: il test parla di *chi* viene nominato,
+    // non di dove cade la soglia (quello lo dicono i test qui sopra).
+    for (id, propria, estranee) in [
+        ("ubuntu", "Ubuntu", ["Debian", "Fedora"]),
+        ("debian", "Debian", ["Ubuntu", "Fedora"]),
+        ("fedora", "Fedora", ["Ubuntu", "Debian"]),
+    ] {
+        let avviso = untested_release_warning(id, "99.99")
+            .unwrap_or_else(|| panic!("{id} 99.99 è oltre ogni soglia: l'avviso deve esserci"));
+
+        assert!(
+            avviso.contains(propria),
+            "su {id} l'avviso deve nominare {propria}, ma dice: {avviso}"
+        );
+        for altra in estranee {
+            assert!(
+                !avviso.contains(altra),
+                "su {id} l'avviso nomina {altra}, che non c'entra nulla con questa \
+                 installazione — è esattamente A-MD-5. Testo: {avviso}"
+            );
+        }
+    }
+}
+
+/// **L'anello che mancava.** `the_newest_tested_releases_match_the_ci_matrix`
+/// lega le costanti alla matrice della CI, ma nulla legava il *messaggio* alle
+/// costanti: potevano divergere in silenzio, e l'hanno fatto per sette fasi.
+///
+/// La resa attesa è ricostruita qui a mano, di proposito, come per `KNOWN_KEYS`
+/// in `ci_config.rs`: se il test riusasse la funzione di produzione proverebbe
+/// solo che è uguale a se stessa.
+#[test]
+fn the_untested_warning_quotes_the_tested_release_from_the_constants() {
+    fn come_la_scrive_la_distro((major, minor): (u32, u32)) -> String {
+        if minor == 0 {
+            format!("{major}")
+        } else {
+            format!("{major}.{minor:02}")
+        }
+    }
+
+    for (id, costante) in [
+        ("ubuntu", NEWEST_TESTED_UBUNTU),
+        ("debian", NEWEST_TESTED_DEBIAN),
+        ("fedora", NEWEST_TESTED_FEDORA),
+    ] {
+        let avviso = untested_release_warning(id, "99.99").expect("avviso presente");
+        let attesa = come_la_scrive_la_distro(costante);
+        assert!(
+            avviso.contains(&attesa),
+            "su {id} l'avviso deve citare la release provata ({attesa}, dalla costante \
+             {costante:?}) invece di un numero scritto a mano. Testo: {avviso}"
+        );
+    }
+}
+
+/// Un avviso che comparisse su una release provata sarebbe un allarme falso, e
+/// un allarme falso che compare sempre insegna a ignorare gli avvisi (A-V3-10).
+#[test]
+fn no_warning_on_a_release_we_actually_test() {
+    for (id, version) in [
+        ("ubuntu", "24.04"),
+        ("ubuntu", "22.04"),
+        ("debian", "12"),
+        ("debian", "11"),
+        ("fedora", "41"),
+        ("fedora", "40"),
+        // Famiglia ignota: già rifiutata a monte, qui non c'è nulla da dire.
+        ("arch", "99"),
+    ] {
+        assert_eq!(
+            untested_release_warning(id, version),
+            None,
+            "{id} {version} è fra quelle che proviamo (o non è affar nostro): \
+             avvisare sarebbe un falso allarme"
+        );
+    }
+}
+
+/// `24.04`, non `24.4`: una versione Ubuntu scritta male in un avviso che parla
+/// di versioni è il genere di dettaglio che fa dubitare del resto del messaggio.
+///
+/// Provata **direttamente**, perché il caso che rompe la formattazione ingenua
+/// (un `minor` a due cifre) non è raggiungibile passando dalle costanti di oggi.
+#[test]
+fn a_release_is_rendered_the_way_the_distribution_writes_it() {
+    assert_eq!(format_release((24, 4)), "24.04");
+    assert_eq!(format_release((22, 4)), "22.04");
+    assert_eq!(
+        format_release((25, 10)),
+        "25.10",
+        "due cifre restano due cifre"
+    );
+    assert_eq!(
+        format_release((12, 0)),
+        "12",
+        "«Debian 12.0» non lo dice nessuno"
+    );
+    assert_eq!(format_release((41, 0)), "41");
 }
