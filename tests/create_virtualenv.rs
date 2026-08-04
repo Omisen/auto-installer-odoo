@@ -39,7 +39,10 @@ fn absent_creates_and_undo_removes() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    assert!(ops.contains(&Op::CreateVenv(venv_dir())));
+    assert!(ops.contains(&Op::CreateVenv {
+        python: "python3".to_string(),
+        venv: venv_dir()
+    }));
     assert!(
         ops.contains(&Op::RemoveDirAll(venv_dir())),
         "undo: rm -rf del venv"
@@ -118,7 +121,7 @@ fn the_venv_precondition_asks_about_ensurepip_not_about_the_venv_module() {
     // La dichiarazione nel trait finisce con `;`, quindi la graffa compare solo
     // nell'implementazione: quel che segue è il corpo.
     let body = source
-        .split("fn python_venv_available(&self) -> bool {")
+        .split("fn python_venv_available(&self, python: &str) -> bool {")
         .nth(1)
         .expect("l'implementazione di python_venv_available deve esistere");
     let body = body.split("\n    }").next().expect("corpo del metodo");
@@ -130,5 +133,12 @@ fn the_venv_precondition_asks_about_ensurepip_not_about_the_venv_module() {
     assert!(
         !body.contains("\"--help\""),
         "e NON `venv --help`, che risponde 0 anche senza il pacchetto python3-venv: {body}"
+    );
+    // M11: e la domanda va posta all'interprete che verrà usato davvero, non a
+    // `python3` cablato. Su una Fedora ≥ 43 i due divergono, e chiedere al primo
+    // darebbe di nuovo una risposta giusta alla domanda sbagliata.
+    assert!(
+        body.contains("Command::new(python)"),
+        "la precondizione deve interrogare l'interprete scelto, non `python3`: {body}"
     );
 }

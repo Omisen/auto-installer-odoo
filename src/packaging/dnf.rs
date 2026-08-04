@@ -29,7 +29,10 @@
 
 use std::path::Path;
 
-use super::{availability_from, Availability, CatalogEntry, DepId, PackageCatalog, PackageManager};
+use super::{
+    availability_from, AlternatePython, Availability, CatalogEntry, DepId, PackageCatalog,
+    PackageManager,
+};
 use crate::error::StepError;
 use crate::system_ops::{capture_command, run_command};
 
@@ -143,6 +146,27 @@ pub const POSTGRES_PACKAGES: &[&str] = &["postgresql-server", "postgresql-contri
 pub const POSTGRES_MARKER_PACKAGE: &str = "postgresql-server";
 /// Il pacchetto di nginx (identico su entrambe le famiglie).
 pub const NGINX_PACKAGE: &str = "nginx";
+
+/// Gli interpreti Python alternativi impacchettati da Fedora, dal più recente.
+///
+/// Fedora ne mantiene diversi accanto a quello di sistema, con lo stesso nome per
+/// il pacchetto e per il binario. Servono da Fedora 43, dove il `python3` di
+/// sistema è passato a **3.14** e i pin di Odoo 18 non lo coprono (A-MD-7).
+///
+/// **Verificato in campo su Fedora 44** (2026-08-04): `dnf install python3.13
+/// python3.13-devel` porta con sé `python3.13-libs`, `python3.13 -m venv` crea
+/// un venv completo senza pacchetti aggiuntivi, l'intero `requirements.txt` di
+/// Odoo 18 si installa (`gevent` come wheel `cp313`, sei estensioni compilate
+/// contro quegli header) e `dnf remove` toglie esattamente ciò che aveva messo.
+///
+/// L'ordine è la politica: si prende il **più recente coperto dai pin**, non il
+/// più vecchio disponibile. Un interprete più vicino a quello di sistema riceve
+/// aggiornamenti di sicurezza più a lungo, e resta comunque dentro ciò che
+/// l'installer prova davvero ([`crate::checks::NEWEST_TESTED_PYTHON`]).
+pub const ALTERNATE_PYTHONS: &[((u32, u32), &str, &str)] = &[
+    ((3, 13), "python3.13", "python3.13-devel"),
+    ((3, 12), "python3.12", "python3.12-devel"),
+];
 
 /// Gli argomenti di `dnf install`, come funzione **pura**.
 ///
@@ -399,6 +423,10 @@ impl PackageManager for DnfBackend {
             postgres: POSTGRES_PACKAGES.iter().map(|s| s.to_string()).collect(),
             postgres_marker: POSTGRES_MARKER_PACKAGE.to_string(),
             nginx: NGINX_PACKAGE.to_string(),
+            alternate_pythons: ALTERNATE_PYTHONS
+                .iter()
+                .map(|(v, i, d)| AlternatePython::new(*v, i, d))
+                .collect(),
         }
     }
 }

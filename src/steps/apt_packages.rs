@@ -156,6 +156,10 @@ pub struct AptPackagesStep {
     /// l'indice fresco vale per tutti gli step a valle, e ripeterlo sarebbe solo
     /// tempo perso.
     refresh_index: bool,
+    /// Se `true`, la lista di questo step si adatta all'interprete scelto
+    /// (M11): fuori gli header del Python di sistema, dentro l'interprete
+    /// alternativo e i suoi. Acceso solo per `install-system-dependencies`.
+    adapts_python: bool,
 }
 
 impl AptPackagesStep {
@@ -180,12 +184,19 @@ impl AptPackagesStep {
     /// Dipendenze di sistema di Odoo (undo purga il delta, e solo il delta).
     pub fn odoo_dependencies_with_ops(ops: Box<dyn SystemOps>) -> Self {
         let odoo = ops.packages().catalog().odoo_specs();
-        Self::with_specs(
+        let mut step = Self::with_specs(
             ops,
             "install-system-dependencies",
             odoo,
             UndoPolicy::PurgeDelta,
-        )
+        );
+        // È QUESTO lo step che porta l'interprete alternativo, e non
+        // `bootstrap-prerequisites`: il suo undo purga il delta, mentre quello
+        // del bootstrap lascia installato ciò che ha aggiunto (utility comuni).
+        // Un interprete installato da noi e mai rimosso sarebbe un residuo di
+        // 43 MB nel perimetro che il rollback promette di ripulire.
+        step.adapts_python = true;
+        step
     }
 
     /// Costruttore generico su nomi secchi, uno per gruppo (usato dai test con
@@ -215,6 +226,7 @@ impl AptPackagesStep {
             snap: AptDeltaSnapshot::default(),
             resolved: Vec::new(),
             refresh_index: false,
+            adapts_python: false,
         }
     }
 
@@ -360,13 +372,24 @@ impl Step for AptPackagesStep {
     /// che devono avvenire nello stesso istante, prima di ogni mutazione. Il
     /// delta è espresso in nomi già risolti, quindi il purge dell'undo non ha
     /// bisogno di sapere che esistessero alternative.
-    fn snapshot(&mut self, _ctx: &Context) -> Result<(), StepError> {
+    fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError> {
         let mut already_installed = Vec::new();
         let mut delta = Vec::new();
         let mut resolved = Vec::new();
         let mut unavailable = Vec::new();
 
-        for spec in &self.specs {
+        // La lista definitiva si compone qui, non nel costruttore: il piano
+        // Python è deciso al preflight, mentre gli step sono costruiti prima.
+        // Con l'interprete di sistema `adapt_specs` restituisce la lista
+        // identica, quindi per Debian, Ubuntu e ogni Fedora fino alla 42 questo
+        // passaggio non esiste.
+        let specs = if self.adapts_python {
+            ctx.python.adapt_specs(&self.specs)
+        } else {
+            self.specs.clone()
+        };
+
+        for spec in &specs {
             match self.resolve(spec) {
                 Some(ResolvedPackage::AlreadyInstalled(name)) => {
                     resolved.push(name.clone());

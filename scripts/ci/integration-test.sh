@@ -315,6 +315,30 @@ if grep -q "più recente di Python" "$WORK/install-plain.txt"; then
   fi
 fi
 
+# L'interprete alternativo (M11), verificato **dove ha lasciato traccia**.
+#
+# Come sopra, l'attesa si deriva dal verdetto dell'installer e non da una
+# versione scritta qui: se il preflight dice di aver scelto un altro interprete,
+# quel nome esce dal log e da lì si ricava tutto — quale binario deve esserci nel
+# venv e quale pacchetto deve sparire dopo il rollback. Scrivere `python3.13` in
+# questo script vorrebbe dire avere una seconda tabella che invecchia per conto
+# suo (A-MD-5), e per giunta far fallire i job dove l'interprete di sistema va
+# benissimo (Ubuntu, Debian, Fedora 41).
+PYTHON_PLAN="$(journal_python_plan "$WORK/install-plain.txt")"
+if [ -n "$PYTHON_PLAN" ]; then
+  info "l'installer ha scelto l'interprete '$PYTHON_PLAN' per il virtualenv"
+  if [ "$INSTALL_RC" -eq 0 ]; then
+    # Il venv porta il binario dell'interprete di base: è la prova che il venv
+    # è nato DA QUELLO e non dal `python3` di sistema. `sudo` perché
+    # /opt/odoo è 0750 odoo:odoo e un `test -x` non privilegiato risponderebbe
+    # «permesso negato», cioè un rosso per il motivo sbagliato.
+    assert "il virtualenv è nato su $PYTHON_PLAN" \
+      sudo test -x "$INSTALL_DIR/sandbox/bin/$PYTHON_PLAN"
+    assert "l'interprete scelto è installato sul sistema" \
+      pkg_installed "$PYTHON_PLAN"
+  fi
+fi
+
 # --- fase 2: il sistema installato funziona (solo MODE=full) -----------------
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
@@ -662,6 +686,19 @@ refute "l'unit systemd è stata rimossa" test -f "$UNIT_FILE"
 refute "il servizio non è più attivo" systemctl is-active --quiet "$UNIT"
 refute "il manifesto è stato consumato" sudo test -f "$STATE"
 refute "wkhtmltopdf è stato purgato" pkg_installed wkhtmltox
+
+# L'interprete alternativo se ne va con tutto il resto (M11).
+#
+# È la metà che rende la scelta *reversibile*: 43 MB installati da noi e mai
+# rimossi sarebbero un residuo dentro il perimetro che il rollback promette di
+# riportare com'era — ed è il motivo per cui a portarlo è
+# `install-system-dependencies` (che purga il delta) e non
+# `bootstrap-prerequisites` (che lascia). Sul reale questa verifica distingue le
+# due cose; su mock nessun test può farlo, perché lì niente si installa davvero.
+if [ -n "$PYTHON_PLAN" ]; then
+  refute "l'interprete '$PYTHON_PLAN' installato da noi è stato rimosso" \
+    pkg_installed "$PYTHON_PLAN"
+fi
 
 if pg_reachable; then
   if [ -z "$(pg_query "select 1 from pg_database where datname='$DB_NAME'")" ]; then

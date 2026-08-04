@@ -278,6 +278,19 @@ impl PackageManager for AptBackend {
             postgres: POSTGRES_PACKAGES.iter().map(|s| s.to_string()).collect(),
             postgres_marker: POSTGRES_MARKER_PACKAGE.to_string(),
             nginx: NGINX_PACKAGE.to_string(),
+            // **Vuoto, e non è una lacuna.** Debian e Ubuntu impacchettano UN
+            // solo Python nei repository base: gli interpreti alternativi
+            // arrivano da terze parti (il PPA `deadsnakes`), e aggiungere un
+            // repository esterno è una mutazione di sistema di tutt'altra
+            // portata — non annullabile con la stessa pulizia del resto, e con
+            // una fiducia che non è nostra da concedere.
+            //
+            // La lista vuota non lascia scoperto niente di reale: il Python di
+            // Ubuntu 22.04/24.04 e di Debian 11/12/13 è dentro i pin di Odoo, e
+            // il giorno in cui una release Debian passasse un interprete non
+            // coperto varrebbe l'avviso di M10 — dire la verità, non installare
+            // repository di nascosto.
+            alternate_pythons: Vec::new(),
         }
     }
 }

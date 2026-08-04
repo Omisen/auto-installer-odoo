@@ -9,7 +9,7 @@ use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
-use crate::checks::OsInfo;
+use crate::checks::{OsInfo, PythonPlan};
 use crate::config::ResolvedConfig;
 use crate::distro::OsFamily;
 use crate::secret::Secret;
@@ -87,6 +87,17 @@ pub struct Context {
     /// (safe: senza propagazione, l'init è vietato). Interior mutability così
     /// può essere impostato da uno step che riceve `&Context`.
     pub db_created_by_us: Arc<AtomicBool>,
+    /// L'interprete su cui nascerà il virtualenv, e i pacchetti che lo portano.
+    ///
+    /// **Configurazione, non risultato di step** (M11): la decide `main` al
+    /// preflight con [`crate::checks::plan_python`], come `os_family`. Deve
+    /// essere una risposta sola per due lettori — `install-system-dependencies`
+    /// installa l'interprete, `create-virtualenv` lo invoca — e dedurla due
+    /// volte è il modo in cui due letture divergono in silenzio.
+    ///
+    /// Il `Default` è `python3` senza pacchetti: ogni percorso che non decide
+    /// nulla (il rollback da disco, i test) si comporta come prima di M11.
+    pub python: PythonPlan,
 }
 
 impl Context {
@@ -117,6 +128,9 @@ impl Context {
             os_family: OsFamily::default(),
             sudo_user: None,
             db_created_by_us: Arc::new(AtomicBool::new(false)),
+            // Come `os_family`: valorizzato in `main` al preflight. Prima di
+            // allora nessuno step gira, e il default è il comportamento storico.
+            python: PythonPlan::default(),
         }
     }
 

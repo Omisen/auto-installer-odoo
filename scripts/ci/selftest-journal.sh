@@ -40,6 +40,9 @@ check() {
   printf '\033[2m2026-08-02T17:19:38Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta pacchetti: pacchetti aggiunti da noi \033[3mstep\033[0m\033[2m=\033[0m"install-system-dependencies" \033[3mpacchetti\033[0m\033[2m=\033[0mbuild-essential libzip-dev node-less\n'
   printf '\033[2m2026-08-02T17:19:38Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::steps::apt_packages\033[0m\033[2m:\033[0m delta pacchetti: pacchetti già presenti, mai toccati \033[3mstep\033[0m\033[2m=\033[0m"install-system-dependencies" \033[3mpacchetti\033[0m\033[2m=\033[0mlibpq-dev zlib1g-dev\n'
   printf '\033[2m2026-08-02T17:19:39Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::progress\033[0m\033[2m:\033[0m ✔ install-system-dependencies\n'
+  # M11: il piano Python. I campi vengono DOPO il messaggio — è il dettaglio su
+  # cui il primo pattern scritto per questa riga sbagliava.
+  printf '\033[2m2026-08-02T17:19:40Z\033[0m \033[32m INFO\033[0m \033[2modoo_installer::checks\033[0m\033[2m:\033[0m il Python di sistema è più recente dei pin di Odoo: il virtualenv nascerà su un interprete supportato, installato per l\047occasione e rimosso dal rollback \033[3mpython_sistema\033[0m\033[2m=\033[0m3.14 \033[3minterprete\033[0m\033[2m=\033[0mpython3.13 \033[3mpacchetti\033[0m\033[2m=\033[0mpython3.13 python3.13-devel\n'
 } > "$WORK/raw.out"
 
 echo "Self-test: lettura del diario dall'output dell'installer"
@@ -55,6 +58,12 @@ check "gli step completati vengono riconosciuti" \
 check "il delta si legge senza virgolette, fino a fine riga" \
   "build-essential libzip-dev node-less" \
   "$(journal_packages "$WORK/clean.txt" 'pacchetti aggiunti da noi' "$DEP_STEP" | tr '\n' ' ' | sed 's/ $//')"
+
+check "l'interprete scelto si legge dalla riga del piano" \
+  "python3.13" "$(journal_python_plan "$WORK/clean.txt")"
+
+check "senza riga del piano non si inventa un interprete" \
+  "" "$(journal_python_plan /dev/null)"
 
 check "i preesistenti si leggono dalla loro riga" \
   "libpq-dev zlib1g-dev" \

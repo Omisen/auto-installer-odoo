@@ -80,7 +80,10 @@ impl Step for CreateVirtualenv {
             return Ok(());
         }
         if ctx.dry_run {
-            info!("run (dry-run): python3 -m venv <install_dir>/sandbox");
+            info!(
+                python = %ctx.python.command,
+                "run (dry-run): <python> -m venv <install_dir>/sandbox"
+            );
             return Ok(());
         }
 
@@ -94,9 +97,16 @@ impl Step for CreateVirtualenv {
         // fallire, e un sistema senza `python3-venv` arrivava fino al
         // `python3 -m venv`, che si ferma a metà lasciando una `sandbox`
         // incompleta (senza `bin/python`) e un errore grezzo di Python (A-R6-1).
-        if !self.ops.python_venv_available() {
+        //
+        // L'interprete è quello del piano (M11), non `python3` cablato: su una
+        // distribuzione il cui Python di sistema è più recente dei pin di Odoo
+        // il venv nasce altrove, e chiedere di `ensurepip` a un interprete
+        // diverso da quello che si userà è la solita risposta giusta alla
+        // domanda sbagliata.
+        let python = &ctx.python.command;
+        if !self.ops.python_venv_available(python) {
             return Err(StepError::Precondition(format!(
-                "impossibile creare un virtualenv: manca il modulo 'ensurepip'. {}. \
+                "impossibile creare un virtualenv con `{python}`: manca il modulo 'ensurepip'. {}. \
                  Lo step install-system-dependencies dovrebbe averlo reso disponibile: \
                  controlla il suo esito nel log",
                 missing_ensurepip_hint(ctx.os_family)
@@ -104,9 +114,9 @@ impl Step for CreateVirtualenv {
         }
 
         let venv = Self::venv_dir(ctx);
-        self.ops.create_venv(&ctx.odoo_user, &venv)?;
+        self.ops.create_venv(&ctx.odoo_user, python, &venv)?;
         self.prestate = PreState::CreatedByUs;
-        info!(venv = %venv.display(), "run: virtualenv creato");
+        info!(venv = %venv.display(), python = %python, "run: virtualenv creato");
         Ok(())
     }
 

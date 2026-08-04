@@ -57,3 +57,16 @@ journal_packages() {
   sed -n "s/.*delta pacchetti: $2 step=\"$3\" pacchetti=//p" "$1" \
     | tr ' ' '\n' | grep -v '^$' | sort -u || true
 }
+
+# L'interprete che l'installer ha scelto per il virtualenv, o vuoto se ha usato
+# quello di sistema (M11).
+#
+# **L'ordine dei pezzi nella riga è il punto.** `tracing` stampa prima il
+# messaggio e poi i campi, quindi `interprete=` viene DOPO il testo: un pattern
+# che li cercasse nell'ordine in cui si pensano — campo, poi messaggio — non
+# combacia con niente e restituisce silenzio. È lo stesso modo in cui questo
+# parsing si è già rotto due volte, ed è per questo che vive qui, con un campione
+# fedele accanto, invece che in una riga di `integration-test.sh`.
+journal_python_plan() {
+  sed -n 's/.*virtualenv nascerà.*interprete=\([a-z0-9.]*\).*/\1/p' "$1" | head -1
+}

@@ -111,6 +111,15 @@ fn run_install(cli: &Cli) -> Result<()> {
             ctx.os_family
         )
     })?;
+
+    // L'interprete su cui nascerà il venv (M11). Sta QUI, e l'ordine conta:
+    // dopo `check_os` — serve la famiglia per sapere quali interpreti
+    // alternativi esistono — e prima di ogni step, perché due step diversi
+    // devono leggere la stessa risposta. È una query, non una mutazione:
+    // interroga il gestore di pacchetti e l'interprete di sistema, e nel caso
+    // peggiore (indice cieco) ripiega su ciò che si faceva prima di M11.
+    ctx.python = checks::plan_python(make_ops().as_ref());
+
     let mut steps = steps::build_steps(&make_ops);
 
     // --- dry-run: mostra il piano, non muta nulla, non persiste stato ---------
@@ -422,10 +431,6 @@ fn run_environment_checks(
             .map_err(|e| anyhow!(e))?;
     }
     checks::check_commands(ctx.os_family).map_err(|e| anyhow!(e))?;
-    // Non ritorna un Result: è un avviso, non una precondizione (A-MD-7). Il
-    // rifiuto lo farebbe una soglia cablata, e una soglia cablata invecchia
-    // bloccando il caso buono — la lezione di A5.1-bis.
-    checks::check_python();
 
     Ok(())
 }

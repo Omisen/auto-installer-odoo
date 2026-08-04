@@ -139,6 +139,13 @@ fn fedora_is_accepted_from_its_minimum_version() {
 /// non è più «non provata»: l'avviso deve tacere lì e parlare oltre. Prima di
 /// M5 la costante valeva «nessuna release provata» e l'avviso scattava sempre —
 /// era la verità di allora, e il cambiamento è il senso della fase.
+///
+/// Da **M11** la soglia è la **44**: la CI la installa davvero, per una strada
+/// diversa dalla 41 (là il Python di sistema è coperto dai pin di Odoo, qui il
+/// venv nasce su `python3.13` installato apposta). L'avviso quindi tace anche
+/// lì — ed è corretto che taccia: ciò che quella release ha di diverso è
+/// **gestito**, non ignorato. Il Python di sistema scoperto resta invece
+/// segnalato da `untested_python_warning`, che ha una costante sua.
 #[test]
 fn only_a_fedora_newer_than_the_ci_one_is_flagged() {
     assert!(
@@ -146,11 +153,15 @@ fn only_a_fedora_newer_than_the_ci_one_is_flagged() {
         "la CI installa davvero su Fedora 41: avvisare qui sarebbe un allarme falso"
     );
     assert!(
+        !is_newer_than_tested("fedora", "44"),
+        "da M11 la CI installa davvero anche su Fedora 44: l'avviso sarebbe falso"
+    );
+    assert!(
         !is_newer_than_tested("fedora", "40"),
         "40 è la soglia minima e non è più recente della provata"
     );
     assert!(
-        is_newer_than_tested("fedora", "42"),
+        is_newer_than_tested("fedora", "45"),
         "una release oltre quella provata va segnalata: è l'informazione che serve \
          quando i nomi dei pacchetti o il pin di wkhtmltopdf non tornano"
     );

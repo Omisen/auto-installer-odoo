@@ -339,6 +339,42 @@ pub struct PackageCatalog {
     pub postgres_marker: String,
     /// Il pacchetto di nginx.
     pub nginx: String,
+    /// Gli interpreti Python **alternativi** che questa famiglia impacchetta,
+    /// dal più recente al più vecchio.
+    ///
+    /// Serve a M11: quando il `python3` di sistema è più recente dei pin di
+    /// Odoo, il venv nasce su uno di questi invece che su quello (A-MD-7).
+    /// Vuoto è una risposta legittima e non una lacuna — vedi il commento nel
+    /// catalogo `apt`.
+    pub alternate_pythons: Vec<AlternatePython>,
+}
+
+/// Un interprete Python alternativo, come lo impacchetta una famiglia.
+///
+/// I due nomi stanno insieme perché si installano insieme: senza gli header non
+/// si compila nessuna estensione, e le estensioni che pip deve costruire sul
+/// ramo scelto sono sei (verificato in campo su Fedora 44).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AlternatePython {
+    /// `(3, 13)`.
+    pub version: (u32, u32),
+    /// Il pacchetto dell'interprete, che è anche il **comando**: su entrambe le
+    /// famiglie `python3.13` è sia il nome del pacchetto sia il binario in
+    /// `PATH`. Se un giorno le due cose divergessero, questo campo si sdoppia —
+    /// non si indovina.
+    pub interpreter: String,
+    /// Il pacchetto degli header (`python3.13-devel` / `python3.13-dev`).
+    pub devel: String,
+}
+
+impl AlternatePython {
+    pub fn new(version: (u32, u32), interpreter: &str, devel: &str) -> Self {
+        AlternatePython {
+            version,
+            interpreter: interpreter.to_string(),
+            devel: devel.to_string(),
+        }
+    }
 }
 
 impl PackageCatalog {
@@ -354,6 +390,22 @@ impl PackageCatalog {
 
     fn flatten(entries: &[CatalogEntry]) -> Vec<PackageSpec> {
         entries.iter().flat_map(|e| e.specs.clone()).collect()
+    }
+
+    /// I nomi che questa famiglia dà a un bisogno, appiattiti.
+    ///
+    /// Serve a M11 per **un** uso: sapere quali nomi porta `DepId::PythonDev`,
+    /// cioè gli header del Python di sistema, che un interprete alternativo
+    /// rende inutili. Il nome non si cabla nel piano: si chiede al catalogo, che
+    /// è l'unico a saperlo per questa famiglia.
+    pub fn names_for(&self, id: DepId) -> Vec<String> {
+        self.bootstrap
+            .iter()
+            .chain(self.odoo.iter())
+            .filter(|e| e.id == id)
+            .flat_map(|e| e.specs.iter())
+            .flat_map(|s| s.alternatives().to_vec())
+            .collect()
     }
 
     /// Questo catalogo copre il bisogno? (bootstrap **o** dipendenze Odoo)

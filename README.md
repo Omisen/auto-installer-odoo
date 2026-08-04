@@ -28,8 +28,8 @@ servizio systemd e (opzionale) Nginx.
 
 | Requisito | Dettaglio |
 |-----------|-----------|
-| OS | **Ubuntu ≥ 22.04**, **Debian ≥ 11** o **Fedora ≥ 40** — provati in CI fino a Ubuntu 24.04 e Debian 12, e in campo su Fedora 41; una release più recente viene accettata con un avviso, non rifiutata |
-| Python | quello di sistema, **fino a 3.13**. Odoo pinna `gevent`/`greenlet` per versione di interprete: su un Python più recente dei suoi pin non esiste una wheel già compilata, pip prova a costruire e il build fallisce. L'installer non rifiuta — avvisa al preflight, e se il build salta lo dice esplicitamente invece di lasciare parlare `gcc`. È il caso di **Fedora 44** (Python 3.14) |
+| OS | **Ubuntu ≥ 22.04**, **Debian ≥ 11** o **Fedora ≥ 40** — provati in CI fino a Ubuntu 24.04, Debian 12 e **Fedora 44** (ciclo completo: installazione, servizio attivo, rollback); una release più recente viene accettata con un avviso, non rifiutata |
+| Python | l'installer **sceglie l'interprete**: quello di sistema se i pin di Odoo lo coprono (fino a 3.13), altrimenti il più recente interprete impacchettato dalla distribuzione che lo sia. Su **Fedora ≥ 43**, dove il `python3` di sistema è 3.14, il virtualenv nasce su `python3.13` — installato per l'occasione e rimosso dal rollback. Se non esiste un'alternativa (Debian, Ubuntu) l'installazione prosegue lo stesso, con un avviso al preflight e, se pip non riesce a costruire, un errore che dice che è la versione di Python e non l'ambiente di build |
 | Privilegi | utente normale con `sudo` (non login diretto come root) |
 | Disk | ≥ 5 GB liberi (override `MIN_DISK_GB`) |
 | Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx — a meno che a tenerle non sia già Nginx, nel qual caso non è un conflitto |

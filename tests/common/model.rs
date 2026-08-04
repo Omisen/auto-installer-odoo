@@ -411,12 +411,12 @@ impl SystemOps for SystemModel {
             .paths
             .contains(&venv.join("bin").join("python3"))
     }
-    fn python_venv_available(&self) -> bool {
+    fn python_venv_available(&self, _python: &str) -> bool {
         true
     }
     /// Il modello simula il *sistema*, non l'interprete: un Python coperto dai
     /// pin di Odoo, così l'e2e non incrocia mai la diagnosi di A-MD-7.
-    fn python_version(&self) -> Option<(u32, u32)> {
+    fn python_version(&self, _python: &str) -> Option<(u32, u32)> {
         Some((3, 12))
     }
     fn read_to_string(&self, path: &Path) -> Result<String, StepError> {
@@ -663,7 +663,7 @@ impl SystemOps for SystemModel {
         s.paths.insert(target.join("odoo-bin"));
         Ok(())
     }
-    fn create_venv(&self, _user: &str, venv: &Path) -> Result<(), StepError> {
+    fn create_venv(&self, _user: &str, _python: &str, venv: &Path) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
         s.paths.insert(venv.to_path_buf());
         s.paths.insert(venv.join("bin").join("python3"));

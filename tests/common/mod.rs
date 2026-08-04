@@ -108,7 +108,17 @@ pub enum Op {
     TarballInstall {
         target: PathBuf,
     },
-    CreateVenv(PathBuf),
+    CreateVenv {
+        /// L'interprete su cui il venv è stato creato (M11): senza registrarlo,
+        /// nessun test potrebbe accorgersi che si sta usando `python3` dove il
+        /// piano diceva `python3.13`.
+        python: String,
+        venv: PathBuf,
+    },
+    /// «Che versione ha questo interprete?» — con il nome interrogato, che è la
+    /// parte che conta: la diagnosi di A-MD-7 deve parlare del Python del venv,
+    /// non di quello di sistema.
+    PythonVersion(String),
     WritePrivateFile(PathBuf),
     CreatePrivateFile(PathBuf),
     MoveFile {
@@ -949,14 +959,18 @@ impl SystemOps for MockSystemOps {
     fn venv_python_exists(&self, _venv: &Path) -> bool {
         self.cfg.venv_exists
     }
-    fn python_venv_available(&self) -> bool {
+    fn python_venv_available(&self, _python: &str) -> bool {
         self.cfg.venv_available
     }
-    fn python_version(&self) -> Option<(u32, u32)> {
+    fn python_version(&self, python: &str) -> Option<(u32, u32)> {
+        self.record(Op::PythonVersion(python.to_string()));
         self.cfg.python_version
     }
-    fn create_venv(&self, _user: &str, venv: &Path) -> Result<(), StepError> {
-        self.record(Op::CreateVenv(venv.to_path_buf()));
+    fn create_venv(&self, _user: &str, _python: &str, venv: &Path) -> Result<(), StepError> {
+        self.record(Op::CreateVenv {
+            python: _python.to_string(),
+            venv: venv.to_path_buf(),
+        });
         Ok(())
     }
     fn read_to_string(&self, path: &Path) -> Result<String, StepError> {

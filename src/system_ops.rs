@@ -473,8 +473,8 @@ pub trait SystemOps {
     /// modulo sta nella stdlib e c'è sempre, mentre `ensurepip` — senza cui
     /// `python3 -m venv` si ferma a metà — arriva col pacchetto `python3-venv`.
     /// L'implementazione chiede di `ensurepip` proprio per questo (A-R6-1).
-    fn python_venv_available(&self) -> bool;
-    /// La versione dell'interprete che crea il venv, o `None` se non si sa.
+    fn python_venv_available(&self, python: &str) -> bool;
+    /// La versione di **questo** interprete, o `None` se non si sa.
     ///
     /// Serve a **spiegare un fallimento**, non a impedirlo (A-MD-7): quando pip
     /// non riesce a costruire gevent, la causa più frequente è un Python più
@@ -483,9 +483,13 @@ pub trait SystemOps {
     ///
     /// `None` è «non lo so» e non «va bene»: da lì non si conclude nulla e
     /// l'errore originale resta quello che si legge.
-    fn python_version(&self) -> Option<(u32, u32)>;
-    /// `sudo -u <user> -- python3 -m venv <venv>`.
-    fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError>;
+    fn python_version(&self, python: &str) -> Option<(u32, u32)>;
+    /// `sudo -u <user> -- <python> -m venv <venv>`.
+    ///
+    /// L'interprete è un parametro da M11: su una distribuzione il cui `python3`
+    /// è più recente dei pin di Odoo, il venv nasce su un interprete
+    /// alternativo installato apposta.
+    fn create_venv(&self, user: &str, python: &str, venv: &Path) -> Result<(), StepError>;
     /// Legge un file di testo (es. requirements.txt).
     fn read_to_string(&self, path: &Path) -> Result<String, StepError>;
 
@@ -1271,7 +1275,7 @@ impl SystemOps for RealSystemOps {
             .unwrap_or(false)
     }
 
-    fn python_venv_available(&self) -> bool {
+    fn python_venv_available(&self, python: &str) -> bool {
         // `import ensurepip`, NON `python3 -m venv --help`.
         //
         // Il modulo `venv` vive in `libpython3.x-stdlib`, che c'è sempre: il suo
@@ -1282,7 +1286,7 @@ impl SystemOps for RealSystemOps {
         // Chiedere del modulo sbagliato rendeva questa precondizione un controllo
         // che non poteva fallire, e il fallimento arrivava più tardi come errore
         // grezzo di Python con una directory `sandbox` a metà (A-R6-1).
-        Command::new("python3")
+        Command::new(python)
             .args(["-c", "import ensurepip"])
             .output()
             .map(|o| o.status.success())
@@ -1292,15 +1296,15 @@ impl SystemOps for RealSystemOps {
     /// Una sola fonte per «che Python è questo»: la lettura sta in
     /// [`crate::checks::python_version`], che interroga lo stesso `python3` che
     /// `create_venv` invoca qui sotto.
-    fn python_version(&self) -> Option<(u32, u32)> {
-        crate::checks::python_version()
+    fn python_version(&self, python: &str) -> Option<(u32, u32)> {
+        crate::checks::python_version(python)
     }
 
-    fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError> {
+    fn create_venv(&self, user: &str, python: &str, venv: &Path) -> Result<(), StepError> {
         let venv_str = venv.to_string_lossy();
         run_command(
             "sudo",
-            &["-n", "-u", user, "--", "python3", "-m", "venv", &venv_str],
+            &["-n", "-u", user, "--", python, "-m", "venv", &venv_str],
         )
     }
 

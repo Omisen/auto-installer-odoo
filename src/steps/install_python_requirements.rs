@@ -223,8 +223,13 @@ impl Step for InstallPythonRequirements {
             // Se è fallito, la causa più probabile non è nel messaggio: la si
             // aggiunge davanti (A-MD-7). Se il Python è coperto dai pin, o non
             // si sa quale sia, l'errore resta esattamente quello di pip.
-            outcome
-                .map_err(|e| explain_gevent_failure(e, self.ops.python_version(), &gevent_lines))?;
+            outcome.map_err(|e| {
+                explain_gevent_failure(
+                    e,
+                    self.ops.python_version(&ctx.python.command),
+                    &gevent_lines,
+                )
+            })?;
         }
 
         // 4) resto dei requirements, escludendo ciò che il passo 3 ha già

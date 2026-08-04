@@ -16,6 +16,7 @@ use std::process::Command;
 use tracing::{info, warn};
 
 use crate::distro::OsFamily;
+use crate::packaging::{AlternatePython, Availability, DepId, PackageSpec};
 
 /// Path di default del file OS release.
 pub const OS_RELEASE_PATH: &str = "/etc/os-release";
@@ -244,7 +245,14 @@ pub const NEWEST_TESTED_DEBIAN: (u32, u32) = (12, 0);
 /// le altre due famiglie, questa costante **insegue la matrice del workflow**, e
 /// un test lo rende obbligatorio invece che auspicabile: se divergessero,
 /// l'avviso di [`is_newer_than_tested`] mentirebbe in una delle due direzioni.
-pub const NEWEST_TESTED_FEDORA: (u32, u32) = (41, 0);
+///
+/// Da M11 vale **44**, ed è una release che si installa in un modo diverso dalla
+/// 41: lì il `python3` di sistema è coperto dai pin di Odoo, qui è 3.14 e il
+/// venv nasce su `python3.13` installato apposta. Due voci di matrice, i due
+/// rami di [`choose_python`] — e la costante non promette nulla sul Python di
+/// sistema di quella release, che resta scoperto: quello lo dice
+/// [`NEWEST_TESTED_PYTHON`], che infatti **non** sale con questa.
+pub const NEWEST_TESTED_FEDORA: (u32, u32) = (44, 0);
 
 /// L'ultima release provata per la distribuzione `id`, col suo nome per esteso.
 ///
@@ -425,36 +433,210 @@ pub fn untested_python_warning(python: (u32, u32)) -> Option<String> {
     ))
 }
 
-/// La versione dell'interprete che creerà il venv, o `None` se non si sa.
+/// La versione di **questo** interprete, o `None` se non si sa.
 ///
-/// È `python3` e non un altro nome perché è **quello** che
-/// [`SystemOps::create_venv`](crate::system_ops::SystemOps::create_venv) invoca:
-/// chiedere a un interprete diverso da quello che verrà usato darebbe una
-/// risposta giusta alla domanda sbagliata.
-pub fn python_version() -> Option<(u32, u32)> {
-    let out = capture(Command::new("python3").arg("--version"))?;
+/// Il nome è un parametro e non `python3` cablato (M11): da quando il venv può
+/// nascere su un interprete alternativo, «che versione di Python c'è» e «che
+/// versione di Python useremo» sono due domande diverse, e chi chiede deve dire
+/// quale sta facendo. Cablarne una sola vorrebbe dire, per esempio, diagnosticare
+/// un fallimento di gevent citando il Python di sistema mentre il venv gira su
+/// un altro.
+pub fn python_version(command: &str) -> Option<(u32, u32)> {
+    let out = capture(Command::new(command).arg("--version"))?;
     parse_python_version(&out)
 }
 
-/// Avvisa se l'interprete è più recente di quelli provati. Non fallisce **mai**.
+// --- La scelta dell'interprete (M11) -----------------------------------------
+
+/// L'interprete su cui nascerà il venv, e ciò che serve perché esista.
 ///
-/// Il `None` — `python3` non ancora installato — resta silenzioso di proposito:
-/// su un'immagine Debian minimale l'interprete arriva con
-/// `install-system-dependencies`, cioè *dopo* questo preflight, e un avviso che
-/// comparisse a ogni installazione su macchina pulita insegnerebbe solo a
-/// ignorare gli avvisi (A-V3-10). Il caso non resta scoperto: quando pip
-/// fallisce davvero, la diagnosi la fa `install-python-requirements`, che a quel
-/// punto l'interprete ce l'ha di sicuro.
-pub fn check_python() {
-    let Some(python) = python_version() else {
-        info!("ℹ versione di Python non determinabile in questa fase: proseguo");
-        return;
-    };
-    match untested_python_warning(python) {
-        Some(avviso) => warn!(python = %format_python(python), "{avviso}"),
-        None => info!(python = %format_python(python), "✔ interprete Python"),
+/// È **configurazione decisa al preflight**, non un risultato di step: vive in
+/// [`Context`](crate::context::Context) come `os_family`, perché due step
+/// diversi devono usare la stessa risposta — `install-system-dependencies`
+/// installa l'interprete e `create-virtualenv` lo invoca. Dedurla due volte è il
+/// modo in cui due letture divergono in silenzio.
+///
+/// Il `Default` è il comportamento storico — `python3`, nessun pacchetto in più
+/// — quindi ogni percorso che non decide nulla si comporta come prima di M11.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PythonPlan {
+    /// Il comando che crea il venv: `python3`, oppure `python3.13`.
+    pub command: String,
+    /// I pacchetti da installare perché quel comando esista **e** possa
+    /// compilare estensioni. Vuoto quando si usa l'interprete di sistema.
+    pub packages: Vec<String>,
+    /// I nomi che questo piano rende inutili: gli header del Python di sistema,
+    /// quando il venv nasce su un altro interprete.
+    ///
+    /// Non sono cablati qui: li chiede il preflight al catalogo della famiglia,
+    /// che è l'unico a sapere come si chiamano.
+    pub supersedes: Vec<String>,
+}
+
+impl Default for PythonPlan {
+    fn default() -> Self {
+        PythonPlan {
+            command: "python3".to_string(),
+            packages: Vec::new(),
+            supersedes: Vec::new(),
+        }
     }
 }
+
+impl PythonPlan {
+    /// `true` se si usa l'interprete di sistema (nulla da installare).
+    pub fn is_system(&self) -> bool {
+        self.packages.is_empty()
+    }
+
+    /// Adatta una lista di gruppi di pacchetti all'interprete scelto.
+    ///
+    /// Con l'interprete di sistema restituisce la lista **identica**: è ciò che
+    /// rende M11 invisibile a Debian, a Ubuntu e a ogni Fedora fino alla 42.
+    ///
+    /// Con un interprete alternativo: escono i gruppi che porterebbero gli
+    /// header del Python di sistema — su un venv 3.13 non servono a nessuno, e
+    /// installarli gonfierebbe il delta con roba che nessuno usa — ed entrano
+    /// l'interprete e i suoi header. Pura, così la regola si verifica senza
+    /// avere né dnf né una Fedora sotto mano.
+    pub fn adapt_specs(&self, specs: &[PackageSpec]) -> Vec<PackageSpec> {
+        if self.is_system() {
+            return specs.to_vec();
+        }
+        let mut out: Vec<PackageSpec> = specs
+            .iter()
+            .filter(|spec| {
+                !spec
+                    .alternatives()
+                    .iter()
+                    .any(|name| self.supersedes.contains(name))
+            })
+            .cloned()
+            .collect();
+        out.extend(self.packages.iter().map(|p| PackageSpec::one(p)));
+        out
+    }
+}
+
+/// Sceglie l'interprete. **Pura**: input misurati, output una decisione.
+///
+/// La regola, in una riga: *il Python di sistema se i pin di Odoo lo coprono,
+/// altrimenti il più recente interprete impacchettato che lo sia.*
+/// [`NEWEST_TESTED_PYTHON`] — introdotta in M10 per **avvisare** — diventa qui
+/// l'input della **scelta**: un numero solo, due usi, nessuna seconda tabella
+/// che possa divergere in silenzio (la lezione di A-MD-5).
+///
+/// Tre casi, e nessuno di essi è un rifiuto:
+/// - sistema coperto → si usa quello, e non si installa nulla;
+/// - sistema non coperto, alternativa disponibile → si usa l'alternativa;
+/// - sistema non coperto, nessuna alternativa → **si usa comunque quello di
+///   sistema**, con l'avviso di M10 e, se poi il build salta, la diagnosi. Un
+///   rifiuto senza prova blocca il caso buono (A5.1-bis), e questo è per
+///   costruzione il caso in cui non sappiamo offrire di meglio.
+///
+/// `system == None` («non so che Python ci sia») si comporta come «coperto»: da
+/// un'informazione assente non si conclude niente, e men che meno si installa un
+/// secondo interprete su una macchina cliente.
+pub fn choose_python(
+    system: Option<(u32, u32)>,
+    available: &[AlternatePython],
+    system_dev_names: &[String],
+) -> PythonPlan {
+    let Some(version) = system else {
+        return PythonPlan::default();
+    };
+    if !python_is_newer_than_tested(version) {
+        return PythonPlan::default();
+    }
+    let scelto = available
+        .iter()
+        .filter(|alt| !python_is_newer_than_tested(alt.version))
+        .max_by_key(|alt| alt.version);
+    match scelto {
+        None => PythonPlan::default(),
+        Some(alt) => PythonPlan {
+            command: alt.interpreter.clone(),
+            packages: vec![alt.interpreter.clone(), alt.devel.clone()],
+            supersedes: system_dev_names.to_vec(),
+        },
+    }
+}
+
+/// Decide il piano interrogando il sistema, e **lo dice**.
+///
+/// L'involucro impuro di [`choose_python`]: legge la versione di sistema, chiede
+/// al catalogo quali interpreti alternativi esistono su questa famiglia e al
+/// gestore quali di quelli sono davvero installabili qui.
+///
+/// # Cecità ≠ assenza, anche qui
+///
+/// Se l'indice non è interrogabile (`index_is_queryable`), «non risulta
+/// disponibile» non significa «non esiste»: si prosegue con l'interprete di
+/// sistema **dicendo che la sonda era cieca**, invece di far credere che questa
+/// famiglia non abbia alternative. È lo stesso errore che A5.1-bis ha fatto
+/// pagare sui nomi dei pacchetti, e l'esito qui è comunque coperto: se il Python
+/// non è coperto dai pin, l'avviso c'è e la diagnosi arriverà al momento giusto.
+pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
+    let system = ops.python_version("python3");
+    let catalog = ops.packages().catalog();
+    let candidati: Vec<AlternatePython> = catalog
+        .alternate_pythons
+        .iter()
+        .filter(|alt| !python_is_newer_than_tested(alt.version))
+        .cloned()
+        .collect();
+
+    let disponibili: Vec<AlternatePython> = if candidati.is_empty() {
+        Vec::new()
+    } else if !ops.packages().index_is_queryable() {
+        warn!(
+            "indice dei pacchetti non interrogabile: non posso sapere se questa distribuzione \
+             offra un interprete Python alternativo, proseguo con quello di sistema"
+        );
+        Vec::new()
+    } else {
+        candidati
+            .into_iter()
+            .filter(|alt| ops.packages().availability(&alt.interpreter) == Availability::Real)
+            .collect()
+    };
+
+    let plan = choose_python(system, &disponibili, &catalog.names_for(DepId::PythonDev));
+    announce_python_plan(system, &plan);
+    plan
+}
+
+/// Dice quale interprete si userà e perché. Non decide nulla: **riporta**.
+///
+/// Separata da [`plan_python`] perché il testo è ciò che l'utente legge per
+/// capire cosa sta per succedere alla sua macchina, e un messaggio verificabile
+/// solo catturando i log è un messaggio che nessun test guarda (A-R9-1).
+fn announce_python_plan(system: Option<(u32, u32)>, plan: &PythonPlan) {
+    match (system, plan.is_system()) {
+        (None, _) => info!("ℹ versione di Python non determinabile in questa fase: proseguo"),
+        (Some(v), true) => match untested_python_warning(v) {
+            // Sistema non coperto e nessuna alternativa: è il caso di M10, e
+            // l'avviso resta quello — dice cosa si romperà e dove.
+            Some(avviso) => warn!(python = %format_python(v), "{avviso}"),
+            None => info!(python = %format_python(v), "✔ interprete Python"),
+        },
+        (Some(v), false) => info!(
+            python_sistema = %format_python(v),
+            interprete = %plan.command,
+            pacchetti = %plan.packages.join(" "),
+            "il Python di sistema è più recente dei pin di Odoo: il virtualenv nascerà su un \
+             interprete supportato, installato per l'occasione e rimosso dal rollback"
+        ),
+    }
+}
+
+// `check_python` (M10) non esiste più: l'avviso non è un controllo a sé, è un
+// ramo di `announce_python_plan`. Dopo M11 la stessa misura — «che Python c'è» —
+// porta a due esiti diversi (avvisare, oppure installare un altro interprete), e
+// tenerli in due funzioni li avrebbe fatti divergere in silenzio. Il `None`
+// resta silenzioso come allora: su un'immagine minimale `python3` arriva con
+// `install-system-dependencies`, cioè dopo il preflight, e un avviso che compare
+// a ogni installazione insegna solo a ignorare gli avvisi (A-V3-10).
 
 /// Applica le soglie di versione minima: Ubuntu ≥ 22.04, Debian ≥ 11.
 ///
