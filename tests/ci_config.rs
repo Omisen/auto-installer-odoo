@@ -416,3 +416,55 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
         );
     }
 }
+
+/// I comandi di installazione del README puntano alla versione **di questo
+/// pacchetto**, non a una passata.
+///
+/// Il README non usa più variabili di shell (`VER=…`): i comandi sono stringhe
+/// intere, copiabili senza leggerle. È la forma giusta per chi installa — e
+/// moltiplica per nove i punti in cui una versione può restare indietro. Due
+/// fonti che devono coincidere e nessuno che lo verifichi è il modo in cui si
+/// finisce per far scaricare ai clienti la release precedente, in silenzio: il
+/// comando funziona, il file esiste, e nessuno se ne accorge.
+///
+/// Si verifica la corrispondenza con `Cargo.toml`, che è la versione che il
+/// workflow di release taggherà — quindi il README è aggiornato quando lo è il
+/// manifesto, e non «quando qualcuno si ricorda».
+#[test]
+fn the_readme_download_commands_point_at_this_version() {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+    let versione = manifest
+        .lines()
+        .find_map(|l| l.strip_prefix("version = \""))
+        .and_then(|l| l.split('"').next())
+        .expect("Cargo.toml deve dichiarare una versione");
+    let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
+
+    // Ogni URL di download nomina QUESTA versione.
+    let mut url = 0;
+    for pezzo in readme.split("releases/download/v").skip(1) {
+        url += 1;
+        let trovata = pezzo.split('/').next().unwrap_or("");
+        assert_eq!(
+            trovata, versione,
+            "il README scarica dalla release v{trovata} mentre il pacchetto è {versione}"
+        );
+    }
+    assert!(
+        url >= 6,
+        "attesi almeno sei link di download (tar.gz, .deb, .rpm, con i rispettivi .sha256), \
+         trovati {url}: se la sezione è cambiata, questa guardia va aggiornata insieme"
+    );
+
+    // E i nomi dei file sono quelli che le due confezioni producono davvero.
+    for atteso in [
+        format!("odoo-installer_{versione}_amd64.deb"),
+        format!("odoo-installer-{versione}-1.x86_64.rpm"),
+    ] {
+        assert!(
+            readme.contains(&atteso),
+            "il README non nomina `{atteso}`: il comando di installazione scaricherebbe un file \
+             che quella release non contiene"
+        );
+    }
+}

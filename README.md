@@ -2,7 +2,7 @@
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 
-Installer per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04 e Debian ≥ 11, ora **in Rust** con
+Installer per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04, Debian ≥ 11 e Fedora ≥ 40, ora **in Rust** con
 **rollback transazionale**: *o l'installazione riesce completamente, o il sistema torna esattamente
 com'era prima.* Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, config,
 servizio systemd e (opzionale) Nginx.
@@ -14,7 +14,10 @@ servizio systemd e (opzionale) Nginx.
 - **Rollback chirurgico verificato** — se un passo fallisce, gli step già eseguiti vengono annullati in
   ordine inverso; le risorse **preesistenti** del cliente non vengono toccate. È una proprietà provata
   con test end-to-end, non una promessa.
-- **Binario unico, senza runtime** — un eseguibile nativo; git/apt/psql/venv restano comandi esterni.
+- **Binario unico, senza runtime** — un eseguibile nativo; git, il gestore di pacchetti, psql e venv
+  restano comandi esterni.
+- **Tre famiglie, nessun `if` sparso** — `apt` e `dnf` stanno dietro due confini, e gli step non sanno
+  su quale distribuzione girano: ciò che diverge è dichiarato in un posto solo.
 - **Riprendibile, e mai distruttivo con sé stesso** — un'installazione interrotta si riprende da dove
   si era fermata; una già completata non viene sovrascritta per sbaglio. Il file `.env` è **parsato in
   modo dichiarativo**, mai eseguito come codice.
@@ -43,21 +46,23 @@ servizio systemd e (opzionale) Nginx.
 
 ### Opzione A — binario precompilato (consigliata, niente Rust)
 
-Scarica l'ultimo binario dalla pagina **[Releases](../../releases/latest)**. Due varianti Linux x86_64:
+Scarica il binario dalla pagina **[Releases](../../releases/latest)**. Due varianti Linux x86_64:
 
 - `odoo-installer-x86_64-unknown-linux-musl.tar.gz` → **statico**, gira su **qualsiasi** distro (consigliato per i clienti);
 - `odoo-installer-x86_64-unknown-linux-gnu.tar.gz` → dinamico, per sistemi con glibc recente.
 
 Ogni archivio ha un file `.sha256` per **verificare l'integrità** del download.
 
-```bash
-VER=v2.2.0                       # sostituisci con l'ultima versione
-file=odoo-installer-x86_64-unknown-linux-musl.tar.gz
-base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
+> I comandi qui sotto puntano alla **v2.2.0**, che è la release descritta da questo README. Se ne è
+> uscita una più recente, la trovi su [Releases](../../releases/latest): cambia il numero nelle due
+> URL e nei nomi dei file.
 
-curl -fsSL -O "${base}/${file}" -O "${base}/${file}.sha256"
-sha256sum -c "${file}.sha256"    # deve dire: OK
-tar xzf "${file}"
+```bash
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256
+
+sha256sum -c odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256   # deve dire: OK
+tar xzf odoo-installer-x86_64-unknown-linux-musl.tar.gz
 
 sudo ./odoo-installer                                        # guidato (interattivo)
 # oppure non-interattivo:
@@ -72,14 +77,12 @@ finisce nel `PATH` ed è rimovibile con `apt remove odoo-installer`. Il `.deb` �
 servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
 
 ```bash
-VER=v2.2.0                       # sostituisci con l'ultima versione
-deb=odoo-installer_2.2.0_amd64.deb
-base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer_2.2.0_amd64.deb
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer_2.2.0_amd64.deb.sha256
 
-curl -fsSL -O "${base}/${deb}" -O "${base}/${deb}.sha256"
-sha256sum -c "${deb}.sha256"     # deve dire: OK
+sha256sum -c odoo-installer_2.2.0_amd64.deb.sha256           # deve dire: OK
 
-sudo apt install ./"${deb}"      # oppure: sudo dpkg -i ./"${deb}"
+sudo apt install ./odoo-installer_2.2.0_amd64.deb            # oppure: sudo dpkg -i ./odoo-installer_2.2.0_amd64.deb
 
 sudo odoo-installer                                          # ora è nel PATH
 # oppure non-interattivo:
@@ -92,14 +95,12 @@ Su Fedora, la stessa cosa con l'altra confezione. È **lo stesso binario** del `
 `tar.gz` — musl statico, nessuna dipendenza — impacchettato per l'altro gestore.
 
 ```bash
-VER=v2.2.0                       # sostituisci con l'ultima versione
-rpm=odoo-installer-2.2.0-1.x86_64.rpm
-base="https://github.com/Omisen/auto-installer-odoo/releases/download/${VER}"
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-2.2.0-1.x86_64.rpm
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-2.2.0-1.x86_64.rpm.sha256
 
-curl -fsSL -O "${base}/${rpm}" -O "${base}/${rpm}.sha256"
-sha256sum -c "${rpm}.sha256"     # deve dire: OK
+sha256sum -c odoo-installer-2.2.0-1.x86_64.rpm.sha256        # deve dire: OK
 
-sudo dnf install ./"${rpm}"
+sudo dnf install ./odoo-installer-2.2.0-1.x86_64.rpm
 
 sudo odoo-installer                                          # ora è nel PATH
 ```
@@ -387,6 +388,25 @@ sudo cat /var/log/odoo-installer.log
   `--open-https-port` apre soltanto la 443 sul firewall, in vista di quel passaggio. Si chiamava
   `--enable-ssl`, un nome che prometteva TLS senza fornirlo: il vecchio nome resta accettato.
 
+### Python: l'interprete si sceglie, non si subisce
+
+Odoo pinna `gevent` e `greenlet` **per versione di Python**. Su un interprete più recente dei suoi pin
+non esiste una wheel già compilata: pip prova a costruire dai sorgenti e il C generato non regge gli
+header di un CPython più nuovo — non è un problema di compilatore né di pacchetti mancanti, ed è il caso
+di **Fedora ≥ 43**, dove il `python3` di sistema è 3.14.
+
+La regola: *il Python di sistema se i pin di Odoo lo coprono, altrimenti il più recente interprete
+**impacchettato dalla distribuzione** che lo sia.* Su Fedora 44 il venv nasce quindi su `python3.13`,
+installato insieme alle altre dipendenze e **rimosso dal rollback** come qualunque pacchetto del delta.
+
+Su Ubuntu e Debian non cambia nulla: nei repository base c'è un solo Python ed è dentro i pin. Se un
+domani non lo fosse, l'installer **non rifiuta** — avvisa al preflight, e se il build salta dice che è
+la versione di Python invece di lasciare parlare trecento righe di `gcc`. Un rifiuto sarebbe una soglia
+cablata, e una soglia cablata invecchia bloccando il caso buono il giorno in cui Odoo alza il pin.
+
+Quello che sta a valle non se ne accorge: unit systemd, control-script e init del database passano da
+`<install_dir>/sandbox/bin/python3`, che il venv crea con quel nome qualunque sia l'interprete di base.
+
 ### Nginx: una differenza fra le famiglie, dichiarata
 
 Le due famiglie organizzano nginx in modo diverso, e una delle differenze **si vede**:
@@ -491,10 +511,11 @@ end-to-end** (fallimento iniettato → stato finale == iniziale; risorse preesis
 
 ### Test di integrazione reale
 
-I test qui sopra girano su un **mock** del sistema: provano la logica, non l'integrazione con apt,
+I test qui sopra girano su un **mock** del sistema: provano la logica, non l'integrazione con il
+gestore di pacchetti,
 PostgreSQL e systemd veri. Quella la copre `.github/workflows/integration.yml`, che installa Odoo
 davvero su runner e container effimeri e poi verifica che `odoo-installer rollback` riporti il sistema
-pulito — pacchetto per pacchetto, confrontando il delta apt registrato nel file di stato.
+pulito — pacchetto per pacchetto, confrontando il delta registrato nel file di stato.
 
 Gira su richiesta (`workflow_dispatch`) e sui rami `main`/`dev`, non su ogni push: sono decine di
 minuti per job. Copertura e limiti:
@@ -504,7 +525,9 @@ minuti per job. Copertura e limiti:
 | Ubuntu 22.04 / 24.04 | runner nativi (VM con systemd) | ciclo di vita completo: installazione, servizio attivo, Odoo che risponde, seconda installazione rifiutata, disinstallazione, sistema pulito |
 | Debian 12 / 11 | container | portabilità: nomi dei pacchetti apt, pin wkhtmltopdf per codename, e la pulizia. **Non** l'avvio del servizio: in un container systemd non è PID 1 |
 | Fedora 41 | container **privilegiato con systemd come PID 1** | ciclo di vita completo sull'altra famiglia: `dnf`, i nomi dei pacchetti rpm, l'**inizializzazione del cluster** PostgreSQL (che su Fedora il pacchetto non fa), il `.rpm` di wkhtmltopdf, e la disinstallazione. Serve PID 1 perché senza si fermerebbe *prima* dell'init del cluster — cioè prima della divergenza più rischiosa |
-| Con Nginx | runner nativo, `ufw` attivo | i cinque step Nginx: vhost, `nginx -t`, la porta 80 che serve Odoo, le regole firewall. In matrice sulle **due nature** del default site (symlink e file regolare), perché il rollback deve ripristinare entrambe |
+| Fedora 41 + Nginx | container privilegiato, `firewalld` attivo | l'unico posto dove **firewalld** e **SELinux** girano davvero: la porta aperta col delta, il booleano `httpd_can_network_connect` acceso e rispento |
+| Fedora 44 | container privilegiato | l'altro ramo della scelta dell'interprete: il `python3` di sistema è **3.14**, fuori dai pin di Odoo, quindi il venv nasce su `python3.13` — installato per l'occasione e rimosso dal rollback |
+| Con Nginx | runner nativo, `ufw` attivo | i sei step Nginx: vhost, `nginx -t`, la porta 80 che serve Odoo, le regole firewall. In matrice sulle **due nature** del default site (symlink e file regolare), perché il rollback deve ripristinare entrambe |
 | Utente `odoo` preesistente | runner nativo | la home consegnata a un utente che c'è già, e il rifiuto esplicito quando `/opt/odoo` preesiste di root. Al rollback l'utente **sopravvive**: non era nostro |
 | Ctrl-C reale | runner nativo | un `SIGINT` mandato a metà installazione: l'installer deve annullare da sé e lasciare il sistema pulito |
 
