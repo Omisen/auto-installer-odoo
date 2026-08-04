@@ -414,6 +414,11 @@ impl SystemOps for SystemModel {
     fn python_venv_available(&self) -> bool {
         true
     }
+    /// Il modello simula il *sistema*, non l'interprete: un Python coperto dai
+    /// pin di Odoo, così l'e2e non incrocia mai la diagnosi di A-MD-7.
+    fn python_version(&self) -> Option<(u32, u32)> {
+        Some((3, 12))
+    }
     fn read_to_string(&self, path: &Path) -> Result<String, StepError> {
         self.state
             .lock()

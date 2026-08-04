@@ -285,6 +285,36 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -ne 0 ]; then
   # lo stesso: deve ripulire ciò che la run fallita ha lasciato.
 fi
 
+# Se il build di gevent è fallito, l'errore deve DIRE PERCHÉ (A-MD-7).
+#
+# `exit != 0` non dice perché, ed è la lezione di A-R9-1: le due asserzioni
+# «sostanziali» erano verdi mentre il difetto stava nel *messaggio*. Qui il
+# valore della correzione è tutto nel testo — la differenza fra trecento righe di
+# `gcc` e «questa versione di Odoo non ha un pin per questo Python».
+#
+# **L'attesa si deriva dal verdetto dell'installer, non da una soglia scritta
+# qui.** Il preflight logga l'avviso solo se l'interprete è più recente di quelli
+# provati: se quell'avviso c'è, allora un fallimento del build di gevent DEVE
+# portare anche la diagnosi. Duplicare la soglia in bash creerebbe una seconda
+# fonte di verità che può divergere in silenzio, che è esattamente A-MD-5.
+#
+# Fuori da quel caso non si asserisce nulla: un gevent che non compila su un
+# Python coperto ha un'altra causa, e pretendere lì questa diagnosi
+# significherebbe pretendere una diagnosi sbagliata.
+#
+# Si legge dall'output **senza ANSI**: `tracing` colora anche su pipe, e un
+# pattern scritto su ciò che si vede a schermo può non combaciare con ciò che
+# c'è nel file — il difetto costato due giri in A-R8-1-ter, e GitHub rende gli
+# escape invisibili, quindi non si vedrebbe nemmeno guardando.
+journal_strip_ansi "$WORK/install.out" > "$WORK/install-plain.txt"
+if grep -q "più recente di Python" "$WORK/install-plain.txt"; then
+  info "il preflight ha segnalato un interprete più recente di quelli provati"
+  if grep -q "Building wheel for gevent" "$WORK/install-plain.txt"; then
+    assert "il fallimento di gevent spiega che è il Python" \
+      grep -q "non regge gli header di un CPython più nuovo" "$WORK/install-plain.txt"
+  fi
+fi
+
 # --- fase 2: il sistema installato funziona (solo MODE=full) -----------------
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then

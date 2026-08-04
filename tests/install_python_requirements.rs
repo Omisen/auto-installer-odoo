@@ -425,3 +425,116 @@ fn requirements_files_are_removed_after_use() {
         );
     }
 }
+
+// --- A-MD-7: quando pip fallisce, dire perché --------------------------------
+
+/// Il fallimento del passo gevent su un Python più recente dei pin di Odoo
+/// arriva con la **causa davanti**, e con l'errore originale ancora dietro.
+///
+/// È il rosso della sonda Fedora 44: Python 3.14, `gevent==24.11.1` (il pin per
+/// `>= '3.13'`, l'ultimo che Odoo dichiara), nessuna wheel per quell'interprete
+/// → pip compila → trecento righe di `gcc` che parlano di `_PyLong_AsByteArray`.
+/// Da quell'output la causa vera non è ricavabile, ed è tutta l'utilità di
+/// questa diagnosi: chi legge deve capire che è la **versione**, non l'ambiente
+/// di build.
+///
+/// Si verifica passando dallo `run` dello step, non chiamando la funzione pura:
+/// una diagnosi giusta che nessuno invoca è indistinguibile da una assente.
+#[test]
+fn a_gevent_failure_on_a_newer_python_says_why() {
+    let cfg = MockConfig {
+        requirements_content: Some(ODOO18_REQUIREMENTS.to_string()),
+        run_as_user_fails_on: Some("requirements-gevent".to_string()),
+        python_version: Some((3, 14)),
+        ..Default::default()
+    };
+    let (mock, _log) = MockSystemOps::new(cfg);
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    let err = step
+        .run(&c)
+        .expect_err("il passo gevent è fallito")
+        .to_string();
+
+    assert!(
+        err.contains("3.14"),
+        "la diagnosi non dice quale Python c'è sotto: {err}"
+    );
+    assert!(
+        err.contains("3.13"),
+        "la diagnosi non dice fin dove arriviamo, quindi non si sa di quanto si è avanti: {err}"
+    );
+    assert!(
+        err.contains("gevent==24.11.1"),
+        "la diagnosi non mostra i pin che Odoo dichiara: {err}"
+    );
+    assert!(
+        err.contains("Building wheel for gevent"),
+        "l'errore originale è sparito: spiegare non è nascondere la prova: {err}"
+    );
+}
+
+/// Su un Python **coperto** dai pin lo stesso fallimento passa intatto.
+///
+/// È la metà che rende il controllo un controllo: lì la causa sarà un'altra —
+/// un compilatore assente, un header mancante, una rete che cade — e una
+/// diagnosi sbagliata è peggio di nessuna diagnosi, perché manda a sistemare la
+/// cosa sbagliata (la lezione di A-R9-1, dove il messaggio parlava della porta).
+#[test]
+fn on_a_covered_python_the_pip_error_is_left_alone() {
+    let cfg = MockConfig {
+        requirements_content: Some(ODOO18_REQUIREMENTS.to_string()),
+        run_as_user_fails_on: Some("requirements-gevent".to_string()),
+        python_version: Some((3, 12)),
+        ..Default::default()
+    };
+    let (mock, _log) = MockSystemOps::new(cfg);
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    let err = step
+        .run(&c)
+        .expect_err("il passo gevent è fallito")
+        .to_string();
+
+    assert!(
+        err.contains("Building wheel for gevent"),
+        "l'errore di pip deve restare quello che è: {err}"
+    );
+    assert!(
+        !err.contains("più recente di Python"),
+        "su un Python coperto la diagnosi di A-MD-7 non c'entra nulla: {err}"
+    );
+}
+
+/// E se non si sa che Python sia, non si indovina.
+///
+/// `None` è «non lo so», non «va bene» e nemmeno «è troppo nuovo»: da
+/// un'informazione assente non si conclude niente, e l'errore resta quello del
+/// comando.
+#[test]
+fn an_unknown_interpreter_does_not_become_a_guess() {
+    let cfg = MockConfig {
+        requirements_content: Some(ODOO18_REQUIREMENTS.to_string()),
+        run_as_user_fails_on: Some("requirements-gevent".to_string()),
+        python_version: None,
+        ..Default::default()
+    };
+    let (mock, _log) = MockSystemOps::new(cfg);
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    let err = step
+        .run(&c)
+        .expect_err("il passo gevent è fallito")
+        .to_string();
+
+    assert!(
+        !err.contains("più recente di Python"),
+        "senza sapere la versione non si può affermare che sia troppo nuova: {err}"
+    );
+}

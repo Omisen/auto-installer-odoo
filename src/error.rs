@@ -58,6 +58,19 @@ pub enum StepError {
     /// init di un DB preesistente). Non è recuperabile: l'installer si ferma.
     #[error("precondizione violata: {0}")]
     Precondition(String),
+
+    /// Il build di gevent è fallito su un interprete più recente di quelli per
+    /// cui Odoo pinna (A-MD-7).
+    ///
+    /// Non è una variante «di comodo» per un caso particolare: è un fallimento
+    /// che **non si può diagnosticare dal messaggio del comando**. Chi legge
+    /// vede trecento righe di `gcc` che parlano di `_PyLong_AsByteArray`, e la
+    /// causa vera — «questa versione di Odoo non ha un pin per questo Python» —
+    /// non compare da nessuna parte. Qui la diagnosi precede l'errore originale,
+    /// che resta per intero: aggiungere una spiegazione non è togliere una
+    /// prova.
+    #[error("{diagnosis}\n\n--- errore originale ---\n{original}")]
+    PythonTooNew { diagnosis: String, original: String },
 }
 
 impl StepError {

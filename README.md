@@ -29,6 +29,7 @@ servizio systemd e (opzionale) Nginx.
 | Requisito | Dettaglio |
 |-----------|-----------|
 | OS | **Ubuntu ≥ 22.04**, **Debian ≥ 11** o **Fedora ≥ 40** — provati in CI fino a Ubuntu 24.04 e Debian 12, e in campo su Fedora 41; una release più recente viene accettata con un avviso, non rifiutata |
+| Python | quello di sistema, **fino a 3.13**. Odoo pinna `gevent`/`greenlet` per versione di interprete: su un Python più recente dei suoi pin non esiste una wheel già compilata, pip prova a costruire e il build fallisce. L'installer non rifiuta — avvisa al preflight, e se il build salta lo dice esplicitamente invece di lasciare parlare `gcc`. È il caso di **Fedora 44** (Python 3.14) |
 | Privilegi | utente normale con `sudo` (non login diretto come root) |
 | Disk | ≥ 5 GB liberi (override `MIN_DISK_GB`) |
 | Porte | 8069 (Odoo) libera; 80/443 se si usa Nginx — a meno che a tenerle non sia già Nginx, nel qual caso non è un conflitto |

@@ -4,9 +4,11 @@ use std::io::Write;
 use std::path::Path;
 
 use odoo_installer::checks::{
-    check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user, format_release,
-    is_newer_than_tested, ports_to_check, untested_release_warning, validate_os, CheckError,
-    OsInfo, NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_UBUNTU,
+    check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user, format_python,
+    format_release, is_newer_than_tested, parse_python_version, ports_to_check,
+    python_is_newer_than_tested, untested_python_warning, untested_release_warning, validate_os,
+    CheckError, OsInfo, NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_PYTHON,
+    NEWEST_TESTED_UBUNTU,
 };
 use odoo_installer::distro::OsFamily;
 
@@ -352,4 +354,105 @@ fn a_release_is_rendered_the_way_the_distribution_writes_it() {
         "«Debian 12.0» non lo dice nessuno"
     );
     assert_eq!(format_release((41, 0)), "41");
+}
+
+// --- L'interprete Python (A-MD-7) --------------------------------------------
+
+/// Quello che `python3 --version` stampa davvero, incluse le forme che non sono
+/// «tre numeri e basta».
+///
+/// Il caso `3.14` conta più degli altri: è Fedora 44, cioè la release che ha
+/// fatto nascere questo controllo.
+#[test]
+fn the_interpreter_version_is_read_from_what_python_actually_prints() {
+    assert_eq!(parse_python_version("Python 3.14.0\n"), Some((3, 14)));
+    assert_eq!(parse_python_version("Python 3.12.3\n"), Some((3, 12)));
+    assert_eq!(
+        parse_python_version("Python 3.14.0rc1\n"),
+        Some((3, 14)),
+        "una release candidate è comunque quel minor"
+    );
+    assert_eq!(
+        parse_python_version("Python 3.13\n"),
+        Some((3, 13)),
+        "due sole componenti sono un output legittimo"
+    );
+}
+
+/// Un output che non si sa leggere dà `None`, **non** una versione di comodo.
+///
+/// La differenza è quella fra «so che è coperto» e «non lo so»: un `(0, 0)` di
+/// ripiego sarebbe più basso di qualunque soglia, quindi silenzierebbe l'avviso
+/// proprio quando non abbiamo idea di cosa ci sia sotto.
+#[test]
+fn an_unreadable_version_is_not_a_version() {
+    assert_eq!(parse_python_version(""), None);
+    assert_eq!(
+        parse_python_version("bash: python3: command not found"),
+        None
+    );
+    assert_eq!(parse_python_version("Python"), None);
+    assert_eq!(parse_python_version("Python tre.quattordici"), None);
+}
+
+/// La soglia risponde in **entrambe le direzioni**, e il confine è incluso.
+///
+/// «Provata» vuol dire che su quella versione l'installazione arriva in fondo:
+/// avvisare lì sarebbe un falso allarme, e un avviso che compare sempre insegna
+/// a ignorare gli avvisi (A-V3-10).
+#[test]
+fn only_an_interpreter_newer_than_the_tested_one_is_flagged() {
+    assert!(
+        python_is_newer_than_tested((3, 14)),
+        "3.14 (Fedora 44) è oltre la soglia: è il caso per cui il controllo esiste"
+    );
+    assert!(python_is_newer_than_tested((4, 0)));
+    assert!(
+        !python_is_newer_than_tested(NEWEST_TESTED_PYTHON),
+        "sulla versione provata non c'è niente da segnalare"
+    );
+    assert!(!python_is_newer_than_tested((3, 12)));
+    assert!(!python_is_newer_than_tested((3, 10)));
+}
+
+/// L'avviso nomina **il Python trovato e quello provato**, e dice cosa si
+/// romperà.
+///
+/// È il contenuto a essere il valore del controllo, non il fatto che scatti: chi
+/// legge deve poter decidere se andare avanti, e per farlo gli serve sapere qual
+/// è il pezzo che salta (A-R9-1).
+#[test]
+fn the_python_warning_names_both_versions_and_what_will_break() {
+    let avviso = untested_python_warning((3, 14)).expect("3.14 va segnalato");
+    assert!(
+        avviso.contains("3.14"),
+        "l'avviso non dice quale Python ha trovato: {avviso}"
+    );
+    assert!(
+        avviso.contains(&format_python(NEWEST_TESTED_PYTHON)),
+        "l'avviso non cita la versione provata, quindi non si sa di quanto si è avanti: {avviso}"
+    );
+    assert!(
+        avviso.contains("gevent"),
+        "l'avviso non nomina il pacchetto che fallisce: {avviso}"
+    );
+    assert!(
+        avviso.contains("install-python-requirements"),
+        "l'avviso non dice dove si fermerà: {avviso}"
+    );
+    assert_eq!(
+        untested_python_warning(NEWEST_TESTED_PYTHON),
+        None,
+        "sulla versione provata non c'è nessun avviso da emettere"
+    );
+}
+
+/// `3.14`, non `3.140`: la formattazione delle release OS omette lo zero e
+/// aggiunge le due cifre, quella di Python no. Sono due convenzioni diverse, e
+/// riusare la funzione sbagliata scriverebbe «Python 3.14» come «3.014».
+#[test]
+fn a_python_version_is_rendered_the_way_python_writes_it() {
+    assert_eq!(format_python((3, 14)), "3.14");
+    assert_eq!(format_python((3, 9)), "3.9");
+    assert_eq!(format_python((4, 0)), "4.0", "qui lo zero non si omette");
 }

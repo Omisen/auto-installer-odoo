@@ -337,6 +337,125 @@ pub fn untested_release_warning(id: &str, version: &str) -> Option<String> {
     ))
 }
 
+// --- L'interprete Python (A-MD-7) --------------------------------------------
+
+/// L'ultimo CPython su cui un'installazione **arriva in fondo**.
+///
+/// Non è la versione più recente che esista, né quella che «dovrebbe andare»: è
+/// quella su cui la CI di integrazione porta a termine il ciclo completo. Oggi
+/// vale 3.13, che è il Python di `fedora:41` — la release più avanzata della
+/// matrice; i job Ubuntu si fermano a 3.12.
+///
+/// **Va rivista quando la matrice si muove**, ed è l'unico punto in cui questo
+/// numero vive. A differenza di [`NEWEST_TESTED_FEDORA`] non esiste un test che
+/// la leghi al workflow: nel file della CI compare l'*immagine*, non il Python
+/// che ci sta dentro, e inventare una tabella immagine→Python significherebbe
+/// scrivere una seconda fonte di verità che può divergere in silenzio — cioè
+/// A-MD-5 un livello più sotto.
+pub const NEWEST_TESTED_PYTHON: (u32, u32) = (3, 13);
+
+/// `Python 3.14.0` → `(3, 14)`.
+///
+/// `None` se la riga non è quella che ci si aspetta: da un output che non si sa
+/// leggere non si conclude **niente**, e in particolare non «va tutto bene». È
+/// la differenza fra «so che è vecchio abbastanza» e «non lo so», e qui i due
+/// casi hanno esiti diversi (avviso vs silenzio).
+pub fn parse_python_version(output: &str) -> Option<(u32, u32)> {
+    // `python3 --version` stampa `Python 3.14.0`; alcune build aggiungono un
+    // suffisso (`3.14.0rc1`, `+`, `free-threading build`), quindi si prendono le
+    // prime due componenti numeriche e si scarta il resto.
+    let rest = output.split_whitespace().nth(1)?;
+    let mut parts = rest.split('.');
+    let major: u32 = parts.next()?.parse().ok()?;
+    let minor: u32 = parts
+        .next()?
+        .trim_matches(|c: char| !c.is_ascii_digit())
+        .parse()
+        .ok()?;
+    Some((major, minor))
+}
+
+/// Il Python provato **da citare**, se c'è qualcosa da segnalare.
+///
+/// Un punto solo in cui si decide *se* parlare, che restituisce già ciò che
+/// serve per dirlo — la stessa forma di [`release_to_flag`], e per la stessa
+/// ragione: due tabelle possono divergere in silenzio.
+fn python_to_flag(python: (u32, u32)) -> Option<(u32, u32)> {
+    (python > NEWEST_TESTED_PYTHON).then_some(NEWEST_TESTED_PYTHON)
+}
+
+/// `true` se questo interprete è più recente dell'ultimo su cui l'installer
+/// arriva in fondo. Puro: il caso interessante non richiede quel Python.
+pub fn python_is_newer_than_tested(python: (u32, u32)) -> bool {
+    python_to_flag(python).is_some()
+}
+
+/// Come si scrive una versione di Python: `3.14`, mai `3.140`.
+pub fn format_python((major, minor): (u32, u32)) -> String {
+    format!("{major}.{minor}")
+}
+
+/// Il testo dell'avviso, o `None` se non c'è nulla da segnalare.
+///
+/// **A-MD-7.** Su Fedora 44 (Python 3.14) l'installazione muore allo step 13
+/// compilando `gevent`, dopo aver creato utente, database e sorgenti: il
+/// rollback ripulisce tutto correttamente, ma la diagnosi — «Odoo non pinna una
+/// versione di gevent per questo interprete» — non è ricavabile da un muro di
+/// errori `gcc`. Qui la si dice **prima**, quando serve a decidere se andare
+/// avanti.
+///
+/// È un avviso e **non** un rifiuto, per la lezione di A5.1-bis: una soglia
+/// cablata invecchia nella direzione peggiore. Il giorno in cui Odoo alzerà il
+/// pin, un rifiuto bloccherebbe un'installazione che funziona; un avviso, al
+/// più, dice una cosa in meno di quanto potrebbe.
+///
+/// Pura, e col testo come valore di ritorno invece che come effetto: quando il
+/// valore di un controllo sta nel *perché*, verificarne l'esito non verifica
+/// niente (A-R9-1).
+pub fn untested_python_warning(python: (u32, u32)) -> Option<String> {
+    let provato = python_to_flag(python)?;
+    Some(format!(
+        "questo sistema ha Python {}, più recente di Python {} — l'ultimo su cui l'installer \
+         porta a termine un'installazione. Odoo pinna gevent e greenlet per versione di \
+         interprete: se per questo Python non ha un pin, non esiste una wheel pronta, pip deve \
+         compilare e lo step `install-python-requirements` fallisce. È il primo posto dove \
+         guardare.",
+        format_python(python),
+        format_python(provato)
+    ))
+}
+
+/// La versione dell'interprete che creerà il venv, o `None` se non si sa.
+///
+/// È `python3` e non un altro nome perché è **quello** che
+/// [`SystemOps::create_venv`](crate::system_ops::SystemOps::create_venv) invoca:
+/// chiedere a un interprete diverso da quello che verrà usato darebbe una
+/// risposta giusta alla domanda sbagliata.
+pub fn python_version() -> Option<(u32, u32)> {
+    let out = capture(Command::new("python3").arg("--version"))?;
+    parse_python_version(&out)
+}
+
+/// Avvisa se l'interprete è più recente di quelli provati. Non fallisce **mai**.
+///
+/// Il `None` — `python3` non ancora installato — resta silenzioso di proposito:
+/// su un'immagine Debian minimale l'interprete arriva con
+/// `install-system-dependencies`, cioè *dopo* questo preflight, e un avviso che
+/// comparisse a ogni installazione su macchina pulita insegnerebbe solo a
+/// ignorare gli avvisi (A-V3-10). Il caso non resta scoperto: quando pip
+/// fallisce davvero, la diagnosi la fa `install-python-requirements`, che a quel
+/// punto l'interprete ce l'ha di sicuro.
+pub fn check_python() {
+    let Some(python) = python_version() else {
+        info!("ℹ versione di Python non determinabile in questa fase: proseguo");
+        return;
+    };
+    match untested_python_warning(python) {
+        Some(avviso) => warn!(python = %format_python(python), "{avviso}"),
+        None => info!(python = %format_python(python), "✔ interprete Python"),
+    }
+}
+
 /// Applica le soglie di versione minima: Ubuntu ≥ 22.04, Debian ≥ 11.
 ///
 /// **Non** decide se la distribuzione ci sia nota: quello lo ha già fatto

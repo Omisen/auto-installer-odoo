@@ -474,6 +474,16 @@ pub trait SystemOps {
     /// `python3 -m venv` si ferma a metà — arriva col pacchetto `python3-venv`.
     /// L'implementazione chiede di `ensurepip` proprio per questo (A-R6-1).
     fn python_venv_available(&self) -> bool;
+    /// La versione dell'interprete che crea il venv, o `None` se non si sa.
+    ///
+    /// Serve a **spiegare un fallimento**, non a impedirlo (A-MD-7): quando pip
+    /// non riesce a costruire gevent, la causa più frequente è un Python più
+    /// recente di quelli per cui Odoo pinna, e quell'informazione non è
+    /// ricavabile dall'output di `gcc`.
+    ///
+    /// `None` è «non lo so» e non «va bene»: da lì non si conclude nulla e
+    /// l'errore originale resta quello che si legge.
+    fn python_version(&self) -> Option<(u32, u32)>;
     /// `sudo -u <user> -- python3 -m venv <venv>`.
     fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError>;
     /// Legge un file di testo (es. requirements.txt).
@@ -1277,6 +1287,13 @@ impl SystemOps for RealSystemOps {
             .output()
             .map(|o| o.status.success())
             .unwrap_or(false)
+    }
+
+    /// Una sola fonte per «che Python è questo»: la lettura sta in
+    /// [`crate::checks::python_version`], che interroga lo stesso `python3` che
+    /// `create_venv` invoca qui sotto.
+    fn python_version(&self) -> Option<(u32, u32)> {
+        crate::checks::python_version()
     }
 
     fn create_venv(&self, user: &str, venv: &Path) -> Result<(), StepError> {

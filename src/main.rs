@@ -422,6 +422,10 @@ fn run_environment_checks(
             .map_err(|e| anyhow!(e))?;
     }
     checks::check_commands(ctx.os_family).map_err(|e| anyhow!(e))?;
+    // Non ritorna un Result: è un avviso, non una precondizione (A-MD-7). Il
+    // rifiuto lo farebbe una soglia cablata, e una soglia cablata invecchia
+    // bloccando il caso buono — la lezione di A5.1-bis.
+    checks::check_python();
 
     Ok(())
 }

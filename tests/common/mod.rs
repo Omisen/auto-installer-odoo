@@ -176,6 +176,14 @@ pub struct MockConfig {
     pub venv_exists: bool,
     /// `python3 -m venv` disponibile?
     pub venv_available: bool,
+    /// Fa fallire la `run_as_user` i cui argomenti contengono questo frammento.
+    pub run_as_user_fails_on: Option<String>,
+    /// La versione dell'interprete, o `None` per «non si sa» (A-MD-7).
+    ///
+    /// Il default è un Python **coperto** dai pin di Odoo: così la diagnosi di
+    /// `explain_gevent_failure` non compare nei test che non la riguardano, e
+    /// quando compare è perché il test l'ha chiesta.
+    pub python_version: Option<(u32, u32)>,
     /// Contenuto di requirements.txt (None → read_to_string fallisce).
     pub requirements_content: Option<String>,
     /// Schema Odoo già presente nel DB?
@@ -260,6 +268,8 @@ impl Default for MockConfig {
             network_failures_are_timeouts: false,
             venv_exists: false,
             venv_available: true,
+            run_as_user_fails_on: None,
+            python_version: Some((3, 12)),
             requirements_content: None,
             db_initialized: false,
             real_fs: false,
@@ -865,6 +875,21 @@ impl SystemOps for MockSystemOps {
             program: program.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
         });
+        // Fallimento simulato di UNA invocazione precisa, scelta per un
+        // frammento dei suoi argomenti: serve a provare cosa succede *dopo* il
+        // fallimento (la diagnosi di A-MD-7), che è verificabile solo se il
+        // comando fallisce davvero passando dallo step.
+        if let Some(frammento) = &self.cfg.run_as_user_fails_on {
+            if args.iter().any(|a| a.contains(frammento.as_str())) {
+                return Err(StepError::CommandFailed {
+                    command: format!("{program} {}", args.join(" ")),
+                    status: "1".to_string(),
+                    stderr: "error: subprocess-exited-with-error\n× Building wheel for gevent \
+                             (pyproject.toml) did not run successfully."
+                        .to_string(),
+                });
+            }
+        }
         Ok(())
     }
     fn mkdir_p_as_user(&self, user: &str, path: &Path) -> Result<(), StepError> {
@@ -926,6 +951,9 @@ impl SystemOps for MockSystemOps {
     }
     fn python_venv_available(&self) -> bool {
         self.cfg.venv_available
+    }
+    fn python_version(&self) -> Option<(u32, u32)> {
+        self.cfg.python_version
     }
     fn create_venv(&self, _user: &str, venv: &Path) -> Result<(), StepError> {
         self.record(Op::CreateVenv(venv.to_path_buf()));

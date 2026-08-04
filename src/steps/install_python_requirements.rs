@@ -220,7 +220,11 @@ impl Step for InstallPythonRequirements {
                 ],
             );
             let _ = self.ops.remove_file(&tmp_gevent);
-            outcome?;
+            // Se è fallito, la causa più probabile non è nel messaggio: la si
+            // aggiunge davanti (A-MD-7). Se il Python è coperto dai pin, o non
+            // si sa quale sia, l'errore resta esattamente quello di pip.
+            outcome
+                .map_err(|e| explain_gevent_failure(e, self.ops.python_version(), &gevent_lines))?;
         }
 
         // 4) resto dei requirements, escludendo ciò che il passo 3 ha già
@@ -313,6 +317,62 @@ pub fn filter_out_gevent_stack(requirements: &str) -> String {
         .join("\n");
     out.push('\n');
     out
+}
+
+/// Antepone la causa probabile al fallimento del passo gevent (A-MD-7).
+///
+/// # Perché la diagnosi vive qui e non in un controllo preventivo
+///
+/// La domanda «Odoo ha un pin di gevent per questo Python?» **non è rispondibile
+/// dal `requirements.txt`**, e vale la pena sapere perché: i marker sono aperti
+/// verso l'alto. Su Python 3.14 la riga `gevent==24.11.1 ; python_version >=
+/// '3.13'` è applicabile — pip la sceglie correttamente — e nel file non c'è
+/// nulla che dica che per 3.14 quella versione non ha una wheel. L'informazione
+/// che manca sta su PyPI, non nel file: fingere di dedurla dalle righe sarebbe
+/// un controllo che risponde a una domanda diversa da quella che sembra porre,
+/// cioè la firma ricorrente di questo progetto.
+///
+/// Quindi non si previene: si **spiega**, nel momento in cui il fallimento c'è
+/// davvero. La condizione è quella di [`checks::python_is_newer_than_tested`],
+/// e i due casi hanno esiti diversi per costruzione — su un Python coperto
+/// l'errore passa intatto, perché lì la causa sarà un'altra e una diagnosi
+/// sbagliata è peggio di nessuna diagnosi.
+///
+/// `python == None` («non lo so») si comporta come il caso coperto: da
+/// un'informazione assente non si conclude niente.
+pub fn explain_gevent_failure(
+    error: StepError,
+    python: Option<(u32, u32)>,
+    gevent_lines: &str,
+) -> StepError {
+    let Some(python) = python.filter(|v| crate::checks::python_is_newer_than_tested(*v)) else {
+        return error;
+    };
+    let versione = crate::checks::format_python(python);
+    let provata = crate::checks::format_python(crate::checks::NEWEST_TESTED_PYTHON);
+    let diagnosis = format!(
+        "il build di gevent è fallito, e questo sistema usa Python {versione} — più recente di \
+         Python {provata}, l'ultimo su cui l'installer arriva in fondo.\n\
+         Odoo pinna gevent e greenlet per versione di interprete, e per un Python più recente \
+         dei suoi pin non esiste una wheel già compilata: pip deve costruire dai sorgenti, e il \
+         C generato di quelle versioni non regge gli header di un CPython più nuovo. Non è un \
+         problema di compilatore né di pacchetti di sistema mancanti: è la versione, e nessun \
+         flag di build la aggira.\n\
+         Le righe che questa versione di Odoo dichiara:\n{}\n\
+         Le vie d'uscita sono due, entrambe fuori dalla portata dell'installer: una release con \
+         un Python coperto da quei pin, oppure una versione di Odoo che pinni questo interprete. \
+         Installare un gevent diverso da quello pinnato non è una di queste: sarebbe una \
+         combinazione che nessuno ha provato.",
+        gevent_lines
+            .lines()
+            .map(|l| format!("  {l}"))
+            .collect::<Vec<_>>()
+            .join("\n")
+    );
+    StepError::PythonTooNew {
+        diagnosis,
+        original: error.to_string(),
+    }
 }
 
 /// `true` se la riga è un requisito di uno dei [`BUILD_ISOLATED_PACKAGES`]: il
