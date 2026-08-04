@@ -1,6 +1,10 @@
 # Odoo Auto Installer
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CI](https://github.com/Omisen/auto-installer-odoo/actions/workflows/test.yml/badge.svg)](https://github.com/Omisen/auto-installer-odoo/actions/workflows/test.yml)
+[![Integration](https://github.com/Omisen/auto-installer-odoo/actions/workflows/integration.yml/badge.svg)](https://github.com/Omisen/auto-installer-odoo/actions/workflows/integration.yml)
+![Odoo 16–19](https://img.shields.io/badge/Odoo-16%20%7C%2017%20%7C%2018%20%7C%2019-875A7B)
+![Ubuntu · Debian · Fedora](https://img.shields.io/badge/Ubuntu%20%C2%B7%20Debian%20%C2%B7%20Fedora-supportati-informational)
 
 Installer per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04, Debian ≥ 11 e Fedora ≥ 40, ora **in Rust** con
 **rollback transazionale**: *o l'installazione riesce completamente, o il sistema torna esattamente
@@ -9,7 +13,47 @@ servizio systemd e (opzionale) Nginx.
 
 ---
 
-## Cosa lo distingue
+## 📑 Indice
+
+**Se stai installando** — dal nulla a Odoo che risponde.
+
+| | |
+|---|---|
+| [📋 Requisiti](#-requisiti) | OS, Python, privilegi, spazio, porte |
+| [🚀 Installazione rapida](#-installazione-rapida) | quattro strade, [A](#opzione-a--qualsiasi-distro-binario-precompilato-consigliata-niente-rust) binario · [B](#opzione-b--ubuntu--debian-pacchetto-deb-esperienza-apt-nativa) `.deb` · [C](#opzione-c--fedora-pacchetto-rpm-esperienza-dnf-nativa) `.rpm` · [D](#opzione-d--qualsiasi-distro-build-da-sorgente) sorgente |
+| [👀 Anteprima `--dry-run`](#-anteprima-con---dry-run) | cosa farebbe, senza toccare niente |
+| [✅ Verifica post-installazione](#-verifica-post-installazione) | è partito? dove sono log e helper |
+
+**Se stai configurando** — i due modi di passare i parametri.
+
+| | |
+|---|---|
+| [⚙️ Opzioni CLI](#-opzioni-cli) | ogni flag, con il suo default |
+| [📄 File `.env`](#-file-di-configurazione-env) | configurazione dichiarativa, mai eseguita come codice |
+| [↳ Variabili d'ambiente](#variabili-dambiente-regolazioni-di-rete) | timeout di rete, soglia disco |
+
+**Se vuoi sapere cosa garantisce** — la parte che distingue questo installer.
+
+| | |
+|---|---|
+| [✨ Cosa lo distingue](#-cosa-lo-distingue) | in cinque righe |
+| [🔍 Cosa fa, in breve](#-cosa-fa-in-breve) | i 25 step, in ordine |
+| [↩️ Rollback](#-rollback) | cosa viene annullato e cosa no · [rilancio](#rilanciare-linstaller) · [Ctrl-C](#ctrl-c) |
+| [🧹 Disinstallare](#-disinstallare--ripulire-odoo-installer-rollback) | `odoo-installer rollback`, e cosa resta di proposito |
+| [🔒 Sicurezza — note oneste](#-sicurezza--note-oneste) | password, checksum, TLS · [Python](#python-linterprete-si-sceglie-non-si-subisce) · [Nginx per famiglia](#nginx-una-differenza-fra-le-famiglie-dichiarata) |
+
+**Se lavori sul codice.**
+
+| | |
+|---|---|
+| [🗂️ Struttura del progetto](#-struttura-del-progetto-port-rust) | dove sta cosa |
+| [🧪 Sviluppo / test](#-sviluppo--test) | mock, e la [CI che installa davvero](#test-di-integrazione-reale) |
+| [🤝 Contribuire](#-contribuire) | cosa far girare prima di una PR |
+| [📜 Storia](#-storia) · [⚖️ Licenza](#-licenza) | l'era Bash · MIT |
+
+---
+
+## ✨ Cosa lo distingue
 
 - **Rollback chirurgico verificato** — se un passo fallisce, gli step già eseguiti vengono annullati in
   ordine inverso; le risorse **preesistenti** del cliente non vengono toccate. È una proprietà provata
@@ -27,7 +71,7 @@ servizio systemd e (opzionale) Nginx.
 
 ---
 
-## Requisiti
+## 📋 Requisiti
 
 | Requisito | Dettaglio |
 |-----------|-----------|
@@ -42,7 +86,7 @@ servizio systemd e (opzionale) Nginx.
 
 ---
 
-## Installazione rapida
+## 🚀 Installazione rapida
 
 **Quale scegliere**, in una riga: se vuoi il comando `odoo-installer` nel `PATH` e rimovibile con il
 gestore di pacchetti, prendi la confezione della tua famiglia (**B** per Ubuntu/Debian, **C** per
@@ -59,13 +103,13 @@ Scarica il binario dalla pagina **[Releases](../../releases/latest)**. Due varia
 
 Ogni archivio ha un file `.sha256` per **verificare l'integrità** del download.
 
-> I comandi qui sotto puntano alla **v2.2.0**, che è la release descritta da questo README. Se ne è
+> I comandi qui sotto puntano alla **v2.3.0**, che è la release descritta da questo README. Se ne è
 > uscita una più recente, la trovi su [Releases](../../releases/latest): cambia il numero nelle due
 > URL e nei nomi dei file.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256
 
 sha256sum -c odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256   # deve dire: OK
 tar xzf odoo-installer-x86_64-unknown-linux-musl.tar.gz
@@ -83,12 +127,12 @@ comando `odoo-installer` finisce nel `PATH` ed è rimovibile con `apt remove odo
 servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer_2.2.0_amd64.deb
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer_2.2.0_amd64.deb.sha256
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer_2.3.0_amd64.deb
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer_2.3.0_amd64.deb.sha256
 
-sha256sum -c odoo-installer_2.2.0_amd64.deb.sha256           # deve dire: OK
+sha256sum -c odoo-installer_2.3.0_amd64.deb.sha256           # deve dire: OK
 
-sudo apt install ./odoo-installer_2.2.0_amd64.deb            # oppure: sudo dpkg -i ./odoo-installer_2.2.0_amd64.deb
+sudo apt install ./odoo-installer_2.3.0_amd64.deb            # oppure: sudo dpkg -i ./odoo-installer_2.3.0_amd64.deb
 
 sudo odoo-installer                                          # ora è nel PATH
 # oppure non-interattivo:
@@ -101,12 +145,12 @@ Su Fedora (40, 41, …, 44) la stessa cosa con l'altra confezione. È **lo stess
 e del `tar.gz` — musl statico, nessuna dipendenza — impacchettato per l'altro gestore.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-2.2.0-1.x86_64.rpm
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.2.0/odoo-installer-2.2.0-1.x86_64.rpm.sha256
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-2.3.0-1.x86_64.rpm
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-2.3.0-1.x86_64.rpm.sha256
 
-sha256sum -c odoo-installer-2.2.0-1.x86_64.rpm.sha256        # deve dire: OK
+sha256sum -c odoo-installer-2.3.0-1.x86_64.rpm.sha256        # deve dire: OK
 
-sudo dnf install ./odoo-installer-2.2.0-1.x86_64.rpm
+sudo dnf install ./odoo-installer-2.3.0-1.x86_64.rpm
 
 sudo odoo-installer                                          # ora è nel PATH
 ```
@@ -137,7 +181,7 @@ default**.
 
 ---
 
-## Opzioni CLI
+## ⚙️ Opzioni CLI
 
 | Flag | Valore | Default |
 |------|--------|---------|
@@ -160,7 +204,7 @@ default**.
 | `--help` | messaggio d'aiuto | — |
 
 Sottocomandi: `odoo-installer rollback` (alias `uninstall`) — vedi
-[Disinstallare / ripulire](#disinstallare--ripulire-odoo-installer-rollback). Senza sottocomando il
+[Disinstallare / ripulire](#-disinstallare--ripulire-odoo-installer-rollback). Senza sottocomando il
 comando installa, come sempre.
 
 Esempi:
@@ -169,8 +213,13 @@ Esempi:
 # Nginx + versione 17
 sudo ./target/release/odoo-installer --version 17 --with-nginx
 
-# Tutto da CLI
-sudo ./target/release/odoo-installer --version 18 --odoo-user odoo --db-name odoo --port 8069
+# Tutto da CLI (sostituisci i valori fra parentesi quadre)
+sudo ./target/release/odoo-installer \
+  --version 18 --odoo-user odoo --db-name odoo --port 8069 \
+  --admin-passwd '[LA_TUA_PASSWORD_ADMIN]'
+
+# Con Nginx su un dominio tuo
+sudo ./target/release/odoo-installer --with-nginx --server-name '[il-tuo-dominio.example.com]'
 
 # Anteprima (nessuna modifica; senza sudo il piano è più scarno, vedi sotto)
 ./target/release/odoo-installer --config configs/production.env --dry-run
@@ -178,7 +227,7 @@ sudo ./target/release/odoo-installer --version 18 --odoo-user odoo --db-name odo
 
 ---
 
-## File di configurazione `.env`
+## 📄 File di configurazione `.env`
 
 Con `--config <FILE>` i parametri sono letti da un file `KEY=VALUE`. A differenza del Bash (che faceva
 `source` del file — code-execution come root), qui il parsing è **dichiarativo**: righe `KEY=VALUE`,
@@ -214,7 +263,7 @@ timeout: interromperle a metà farebbe più danni dell'attesa.
 
 ---
 
-## Cosa fa, in breve
+## 🔍 Cosa fa, in breve
 
 Preflight non mutanti (root, sudo, OS, disco, porte, comandi) → poi la sequenza reversibile:
 
@@ -232,7 +281,7 @@ Il dettaglio di ogni step (snapshot/run/undo) è nella
 
 ---
 
-## Rollback
+## ↩️ Rollback
 
 Ogni step, prima di mutare, registra se ciò che sta per creare **esisteva già**. Se un passo fallisce,
 gli step precedenti vengono annullati **in ordine inverso** (best-effort, idempotenti). La garanzia
@@ -289,7 +338,7 @@ Usa **`--dry-run`** per vedere il piano prima di eseguire davvero.
 
 ---
 
-## Disinstallare / ripulire: `odoo-installer rollback`
+## 🧹 Disinstallare / ripulire: `odoo-installer rollback`
 
 ```bash
 # Cosa verrebbe rimosso, senza toccare nulla
@@ -335,7 +384,7 @@ può essere rieseguito (gli `undo` sono idempotenti).
 
 ---
 
-## Anteprima con `--dry-run`
+## 👀 Anteprima con `--dry-run`
 
 `--dry-run` esegue solo gli snapshot (in sola lettura) e mostra il **piano** di ciò che verrebbe fatto,
 distinguendo "agirebbe" da "no-op (già presente)". Non muta nulla e non persiste stato. Utile per
@@ -353,7 +402,7 @@ piano, pur vero, è incompleto. L'installer lo dice prima di stamparlo. Per il p
 
 ---
 
-## Verifica post-installazione
+## ✅ Verifica post-installazione
 
 ```bash
 # Stato del servizio (N = versione short, es. 18)
@@ -369,7 +418,7 @@ sudo cat /var/log/odoo-installer.log
 
 ---
 
-## Sicurezza — note oneste
+## 🔒 Sicurezza — note oneste
 
 - **Password admin `admin`**: sconsigliata. In modalità interattiva richiede conferma esplicita; in
   non-interattiva con `admin_passwd=admin` l'installer **si ferma** (imposta una password diversa).
@@ -453,7 +502,7 @@ checksum upstream. Nota: la release `0.12.6.1-3` pubblica `.deb` amd64 **solo** 
 
 ---
 
-## Struttura del progetto (port Rust)
+## 🗂️ Struttura del progetto (port Rust)
 
 ```
 AutoInstallerOdoo/
@@ -502,7 +551,7 @@ il perimetro che il rollback deve poter rimuovere per intero:
 
 ---
 
-## Sviluppo / test
+## 🧪 Sviluppo / test
 
 ```bash
 cargo build
@@ -548,7 +597,36 @@ MODE=full bash scripts/ci/integration-test.sh
 
 ---
 
-## Storia
+## 🤝 Contribuire
+
+Contributi benvenuti. Prima di aprire una PR:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --all-targets -- -D warnings
+cargo test                       # senza root: il sistema è mockato
+```
+
+Tre regole che questo progetto prende sul serio, e che rendono una PR accettabile in fretta:
+
+1. **Ogni mutazione è reversibile.** Uno step nuovo porta `snapshot`/`run`/`undo` e un `PreState`: se
+   crea qualcosa che il rollback non sa rimuovere, non è finito. Il trait `Step` non va modificato per
+   aggiungere uno step.
+2. **Niente `.unwrap()`/`.expect()` nel codice di produzione**: ogni fallimento è un `Result` con un
+   messaggio che dice *cosa* e *dove*.
+3. **Un test che non può fallire non è un test.** Verifica che il tuo caso rosso diventi davvero rosso
+   (cambia il codice e guardalo fallire) prima di proporlo.
+
+Se la modifica tocca il comportamento su una distribuzione, dillo nella PR: la
+[CI di integrazione](#test-di-integrazione-reale) installa davvero su Ubuntu, Debian e Fedora, ed è lì
+che si vede.
+
+Il dettaglio tecnico — motore, step uno per uno, modello di rollback, supporto multi-distribuzione — sta
+nella **[wiki](https://github.com/Omisen/auto-installer-odoo/wiki)**.
+
+---
+
+## 📜 Storia
 
 L'installer era originariamente scritto in **Bash**. Quelle versioni sono archiviate ai tag
 [`v1.0.0`](../../releases/tag/v1.0.0) e [`v1.2.0`](../../releases/tag/v1.2.0). La versione corrente è un
@@ -556,7 +634,7 @@ L'installer era originariamente scritto in **Bash**. Quelle versioni sono archiv
 
 ---
 
-## Licenza
+## ⚖️ Licenza
 
 MIT — vedi [LICENSE](LICENSE).
 
