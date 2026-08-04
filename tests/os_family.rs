@@ -47,6 +47,7 @@ fn config_for(family: OsFamily) -> InstallConfig {
         with_nginx: false,
         sudo_user: None,
         os_family: family,
+        installer_version: None,
     }
 }
 

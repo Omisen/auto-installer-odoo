@@ -468,3 +468,27 @@ fn the_readme_download_commands_point_at_this_version() {
         );
     }
 }
+
+/// La versione che il binario dichiara è quella di `Cargo.toml`.
+///
+/// `INSTALLER_VERSION` viene da `env!("CARGO_PKG_VERSION")`, quindi oggi non può
+/// divergere — e questo test esiste proprio per il giorno in cui qualcuno,
+/// volendo «renderla configurabile», la trasformasse in una costante scritta a
+/// mano. È la stessa guardia del README, applicata al terzo consumatore della
+/// versione: flag, log e manifesto devono dire tutti lo stesso numero (A-V3-16).
+#[test]
+fn the_version_the_binary_reports_is_the_one_in_the_manifest() {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+    let dichiarata = manifest
+        .lines()
+        .find_map(|l| l.strip_prefix("version = \""))
+        .and_then(|l| l.split('"').next())
+        .expect("Cargo.toml deve dichiarare una versione");
+
+    assert_eq!(
+        odoo_installer::INSTALLER_VERSION,
+        dichiarata,
+        "il binario dice di essere {} ma il pacchetto è {dichiarata}",
+        odoo_installer::INSTALLER_VERSION
+    );
+}

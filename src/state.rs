@@ -248,12 +248,53 @@ pub struct InstallConfig {
     /// dalla R4 e il percorso storico resta leggibile dalla R7.
     #[serde(default)]
     pub os_family: OsFamily,
+
+    /// La versione dell'installer che ha **scritto** questo manifesto.
+    ///
+    /// Serve a rendere azionabile un messaggio che oggi esiste già ma non sa
+    /// spiegarsi: quando `rollback` incontra uno step che questo binario non
+    /// conosce, avvisa e prosegue — corretto, ma chi legge non sa *perché*. Con
+    /// la versione registrata la diagnosi diventa «il manifesto l'ha scritto la
+    /// 2.3.0, questo binario è la 2.1.0: aggiorna l'installer prima di
+    /// annullare», che è azionabile (`A-V3-16`).
+    ///
+    /// `Option` + `serde(default)` per retrocompatibilità, come `config` dalla R4
+    /// e `os_family` qui sopra: un manifesto scritto prima che questo campo
+    /// esistesse resta leggibile e vale `None` — «non lo so», che è la verità.
+    /// Renderlo obbligatorio significherebbe rendere non disinstallabile
+    /// un'istanza già in campo, cioè lo stesso danno di A-V3-1 per un'altra
+    /// strada.
+    #[serde(default)]
+    pub installer_version: Option<String>,
+}
+
+/// La nota da mostrare quando il manifesto è stato scritto da un installer
+/// **diverso** da quello che sta girando. Pura.
+///
+/// `None` quando coincidono — il caso normale — e anche quando il manifesto non
+/// porta la versione: da un'informazione assente non si conclude niente, e un
+/// manifesto pre-`A-V3-16` è semplicemente vecchio, non sospetto.
+///
+/// Non è un rifiuto: il rollback resta best-effort e deve andare avanti anche
+/// così. È un'informazione per chi legge il report, ed è esattamente ciò che
+/// mancava al warning sugli step sconosciuti.
+pub fn version_mismatch_note(manifesto: Option<&str>, in_esecuzione: &str) -> Option<String> {
+    let scritto_da = manifesto?;
+    if scritto_da == in_esecuzione {
+        return None;
+    }
+    Some(format!(
+        "questo manifesto è stato scritto dall'installer {scritto_da}, mentre stai eseguendo la \
+         versione {in_esecuzione}: se qualche step risulta sconosciuto, è questa la ragione — usa la \
+         stessa versione (o una più recente) per annullare l'installazione"
+    ))
 }
 
 impl InstallConfig {
     /// Estrae dal [`Context`] i soli campi che servono al rollback da disco.
     pub fn from_context(ctx: &Context) -> Self {
         InstallConfig {
+            installer_version: Some(crate::INSTALLER_VERSION.to_string()),
             odoo_version: ctx.odoo_version.clone(),
             odoo_version_short: ctx.odoo_version_short.clone(),
             odoo_user: ctx.odoo_user.clone(),

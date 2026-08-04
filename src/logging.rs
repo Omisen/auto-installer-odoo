@@ -70,5 +70,14 @@ pub fn init(dry_run: bool) -> Option<WorkerGuard> {
         .with(file_layer)
         .try_init();
 
+    // Prima riga di ogni esecuzione: **chi** sta scrivendo questo log.
+    //
+    // Sta qui e non nei due `main` per la ragione per cui A-V3-16 esiste: un
+    // post-mortem senza la versione di chi l'ha prodotto costringe a indovinare,
+    // e fra 2.1.0, 2.2.0 e 2.3.0 cambiano il percorso del manifesto e la scelta
+    // dell'interprete. Scrivendola qui, ogni comando — installazione e rollback —
+    // la porta, e nessuno può dimenticarsene aggiungendo un entry point.
+    tracing::info!(version = crate::INSTALLER_VERSION, "odoo-installer");
+
     guard
 }

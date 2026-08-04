@@ -586,6 +586,20 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         );
     };
 
+    // L'ha scritto un installer diverso da questo? (A-V3-16)
+    //
+    // Non è un rifiuto: il rollback resta best-effort e deve funzionare anche
+    // così. È l'informazione che mancava al warning «step sconosciuto a questo
+    // binario», che finora diceva *cosa* senza poter dire *perché*. Va detta
+    // PRIMA di iniziare, non nel report finale: chi legge deve poter fermarsi e
+    // usare la versione giusta invece di scoprirlo a rollback fatto.
+    if let Some(nota) = state::version_mismatch_note(
+        config.installer_version.as_deref(),
+        odoo_installer::INSTALLER_VERSION,
+    ) {
+        tracing::warn!("{nota}");
+    }
+
     // Il manifesto descrive un'installazione di QUESTO installer? (A-V3-8)
     //
     // Da qui in poi ogni percorso che guiderà un `rm -rf`, un `dropdb` o un

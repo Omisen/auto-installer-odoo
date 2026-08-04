@@ -22,7 +22,10 @@ use clap::{Args, Parser, Subcommand};
 #[command(
     name = "odoo-installer",
     about = "Installer Odoo (16/17/18/19) con rollback chirurgico",
+    version = crate::INSTALLER_VERSION,
     // Niente auto `--version` di clap: `--version` qui è la versione di Odoo.
+    // Il flag automatico resta spento, ma la versione **si può chiedere**: vedi
+    // `installer_version` qui sotto (A-V3-16).
     disable_version_flag = true
 )]
 pub struct Cli {
@@ -33,6 +36,16 @@ pub struct Cli {
     /// Versione Odoo da installare (16|17|18|19 oppure 16.0..19.0).
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
+
+    /// Stampa la versione **dell'installer** ed esce.
+    ///
+    /// Nome lungo esplicito e non `--version`, che qui è già la versione di Odoo
+    /// e non si tocca: rinominarla romperebbe script e `.env` in campo, e questo
+    /// progetto le rinomine le fa mantenendo l'alias (R12), non spostando il
+    /// significato di un flag esistente. La forma breve `-V` resta quella che
+    /// chiunque prova per prima.
+    #[arg(short = 'V', long = "installer-version", action = clap::ArgAction::Version)]
+    pub installer_version: Option<bool>,
 
     /// Utente di sistema per Odoo (default: odoo).
     #[arg(long, value_name = "USER")]

@@ -957,3 +957,107 @@ fn rollback_su_mock(
     };
     rollback::rollback_from_state(&state, ctx, &make_ops, &NoopReporter)
 }
+
+// --- A-V3-16: l'installer sa dire chi è ---------------------------------------
+
+/// `-V` e `--installer-version` stampano la versione **dell'installer** ed
+/// escono, senza toccare `--version`, che qui è la versione di Odoo.
+///
+/// Il difetto è stato trovato installando il `.rpm` della 2.3.0 su una Fedora
+/// vera: `odoo-installer --version` rispondeva *«a value is required»*, e non
+/// esisteva alcun modo di chiedere al binario la propria versione. La
+/// tentazione — rinominare il flag — è la stessa che R12 ha scartato: si
+/// mantiene ciò che è in campo e si aggiunge la via che manca.
+///
+/// `try_parse_from` e non `parse_from`: un'azione `Version` fa uscire il
+/// processo, e con `parse_from` il test morirebbe senza spiegarsi (la lezione di
+/// R12 sull'alias `--enable-ssl`).
+#[test]
+fn the_installer_can_be_asked_its_own_version() {
+    use clap::error::ErrorKind;
+
+    for flag in ["-V", "--installer-version"] {
+        let err = Cli::try_parse_from(["odoo-installer", flag])
+            .expect_err("un'azione Version interrompe il parsing: è il suo mestiere");
+        assert_eq!(
+            err.kind(),
+            ErrorKind::DisplayVersion,
+            "`{flag}` deve stampare la versione, non un errore d'uso"
+        );
+        assert!(
+            err.to_string().contains(odoo_installer::INSTALLER_VERSION),
+            "`{flag}` deve stampare la versione di QUESTO binario: {err}"
+        );
+    }
+}
+
+/// E `--version 18` continua a essere la versione di **Odoo**.
+///
+/// È la metà che rende la correzione non-distruttiva: script, `.env` e job di CI
+/// in campo passano `--version`, e se cambiasse significato smetterebbero di
+/// installare la release che chiedono — in silenzio, perché installerebbero
+/// comunque *qualcosa*.
+#[test]
+fn the_odoo_version_flag_is_untouched() {
+    let cli = Cli::try_parse_from(["odoo-installer", "--version", "18"])
+        .expect("--version <VER> resta la versione di Odoo");
+    assert_eq!(cli.version.as_deref(), Some("18"));
+}
+
+/// Il manifesto registra chi l'ha scritto, e un manifesto vecchio resta
+/// leggibile.
+#[test]
+fn the_manifest_records_which_installer_wrote_it() {
+    let config = config_fixture();
+    assert_eq!(
+        config.installer_version.as_deref(),
+        Some(odoo_installer::INSTALLER_VERSION),
+        "un manifesto scritto ora deve dire da chi"
+    );
+
+    // Retrocompatibilità: un manifesto senza il campo si legge come «non lo so».
+    // Il campo si toglie dal JSON come oggetto, non con una sostituzione di
+    // stringa: quella dipende dall'ordine di serializzazione, e un fixture che
+    // dipende dall'ordine è un fixture che mente il giorno in cui l'ordine cambia
+    // (primo tentativo di questo test: il campo non veniva tolto affatto e
+    // l'asserzione passava per il motivo sbagliato).
+    let mut json: serde_json::Value = serde_json::to_value(&config).expect("serializza");
+    json.as_object_mut()
+        .expect("un oggetto")
+        .remove("installer_version")
+        .expect("il campo c'era");
+    let vecchio: odoo_installer::state::InstallConfig =
+        serde_json::from_value(json).expect("un manifesto pre-A-V3-16 deve restare leggibile");
+    assert_eq!(
+        vecchio.installer_version, None,
+        "assente ≠ sbagliato: è «non lo so», e da lì non si conclude niente"
+    );
+}
+
+/// La nota sul disallineamento parla **solo** quando c'è davvero, e dice
+/// entrambe le versioni.
+#[test]
+fn a_manifest_from_another_installer_is_announced_not_refused() {
+    use odoo_installer::state::version_mismatch_note;
+
+    assert_eq!(
+        version_mismatch_note(Some("2.3.0"), "2.3.0"),
+        None,
+        "stessa versione: non c'è niente da dire"
+    );
+    assert_eq!(
+        version_mismatch_note(None, "2.3.0"),
+        None,
+        "manifesto vecchio: «non lo so» non è un disallineamento"
+    );
+
+    let nota = version_mismatch_note(Some("2.3.0"), "2.1.0").expect("versioni diverse: va detto");
+    assert!(
+        nota.contains("2.3.0") && nota.contains("2.1.0"),
+        "la nota deve nominare ENTRAMBE le versioni, o non si capisce cosa fare: {nota}"
+    );
+    assert!(
+        nota.contains("sconosciuto"),
+        "e deve collegarsi al sintomo che spiega — gli step che questo binario non conosce: {nota}"
+    );
+}
