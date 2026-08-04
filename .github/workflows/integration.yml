@@ -377,13 +377,30 @@ jobs:
           # l'installer esige), git (clone dei sorgenti), jq (le asserzioni
           # leggono il manifesto), procps-ng (`ps`).
           #
-          # `firewalld` + `nftables` + `dbus-daemon`: su una Fedora vera firewalld
+          # `firewalld` + `nftables` + `dbus-broker`: su una Fedora vera firewalld
           # è preinstallato, quindi averlo nell'immagine è fedele e non uno
           # sconto. Viene AVVIATO solo nello scenario `nginx` — è lì che
-          # `nginx-firewall` ha qualcosa da fare. `nftables` è il backend e
-          # `dbus-daemon` il canale su cui `firewall-cmd` parla col demone:
+          # `nginx-firewall` ha qualcosa da fare. `nftables` è il backend e il
+          # bus di sistema è il canale su cui `firewall-cmd` parla col demone:
           # senza uno dei due firewalld parte e poi non risponde, che è il modo
           # peggiore di fallire.
+          #
+          # `dbus-broker` e non `dbus-daemon`, ed è la correzione del rosso della
+          # sonda Fedora 44 (M7). Il bus di sistema **non serve solo a firewalld**:
+          # `postgresql-setup --initdb` lascia root al primo comando (`runuser -l
+          # postgres`) e solo DOPO chiede a systemd dov'è il PGDATA — da root
+          # `systemctl` userebbe il socket privato `/run/systemd/private` e non
+          # chiederebbe niente a nessuno, da utente non privilegiato deve passare
+          # dal bus. Senza bus quelle `systemctl show` falliscono e lo script muore
+          # con «no db datadir (PGDATA) found», che manda a cercare `--datadir`,
+          # cioè lontano dalla causa.
+          #
+          # `dbus-broker` è l'implementazione **di default di Fedora** ed è quella
+          # che il preset abilita; `dbus-daemon` è l'alternativa, e installarla con
+          # i weak deps disattivati lasciava l'immagine con il pacchetto ma senza
+          # un bus attivo. Lo scenario `nginx` non se n'era accorto perché
+          # `systemctl start firewalld` il bus se lo tira dietro; lo scenario base
+          # non lo avvia mai, ed è lì che la sonda è morta.
           #
           # `diffutils` porta `cmp`/`diff`: senza, il confronto byte-per-byte
           # del manifesto (A-V3-1) non può eseguire — e `cmp` assente esce
@@ -398,8 +415,17 @@ jobs:
           # quel test non distingue l'ordine corretto da quello rotto.
           RUN dnf -y install --setopt=install_weak_deps=False \
                 systemd sudo git jq procps-ng iproute diffutils authselect \
-                firewalld nftables dbus-daemon \
+                firewalld nftables dbus-broker \
            && dnf clean all
+          # Il bus si ABILITA a mano invece di fidarsi del preset: in
+          # un'immagine container i preset sono applicati dagli scriptlet rpm, e
+          # dare per scontato che l'abbiano fatto è ciò che ha lasciato la sonda
+          # senza bus. `dbus.socket` è di norma già abilitata (o statica): la si
+          # tocca solo se risulta `disabled`, così un cambio di packaging non fa
+          # fallire il build per una differenza che non conta.
+          RUN systemctl enable dbus-broker.service \
+           && { systemctl is-enabled dbus.socket >/dev/null 2>&1 \
+                || systemctl enable dbus.socket ; }
           # Unit che in un container non hanno senso e fallirebbero, portando
           # systemd a `degraded` per rumore invece che per una ragione vera.
           RUN systemctl mask \
@@ -546,6 +572,49 @@ jobs:
             ls -l /usr/bin/sudo 2>&1
             echo "--- nsswitch shadow/passwd ---"; grep -E "^(passwd|shadow):" /etc/nsswitch.conf 2>&1
             echo "--- sudo verbose ---"; su tester -c "sudo -n true" 2>&1 | tail -20
+          ' || true
+          exit 1
+
+      # Il secondo prerequisito, e la ragione per cui è ASSERITO invece che
+      # dato per scontato dall'immagine.
+      #
+      # `postgresql-setup --initdb` chiede a systemd dov'è il PGDATA **dopo**
+      # aver lasciato root (`runuser -l postgres`), quindi la domanda vera non è
+      # «systemd è PID 1?» ma «un utente non privilegiato riesce a interrogare
+      # systemd?» — che è ciò che si chiede qui, nella stessa forma in cui serve.
+      #
+      # Le due cose divergono, e la sonda Fedora 44 (M7) è caduta esattamente
+      # nella loro differenza: systemd era PID 1, il bus di sistema no. Il
+      # ripiego di `postgresql-setup` per i container («Support for containers»,
+      # 8.10) non l'ha salvata perché è gated su «systemd NON è PID 1»: un
+      # container con systemd ma senza bus cade nel buco fra i due casi previsti.
+      # Il sintomo era `no db datadir (PGDATA) found`, cioè un messaggio che
+      # manda a cercare `--datadir` mentre la causa è il bus.
+      #
+      # Stessa scelta del check `sudo -n true` qui sopra: un prerequisito si
+      # verifica dove lo si può nominare, non lo si scopre otto step dopo
+      # travestito da errore dell'installer.
+      #
+      # `systemctl show` su una unit inesistente esce comunque 0 (stampa i
+      # default): quindi qui un fallimento significa **il bus**, non `dbus.service`
+      # — che è esattamente ciò che si vuole misurare, e il motivo per cui la unit
+      # interrogata non conta.
+      - name: Il bus di sistema risponde a un utente non privilegiato?
+        run: |
+          if docker exec -u tester fedora-test systemctl show -p Environment dbus.service >/dev/null 2>&1; then
+            echo "bus di sistema: ok"
+            exit 0
+          fi
+          echo "::error::il bus di sistema D-Bus non risponde a un utente non privilegiato: postgresql-setup --initdb morirebbe con «no db datadir (PGDATA) found», che è la causa sbagliata"
+          docker exec fedora-test bash -c '
+            echo "--- socket del bus ---"; ls -l /run/dbus/ 2>&1
+            echo "--- unit del bus ---"
+            systemctl is-enabled dbus.socket dbus-broker.service 2>&1
+            systemctl is-active  dbus.socket dbus-broker.service 2>&1
+            echo "--- status ---"; systemctl status dbus-broker.service --no-pager -l 2>&1 | head -30
+            echo "--- journal ---"; journalctl -u dbus-broker.service -n 30 --no-pager 2>&1
+            echo "--- da root funziona? (se sì, è il bus e non systemd) ---"
+            systemctl show -p Environment dbus.service 2>&1
           ' || true
           exit 1
 
