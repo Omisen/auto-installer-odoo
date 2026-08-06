@@ -98,6 +98,26 @@ jobs:
           deb="$(ls target/x86_64-unknown-linux-musl/debian/*.deb)"
           ( cd "$(dirname "$deb")" && sha256sum "$(basename "$deb")" > "$(basename "$deb").sha256" )
           echo "DEB=$deb" >> "$GITHUB_ENV"
+      # A-V3-17: il README promette un nome di file per intero, e finora nessuno
+      # confrontava quella promessa con il file davvero prodotto. Il `.deb` della
+      # v2.3.0 si chiamava `..._2.3.0-1_amd64.deb` e il README ne nominava uno
+      # senza `-1`: comando di installazione → 404, e il test unitario non poteva
+      # accorgersene perché ripeteva la stessa congettura del README.
+      #
+      # Qui il nome NON è congetturato: è il basename dell'artefatto che stiamo
+      # per pubblicare. È l'unico punto della catena in cui questo controllo può
+      # dire di no per il motivo giusto — e lo dice PRIMA dell'upload, perché una
+      # release pubblicata con il README sbagliato si corregge solo con un'altra
+      # release.
+      - name: Il README nomina questo file
+        run: |
+          nome="$(basename "$DEB")"
+          if ! grep -qF "$nome" README.md; then
+            echo "::error::il README non nomina '$nome': i comandi di installazione darebbero 404"
+            grep -n 'amd64\.deb' README.md || true
+            exit 1
+          fi
+          echo "✔ il README nomina $nome"
       - name: Carica .deb + checksum sulla Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -134,6 +154,20 @@ jobs:
           rpm="$(ls target/x86_64-unknown-linux-musl/generate-rpm/*.rpm)"
           ( cd "$(dirname "$rpm")" && sha256sum "$(basename "$rpm")" > "$(basename "$rpm").sha256" )
           echo "RPM=$rpm" >> "$GITHUB_ENV"
+      # Come per il `.deb` (A-V3-17): il nome viene dall'artefatto, non da noi.
+      # Sul `.rpm` il README era già giusto per fortuna, non per verifica — la
+      # revisione `-1` c'era perché qualcuno l'aveva copiata guardando la release
+      # precedente. Fortuna e controllo si distinguono solo quando cambia
+      # qualcosa.
+      - name: Il README nomina questo file
+        run: |
+          nome="$(basename "$RPM")"
+          if ! grep -qF "$nome" README.md; then
+            echo "::error::il README non nomina '$nome': i comandi di installazione darebbero 404"
+            grep -n 'x86_64\.rpm' README.md || true
+            exit 1
+          fi
+          echo "✔ il README nomina $nome"
       - name: Carica .rpm + checksum sulla Release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

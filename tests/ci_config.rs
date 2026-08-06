@@ -422,14 +422,20 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
 ///
 /// Il README non usa più variabili di shell (`VER=…`): i comandi sono stringhe
 /// intere, copiabili senza leggerle. È la forma giusta per chi installa — e
-/// moltiplica per nove i punti in cui una versione può restare indietro. Due
-/// fonti che devono coincidere e nessuno che lo verifichi è il modo in cui si
-/// finisce per far scaricare ai clienti la release precedente, in silenzio: il
-/// comando funziona, il file esiste, e nessuno se ne accorge.
+/// moltiplica per **undici** i punti in cui una versione può restare indietro.
+/// Due fonti che devono coincidere e nessuno che lo verifichi è il modo in cui
+/// si finisce per far scaricare ai clienti la release precedente, in silenzio:
+/// il comando funziona, il file esiste, e nessuno se ne accorge.
 ///
 /// Si verifica la corrispondenza con `Cargo.toml`, che è la versione che il
 /// workflow di release taggherà — quindi il README è aggiornato quando lo è il
 /// manifesto, e non «quando qualcuno si ricorda».
+///
+/// **Il numero della release non era però l'unico modo di sbagliare il nome del
+/// file** (A-V3-17): la v2.3.0 aveva la versione giusta ovunque e il `.deb`
+/// restava irraggiungibile, perché al nome mancava la revisione `-1` che
+/// `cargo-deb` aggiunge. Da qui i nomi composti da [`package_file_name`] invece
+/// che scritti a mano qui sotto.
 #[test]
 fn the_readme_download_commands_point_at_this_version() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
@@ -456,16 +462,88 @@ fn the_readme_download_commands_point_at_this_version() {
          trovati {url}: se la sezione è cambiata, questa guardia va aggiornata insieme"
     );
 
-    // E i nomi dei file sono quelli che le due confezioni producono davvero.
-    for atteso in [
-        format!("odoo-installer_{versione}_amd64.deb"),
-        format!("odoo-installer-{versione}-1.x86_64.rpm"),
-    ] {
+    // E i nomi dei file, che si compongono con la REVISIONE dichiarata nel
+    // manifesto — non con una scritta a mano qui (A-V3-17).
+    for atteso in [package_file_name("deb"), package_file_name("rpm")] {
         assert!(
             readme.contains(&atteso),
             "il README non nomina `{atteso}`: il comando di installazione scaricherebbe un file \
              che quella release non contiene"
         );
+    }
+}
+
+/// La revisione del pacchetto è **dichiarata** in `Cargo.toml`, non ereditata.
+///
+/// **A-V3-17.** Il `.deb` della v2.3.0 si chiama `odoo-installer_2.3.0-1_amd64.deb`
+/// e il README ne nominava uno senza `-1`: chi seguiva il comando di
+/// installazione otteneva un 404. Il `-1` c'era perché `cargo-deb` aggiunge una
+/// revisione di default — cioè il nome dell'artefatto, che il README promette
+/// per intero, veniva deciso **fuori dal repository**, da un default che può
+/// cambiare fra versioni dello strumento.
+///
+/// Scriverla qui non è pignoleria: è ciò che rende la guardia qui sopra capace
+/// di dire di no. Finché il nome atteso era una stringa scritta a mano nel test,
+/// il test e il README ripetevano la stessa congettura e nessuno dei due leggeva
+/// lo strumento — un controllo che nello scenario per cui esiste non può fallire,
+/// la firma ricorrente di questo progetto.
+#[test]
+fn the_package_revision_is_declared_not_inherited() {
+    for (sezione, chiave) in [
+        ("[package.metadata.deb]", "revision"),
+        ("[package.metadata.generate-rpm]", "release"),
+    ] {
+        assert!(
+            manifest_value(sezione, chiave).is_some(),
+            "{sezione} deve dichiarare `{chiave}`: senza, il nome del file pubblicato lo decide \
+             il default dello strumento, e il README promette un nome che nessuno controlla"
+        );
+    }
+}
+
+/// Il valore di `chiave` dentro `sezione` di `Cargo.toml`, se c'è.
+///
+/// Parsing per sezione e non per riga: `release` da solo comparirebbe anche in
+/// un `[profile.release]`, e leggere la chiave giusta nella sezione sbagliata è
+/// il modo in cui una guardia sembra funzionare mentre misura altro.
+fn manifest_value(sezione: &str, chiave: &str) -> Option<String> {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+    let inizio = manifest.find(sezione)? + sezione.len();
+    let resto = &manifest[inizio..];
+    let blocco = &resto[..resto.find("\n[").unwrap_or(resto.len())];
+    blocco.lines().find_map(|riga| {
+        riga.trim()
+            .strip_prefix(chiave)?
+            .trim_start()
+            .strip_prefix('=')?
+            .trim()
+            .trim_matches('"')
+            .to_string()
+            .into()
+    })
+}
+
+/// Il nome del file che quella confezione produce, composto dal manifesto.
+///
+/// La **forma** del nome resta scritta qui — è convenzione di `cargo-deb` e di
+/// `cargo-generate-rpm`, non un dato che il repository possieda — mentre versione
+/// e revisione si leggono. Il che lascia un residuo di congettura, ed è
+/// dichiarato: a verificarlo contro il file **davvero prodotto** è
+/// `release.yml`, che il pacchetto ce l'ha in mano prima di pubblicarlo. Questa
+/// è la guardia veloce; quella è l'ultima parola.
+fn package_file_name(confezione: &str) -> String {
+    let versione = manifest_value("[package]", "version").expect("versione nel manifesto");
+    match confezione {
+        "deb" => {
+            let rev = manifest_value("[package.metadata.deb]", "revision")
+                .expect("revisione del .deb nel manifesto");
+            format!("odoo-installer_{versione}-{rev}_amd64.deb")
+        }
+        _ => {
+            let rel = manifest_value("[package.metadata.generate-rpm]", "release")
+                .expect("release del .rpm nel manifesto");
+            format!("odoo-installer-{versione}-{rel}.x86_64.rpm")
+        }
     }
 }
 

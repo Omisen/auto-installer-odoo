@@ -103,16 +103,18 @@ Scarica il binario dalla pagina **[Releases](../../releases/latest)**. Due varia
 
 Ogni archivio ha un file `.sha256` per **verificare l'integrità** del download.
 
-> I comandi qui sotto puntano alla **v2.3.0**, che è la release descritta da questo README. Se ne è
+> I comandi qui sotto puntano alla **v2.4.0**, che è la release descritta da questo README. Se ne è
 > uscita una più recente, la trovi su [Releases](../../releases/latest): cambia il numero nelle due
 > URL e nei nomi dei file.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256
 
 sha256sum -c odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256   # deve dire: OK
 tar xzf odoo-installer-x86_64-unknown-linux-musl.tar.gz
+
+./odoo-installer -V                                          # quale versione è questa
 
 sudo ./odoo-installer                                        # guidato (interattivo)
 # oppure non-interattivo:
@@ -127,12 +129,15 @@ comando `odoo-installer` finisce nel `PATH` ed è rimovibile con `apt remove odo
 servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer_2.3.0_amd64.deb
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer_2.3.0_amd64.deb.sha256
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer_2.4.0-1_amd64.deb
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer_2.4.0-1_amd64.deb.sha256
 
-sha256sum -c odoo-installer_2.3.0_amd64.deb.sha256           # deve dire: OK
+sha256sum -c odoo-installer_2.4.0-1_amd64.deb.sha256         # deve dire: OK
 
-sudo apt install ./odoo-installer_2.3.0_amd64.deb            # oppure: sudo dpkg -i ./odoo-installer_2.3.0_amd64.deb
+sudo apt install ./odoo-installer_2.4.0-1_amd64.deb          # oppure: sudo dpkg -i ./odoo-installer_2.4.0-1_amd64.deb
+
+odoo-installer -V                                            # quale versione è installata
+dpkg -l odoo-installer                                       # oppure, chiedendolo ad apt
 
 sudo odoo-installer                                          # ora è nel PATH
 # oppure non-interattivo:
@@ -145,12 +150,15 @@ Su Fedora (40, 41, …, 44) la stessa cosa con l'altra confezione. È **lo stess
 e del `tar.gz` — musl statico, nessuna dipendenza — impacchettato per l'altro gestore.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-2.3.0-1.x86_64.rpm
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.3.0/odoo-installer-2.3.0-1.x86_64.rpm.sha256
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-2.4.0-1.x86_64.rpm
+curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-2.4.0-1.x86_64.rpm.sha256
 
-sha256sum -c odoo-installer-2.3.0-1.x86_64.rpm.sha256        # deve dire: OK
+sha256sum -c odoo-installer-2.4.0-1.x86_64.rpm.sha256        # deve dire: OK
 
-sudo dnf install ./odoo-installer-2.3.0-1.x86_64.rpm
+sudo dnf install ./odoo-installer-2.4.0-1.x86_64.rpm
+
+odoo-installer -V                                            # quale versione è installata
+rpm -q odoo-installer                                        # oppure, chiedendolo a rpm
 
 sudo odoo-installer                                          # ora è nel PATH
 ```
@@ -201,6 +209,7 @@ default**.
 | `--dry-run` | mostra il piano senza mutare nulla | disattivo |
 | `--aggressive-rollback` | in rollback purga anche pacchetti che di norma resterebbero | disattivo |
 | `--force` | installa anche se esiste già un manifesto, mettendolo da parte invece di sovrascriverlo | disattivo |
+| `-V` / `--installer-version` | stampa la versione **dell'installer** ed esce (`--version` è quella di Odoo) | — |
 | `--help` | messaggio d'aiuto | — |
 
 Sottocomandi: `odoo-installer rollback` (alias `uninstall`) — vedi
