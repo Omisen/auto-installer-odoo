@@ -41,6 +41,19 @@
 #      `GPG_PASSPHRASE`. La chiave PUBBLICA non è un secret: la esporta questo
 #      workflow dalla privata, perché due copie della stessa chiave sono due
 #      cose che possono divergere.
+#   3. Settings → Environments → `github-pages` → **Deployment branches and
+#      tags**: aggiungere una regola di tipo **Tag** con pattern `v*`.
+#
+#      Non è un dettaglio di configurazione: l'environment `github-pages` nasce
+#      protetto e consente il deploy **solo dal branch di default**, mentre
+#      questo workflow parte da `release: published`, dove il ref è il TAG. Senza
+#      quella regola il job fa tutto — scarica, verifica i checksum, firma — e
+#      viene respinto all'ultimo passo con «not allowed to deploy to github-pages
+#      due to environment protection rules». La release resta pubblicata e il
+#      repository apt/dnf no, che è il modo peggiore in cui questa cosa può
+#      fallire: le istruzioni sono già online e puntano a un sito che non esiste.
+#      (`workflow_dispatch` da `main` invece passa, perché lì il ref è un branch:
+#      è la via d'uscita se la regola non si può cambiare.)
 # =============================================================================
 
 name: Publish repos
@@ -88,7 +101,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       # I secret PRIMA di tutto il resto: scoprire che manca la chiave dopo aver
       # scaricato e verificato i pacchetti è tempo buttato, e un fallback
