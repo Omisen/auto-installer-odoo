@@ -1,7 +1,7 @@
 //! Pattern `PreState` e persistenza dello stato su disco.
 //!
 //! Implementa l'invariante 4 di `CLAUDE.md`: `completed` + snapshot vanno
-//! scritti su `/var/lib/odoo-installer/state.json` (owned root, `0600`).
+//! scritti su `/var/lib/invok/state.json` (owned root, `0600`).
 //! Il percorso storico `/opt/odoo/.installer-state.json` resta **leggibile**
 //! (vedi [`resolve_state_path`]) ma non viene più scritto: il manifesto non può
 //! vivere dentro il perimetro che il rollback deve rimuovere, o l'ultimo undo
@@ -11,7 +11,7 @@
 //!
 //! Il file di stato viene **scritto** dopo ogni step riuscito ([`InstallState::save`],
 //! chiamata da [`crate::engine::Installer::execute_with_reporter`]),
-//! **riletto** da `odoo-installer rollback` ([`InstallState::load`], vedi
+//! **riletto** da `invok rollback` ([`InstallState::load`], vedi
 //! [`crate::rollback`]) e **rimosso** a fine installazione riuscita
 //! ([`InstallState::clear`], chiamata da `main`) o a rollback completato.
 //!
@@ -32,7 +32,7 @@
 //!
 //! Ricavare la configurazione una seconda volta dalla cascata CLI/`.env`/default
 //! **non è un'opzione sicura**: un utente che ha installato con
-//! `--db-name fatturazione` e lancia `odoo-installer rollback` senza flag
+//! `--db-name fatturazione` e lancia `invok rollback` senza flag
 //! ricadrebbe sul default `odoo` e il rollback droppererebbe un database che non
 //! ha mai creato — la violazione più diretta della protezione anti-drop. Perciò
 //! l'installazione persiste la propria configurazione ([`InstallConfig`])
@@ -59,7 +59,7 @@ use crate::error::StepError;
 
 /// Directory del manifesto in produzione. Creata da [`InstallState::save`] e
 /// rimossa, se vuota, da [`InstallState::clear`].
-pub const DEFAULT_STATE_DIR: &str = "/var/lib/odoo-installer";
+pub const DEFAULT_STATE_DIR: &str = "/var/lib/invok";
 
 /// Percorso di default del file di stato in produzione (root, `0600`).
 ///
@@ -71,7 +71,7 @@ pub const DEFAULT_STATE_DIR: &str = "/var/lib/odoo-installer";
 /// vuota e rinunciava a rimuoverla (mai `rm -rf`). Spostare lock e log non
 /// bastava: era questo il terzo residente, ed è il motivo per cui `/opt/odoo`
 /// sopravviveva comunque a ogni rollback.
-pub const DEFAULT_STATE_PATH: &str = "/var/lib/odoo-installer/state.json";
+pub const DEFAULT_STATE_PATH: &str = "/var/lib/invok/state.json";
 
 /// Percorso storico del manifesto, dentro `/opt/odoo` (fino alla 2.1.0).
 ///
@@ -81,6 +81,27 @@ pub const DEFAULT_STATE_PATH: &str = "/var/lib/odoo-installer/state.json";
 /// il danno che A-V3-1 descrive, causato dalla correzione di un altro finding.
 /// Vedi [`resolve_state_path`].
 pub const LEGACY_STATE_PATH: &str = "/opt/odoo/.installer-state.json";
+
+/// Percorso del manifesto quando il progetto si chiamava `odoo-installer`
+/// (dalla 2.2.0 alla 2.4.0, prima del rename in `invok`).
+///
+/// Stessa regola del precedente, e vale la pena dire perché il rename l'ha resa
+/// necessaria una seconda volta: le macchine dei clienti non si rinominano
+/// insieme al repository. Un'istanza installata dalla 2.4.0 ha il suo unico
+/// manifesto qui, e il manifesto è l'**unica** traccia di quali artefatti
+/// abbiamo creato noi e quali abbiamo trovato già presenti. Smettere di
+/// leggerlo non lascerebbe un'istanza "da rimuovere a mano": lascerebbe
+/// un'istanza che nessuno sa più come rimuovere senza indovinare — e indovinare
+/// è esattamente ciò che l'anti-drop vieta.
+pub const RENAMED_STATE_PATH: &str = "/var/lib/odoo-installer/state.json";
+
+/// I percorsi storici, dal più recente al più vecchio.
+///
+/// L'ordine conta: se per qualche ragione ne esistessero due, si consuma il più
+/// recente. Un elenco e non due costanti sciolte, perché il prossimo rename —
+/// e questo progetto ne ha già fatti due — deve aggiungere una riga, non
+/// cambiare una firma.
+pub const LEGACY_STATE_PATHS: &[&str] = &[RENAMED_STATE_PATH, LEGACY_STATE_PATH];
 
 /// Il file di stato è **affidabile** come sorgente di un'operazione distruttiva?
 ///
@@ -154,20 +175,27 @@ pub fn trust_verdict(uid: u32, mode: u32, parent_mode: Option<u32>) -> Result<()
 /// rollback non è il momento per spostare file, e il manifesto storico verrà
 /// comunque rimosso dal `clear` a pulizia completata.
 pub fn resolve_state_path() -> PathBuf {
-    pick_state_path(Path::new(DEFAULT_STATE_PATH), Path::new(LEGACY_STATE_PATH))
+    let legacy: Vec<&Path> = LEGACY_STATE_PATHS.iter().map(Path::new).collect();
+    pick_state_path(Path::new(DEFAULT_STATE_PATH), &legacy)
 }
 
-/// La regola di [`resolve_state_path`], con i due percorsi come parametri.
+/// La regola di [`resolve_state_path`], con i percorsi come parametri.
 ///
 /// Esiste separata per la stessa ragione per cui `Context::state_path` è
 /// configurabile: la scelta va verificata con percorsi di prova, non contro il
 /// filesystem della macchina che esegue i test.
-pub fn pick_state_path(current: &Path, legacy: &Path) -> PathBuf {
+///
+/// `legacy` è un elenco, non un percorso singolo: i posti storici sono due dal
+/// rename in `invok` (`/var/lib/odoo-installer/`, e prima ancora `/opt/odoo`), e
+/// saranno tre al prossimo. Si scorrono in ordine e vince il primo che esiste.
+pub fn pick_state_path(current: &Path, legacy: &[&Path]) -> PathBuf {
     if current.exists() {
         return current.to_path_buf();
     }
-    if legacy.exists() {
-        return legacy.to_path_buf();
+    for candidato in legacy {
+        if candidato.exists() {
+            return candidato.to_path_buf();
+        }
     }
     current.to_path_buf()
 }
@@ -623,14 +651,14 @@ impl InstallState {
     /// spazzatura: è il **manifesto di disinstallazione**, l'unica traccia di
     /// quali artefatti quell'installazione ha creato e quali ha trovato già lì.
     /// Cancellandolo si rendeva impossibile proprio il caso d'uso principale del
-    /// comando — `odoo-installer rollback` su un'istanza funzionante rispondeva
+    /// comando — `invok rollback` su un'istanza funzionante rispondeva
     /// "nessuna installazione da annullare".
     ///
     /// Ora a fine successo lo stato viene **marcato** ([`InstallState::finished`])
     /// e conservato.
     /// # Perché rimuove anche la directory
     ///
-    /// `save` crea `/var/lib/odoo-installer` per ospitare il manifesto: è un
+    /// `save` crea `/var/lib/invok` per ospitare il manifesto: è un
     /// artefatto nostro, e lasciarne il guscio vuoto dopo una pulizia riuscita
     /// sarebbe lo stesso residuo che A-V3-2 rimprovera a `/opt/odoo`, solo più
     /// piccolo. La rimozione è ristretta alla **costante** [`DEFAULT_STATE_DIR`]
@@ -674,7 +702,7 @@ impl InstallState {
     ///
     /// Un `undo` **fallito** non chiama questa funzione, di proposito: lì
     /// l'artefatto è (forse) ancora lì, e il record è l'unica traccia del
-    /// residuo che `odoo-installer rollback` potrà ritentare.
+    /// residuo che `invok rollback` potrà ritentare.
     pub fn forget(&mut self, name: &str) {
         self.completed.retain(|r| r.name != name);
     }

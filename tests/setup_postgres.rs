@@ -5,9 +5,9 @@ mod common;
 use std::collections::HashSet;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::step::Step;
-use odoo_installer::steps::setup_postgres::SetupPostgres;
+use invok::context::Context;
+use invok::step::Step;
+use invok::steps::setup_postgres::SetupPostgres;
 
 fn ctx(aggressive: bool) -> Context {
     Context {

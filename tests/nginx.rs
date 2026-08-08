@@ -6,13 +6,13 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::step::Step;
-use odoo_installer::steps::nginx_enable_site::NginxEnableSite;
-use odoo_installer::steps::nginx_firewall::NginxFirewall;
-use odoo_installer::steps::nginx_install::NginxInstall;
-use odoo_installer::steps::nginx_reload::NginxReload;
-use odoo_installer::steps::nginx_write_config::{render_vhost, validate_vhost, NginxWriteConfig};
+use invok::context::Context;
+use invok::step::Step;
+use invok::steps::nginx_enable_site::NginxEnableSite;
+use invok::steps::nginx_firewall::NginxFirewall;
+use invok::steps::nginx_install::NginxInstall;
+use invok::steps::nginx_reload::NginxReload;
+use invok::steps::nginx_write_config::{render_vhost, validate_vhost, NginxWriteConfig};
 
 fn ctx(with_nginx: bool, ssl: bool) -> Context {
     Context {
@@ -315,8 +315,8 @@ fn vhost_rendering_has_no_residue() {
 
 // --- A-V3-5: la natura del default site, non solo la sua esistenza ----------
 
-use odoo_installer::steps::nginx_enable_site::{DefaultSite, NginxEnableSiteSnapshot};
-use odoo_installer::system_ops::PathKind;
+use invok::steps::nginx_enable_site::{DefaultSite, NginxEnableSiteSnapshot};
+use invok::system_ops::PathKind;
 
 fn enable_site_snapshot(step: &NginxEnableSite) -> NginxEnableSiteSnapshot {
     serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile")

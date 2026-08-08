@@ -86,7 +86,7 @@ impl Step for InitializeOdooDatabase {
         // da "database del cliente": in questa esecuzione il DB esiste e basta.
         // Ma l'utente può, e da R4 ha anche lo strumento: se il residuo viene da
         // un'installazione precedente non completata, il suo file di stato è
-        // ancora sul disco e `odoo-installer rollback` lo consuma, rimuovendo
+        // ancora sul disco e `invok rollback` lo consuma, rimuovendo
         // esattamente ciò che quella run aveva creato — e nient'altro (A3.3).
         if !ctx.db_created_by_us.load(Ordering::SeqCst) {
             return Err(StepError::Precondition(format!(
@@ -96,7 +96,7 @@ impl Step for InitializeOdooDatabase {
                  dall'installer.\n\
                  Se '{db}' è il residuo di un'installazione precedente non completata \
                  (e non un database con dati reali), ripulisci quella installazione con \
-                 `sudo odoo-installer rollback`: legge lo stato lasciato da quella \
+                 `sudo invok rollback`: legge lo stato lasciato da quella \
                  esecuzione e rimuove solo ciò che aveva creato lei. In alternativa \
                  rimuovi il database a mano — `sudo -u postgres dropdb {db}` — oppure \
                  scegli un nome diverso.",

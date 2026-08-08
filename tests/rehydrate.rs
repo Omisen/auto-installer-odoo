@@ -22,12 +22,12 @@ use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 
 use common::model::{ModelState, SystemModel};
-use odoo_installer::context::Context;
-use odoo_installer::secret::Secret;
-use odoo_installer::state::{InstallState, PreState};
-use odoo_installer::step::Step;
-use odoo_installer::steps;
-use odoo_installer::system_ops::SystemOps;
+use invok::context::Context;
+use invok::secret::Secret;
+use invok::state::{InstallState, PreState};
+use invok::step::Step;
+use invok::steps;
+use invok::system_ops::SystemOps;
 
 const HOME: &str = "/opt/odoo";
 const INSTALL: &str = "/opt/odoo/odoo18";

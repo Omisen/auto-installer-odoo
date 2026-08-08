@@ -11,7 +11,7 @@
 
 use std::path::Path;
 
-use odoo_installer::config::{self, ResolvedConfig};
+use invok::config::{self, ResolvedConfig};
 
 const CI_ENV: &str = "configs/ci.env";
 const CI_NGINX_ENV: &str = "configs/ci-nginx.env";
@@ -220,9 +220,7 @@ const WORKFLOW: &str = ".github/workflows/integration.yml";
 /// test lo rende obbligatorio invece che auspicabile.
 #[test]
 fn the_newest_tested_releases_match_the_ci_matrix() {
-    use odoo_installer::checks::{
-        NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_UBUNTU,
-    };
+    use invok::checks::{NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_UBUNTU};
 
     let wf = std::fs::read_to_string(WORKFLOW).expect("il workflow di integrazione deve esistere");
 
@@ -362,10 +360,10 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
         // cargo-deb: ["sorgente", "destinazione/", "mode"]
         ("deb", &deb, "usr/bin/"),
         // cargo-generate-rpm: { source, dest, mode }
-        ("rpm", &rpm, "/usr/bin/odoo-installer"),
+        ("rpm", &rpm, "/usr/bin/invok"),
     ] {
         assert!(
-            testo.contains("target/release/odoo-installer"),
+            testo.contains("target/release/invok"),
             "{nome}: deve impacchettare il binario compilato, non altro"
         );
         assert!(
@@ -475,7 +473,7 @@ fn the_readme_download_commands_point_at_this_version() {
 
 /// La revisione del pacchetto è **dichiarata** in `Cargo.toml`, non ereditata.
 ///
-/// **A-V3-17.** Il `.deb` della v2.3.0 si chiama `odoo-installer_2.3.0-1_amd64.deb`
+/// **A-V3-17.** Il `.deb` della v2.3.0 si chiama `invok_2.3.0-1_amd64.deb`
 /// e il README ne nominava uno senza `-1`: chi seguiva il comando di
 /// installazione otteneva un 404. Il `-1` c'era perché `cargo-deb` aggiunge una
 /// revisione di default — cioè il nome dell'artefatto, che il README promette
@@ -537,12 +535,12 @@ fn package_file_name(confezione: &str) -> String {
         "deb" => {
             let rev = manifest_value("[package.metadata.deb]", "revision")
                 .expect("revisione del .deb nel manifesto");
-            format!("odoo-installer_{versione}-{rev}_amd64.deb")
+            format!("invok_{versione}-{rev}_amd64.deb")
         }
         _ => {
             let rel = manifest_value("[package.metadata.generate-rpm]", "release")
                 .expect("release del .rpm nel manifesto");
-            format!("odoo-installer-{versione}-{rel}.x86_64.rpm")
+            format!("invok-{versione}-{rel}.x86_64.rpm")
         }
     }
 }
@@ -564,9 +562,258 @@ fn the_version_the_binary_reports_is_the_one_in_the_manifest() {
         .expect("Cargo.toml deve dichiarare una versione");
 
     assert_eq!(
-        odoo_installer::INSTALLER_VERSION,
+        invok::INSTALLER_VERSION,
         dichiarata,
         "il binario dice di essere {} ma il pacchetto è {dichiarata}",
-        odoo_installer::INSTALLER_VERSION
+        invok::INSTALLER_VERSION
     );
+}
+
+// --- Non affiliazione: la stessa promessa in tre confezioni -----------------
+
+/// Il disclaimer di non affiliazione a Odoo S.A. c'è **ovunque il pacchetto si
+/// presenti**: README, `.deb` e `.rpm`.
+///
+/// Non è una formalità: il perno della questione marchio è che nessuno confonda
+/// questo strumento con un prodotto di Odoo S.A., e chi installa da `apt`/`dnf`
+/// il README non lo apre — legge `apt show` / `dnf info`. Un disclaimer che vive
+/// solo nel README protegge esattamente il lettore che non ne aveva bisogno.
+///
+/// La forma delle tre frasi è diversa per necessità (il `.rpm` non ha un campo
+/// di descrizione lunga: `cargo-generate-rpm` espone solo `summary`), quindi non
+/// si confrontano i testi fra loro — si pretende che ciascuno **nomini Odoo S.A.
+/// e neghi l'affiliazione**. È il minimo che rende la promessa verificabile
+/// senza congelare la formulazione.
+#[test]
+fn every_package_face_disclaims_affiliation_with_odoo() {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+    let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
+
+    // Il blocco di metadati, isolato: cercare la frase nel manifesto intero
+    // passerebbe anche se il disclaimer stesse solo in un commento — e un
+    // commento non finisce in nessun pacchetto.
+    let blocco = |intestazione: &str| -> String {
+        let inizio = manifest
+            .find(intestazione)
+            .unwrap_or_else(|| panic!("manca il blocco {intestazione}"));
+        let resto = &manifest[inizio + intestazione.len()..];
+        let fine = resto.find("\n[").unwrap_or(resto.len());
+        // Via i commenti: il disclaimer deve stare in un VALORE.
+        resto[..fine]
+            .lines()
+            .filter(|r| !r.trim_start().starts_with('#'))
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    for (dove, testo) in [
+        ("README.md", readme.as_str()),
+        (
+            ".deb (extended-description)",
+            &blocco("[package.metadata.deb]"),
+        ),
+        (".rpm (summary)", &blocco("[package.metadata.generate-rpm]")),
+    ] {
+        assert!(
+            testo.contains("Odoo S.A."),
+            "{dove}: il disclaimer deve nominare il titolare del marchio"
+        );
+        assert!(
+            testo.contains("non affiliato a Odoo S.A.")
+                || testo.contains("non è affiliato a Odoo S.A."),
+            "{dove}: manca la negazione esplicita dell'affiliazione"
+        );
+    }
+}
+
+// --- Il README e il repository pubblicato descrivono lo stesso layout -------
+
+const PUBLISH_WORKFLOW: &str = ".github/workflows/publish-repos.yml";
+const REPO_BUILD_SCRIPT: &str = "scripts/ci/build-package-repos.sh";
+
+/// Le istruzioni del README puntano al layout che il workflow pubblica davvero.
+///
+/// Qui ci sono **tre** copie della stessa struttura — il README che la
+/// documenta, il workflow che dichiara l'indirizzo atteso, lo script che
+/// costruisce l'albero — e una struttura descritta in tre posti è una struttura
+/// che resta indietro in due. Il sintomo non sarebbe un errore: sarebbe un 404
+/// per chi copia i comandi, o un `apt update` che non trova l'indice. Nessuno
+/// dei due arriva a noi.
+///
+/// La base URL non è scritta a mano in questo test: si **legge dal workflow**,
+/// che a sua volta la confronta in campo con quella vera di Pages
+/// (`configure-pages`). Ripeterla qui vorrebbe dire ripetere la congettura,
+/// che è esattamente com'era la prima versione della guardia sul README dei
+/// download — verde mentre il comando dava 404 (A-V3-17).
+#[test]
+fn the_readme_repo_instructions_match_the_published_layout() {
+    let workflow = std::fs::read_to_string(PUBLISH_WORKFLOW)
+        .unwrap_or_else(|_| panic!("manca {PUBLISH_WORKFLOW}"));
+    let script = std::fs::read_to_string(REPO_BUILD_SCRIPT)
+        .unwrap_or_else(|_| panic!("manca {REPO_BUILD_SCRIPT}"));
+    let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
+
+    let base = workflow
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("SITE_URL_ATTESA:"))
+        .map(|v| v.trim().trim_end_matches('/'))
+        .expect("il workflow deve dichiarare SITE_URL_ATTESA");
+
+    // Le tre URL che un utente incolla nel terminale. Se una di queste non
+    // compare nel README, la guida manda da qualche altra parte.
+    for (cosa, atteso) in [
+        ("la chiave pubblica", format!("{base}/KEY.asc")),
+        // Il `./` finale è la sintassi dei repository *flat*: senza, `apt
+        // update` non trova l'indice. Sta nell'asserzione perché sembra un
+        // refuso e il primo che "corregge" il README rompe il comando.
+        ("la riga sources.list", format!("{base}/apt ./")),
+        ("il file .repo di dnf", format!("{base}/rpm/invok.repo")),
+    ] {
+        assert!(
+            readme.contains(&atteso),
+            "README: {cosa} deve puntare a `{atteso}` (base URL letta da {PUBLISH_WORKFLOW})"
+        );
+    }
+
+    // La chiave è ARMORED e si chiama `.asc` in tutti e tre i posti: apt accetta
+    // una chiave armored in /etc/apt/keyrings solo se il file è nominato così, e
+    // dnf la vuole armored comunque. Un `--export` senza `--armor` produrrebbe
+    // un file binario con lo stesso nome, che nessuno dei due sa leggere.
+    assert!(
+        workflow.contains("--armor --export"),
+        "{PUBLISH_WORKFLOW}: la chiave pubblica va esportata ASCII-armored"
+    );
+    assert!(
+        workflow.contains("site/KEY.asc"),
+        "{PUBLISH_WORKFLOW}: la chiave pubblica deve finire in site/KEY.asc"
+    );
+    assert!(
+        readme.contains("signed-by=/etc/apt/keyrings/invok.asc"),
+        "README: la riga apt deve usare signed-by su un file .asc"
+    );
+
+    // Lo script costruisce i due rami che le URL promettono, e il `.repo` che
+    // dnf scarica nomina la stessa chiave.
+    //
+    // Le righe si cercano INTERE, non per parola: la prima versione di questa
+    // asserzione chiedeva solo che `KEY.asc` comparisse *da qualche parte* nello
+    // script, e la validazione per mutazione l'ha fatta sopravvivere — il nome
+    // compare anche nel testo della pagina indice, quindi rinominare la chiave
+    // proprio nella riga `gpgkey=` non faceva cadere nulla. Un controllo che
+    // trova la stringa giusta nel posto sbagliato non è un controllo.
+    // Le due righe si cercano CON IL FINE RIGA: `baseurl=$BASE_URL/rpm` è
+    // sottostringa di `baseurl=$BASE_URL/rpm-repo`, quindi senza l'ancora una
+    // base spostata passerebbe indisturbata. Trovata anche questa per mutazione.
+    for (cosa, atteso) in [
+        ("la chiave che dnf verifica", "gpgkey=$BASE_URL/KEY.asc\n"),
+        ("la base del repo rpm", "baseurl=$BASE_URL/rpm\n"),
+        // Qui l'ancora è la virgoletta di chiusura, non il fine riga: la riga
+        // prosegue con `<<EOF`. Scritta con `\n` il test falliva a prescindere,
+        // e un baseline rosso fa sembrare intercettata OGNI mutazione.
+        ("il file .repo servito", "$SITE_DIR/rpm/invok.repo\""),
+    ] {
+        assert!(
+            script.contains(atteso),
+            "{REPO_BUILD_SCRIPT}: {cosa} — attesa la riga `{}`",
+            atteso.trim_end()
+        );
+    }
+
+    // NON si asserisce qui che lo script invochi createrepo_c/apt-ftparchive:
+    // una versione precedente lo faceva cercando i nomi degli strumenti, ed è
+    // sopravvissuta alla mutazione che ne toglieva l'invocazione — i nomi
+    // restano comunque nell'elenco dei prerequisiti dello script. Un'asserzione
+    // che non può cadere è peggio di un'asserzione assente: toglie il sospetto.
+    // Che gli strumenti ci siano DAVVERO lo verifica lo script stesso, a runtime,
+    // prima di iniziare.
+
+    // I metadati firmati sono tre, e sono quelli che i client verificano.
+    for firmato in [
+        "site/apt/InRelease",
+        "site/apt/Release.gpg",
+        "site/rpm/repodata/repomd.xml.asc",
+    ] {
+        assert!(
+            workflow.contains(firmato),
+            "{PUBLISH_WORKFLOW}: {firmato} deve essere prodotto e firmato"
+        );
+    }
+}
+
+// --- Le due confezioni installano lo STESSO alias -------------------------
+
+/// `.deb` e `.rpm` creano lo stesso alias `vok`, con le stesse due cautele.
+///
+/// Gli script sono quattro file distinti perché le **guardie** devono divergere:
+/// `postinst` riceve `configure`, `%post` non riceve niente di utile; `postrm`
+/// riceve `remove`/`upgrade`, `%postun` riceve il numero di installazioni
+/// rimaste (`0` = rimozione vera). Quella parte è convenzione del gestore di
+/// pacchetti e non si può unificare.
+///
+/// Ciò che invece **non** deve divergere è l'AZIONE, ed è quella che si verifica
+/// qui: stesso link, stesso bersaglio, e le due cautele — non sovrascrivere un
+/// file di qualcun altro, non rimuovere un link ripuntato altrove. Senza questo
+/// test si avrebbero due copie della stessa logica in due formati diversi, che è
+/// il modo in cui in questo progetto una delle due resta indietro.
+#[test]
+fn the_deb_and_the_rpm_install_the_same_alias() {
+    let leggi = |p: &str| std::fs::read_to_string(p).unwrap_or_else(|_| panic!("manca {p}"));
+
+    let installano = [
+        ("deb", leggi("debian/postinst")),
+        ("rpm", leggi("rpm/post.sh")),
+    ];
+    for (confezione, script) in &installano {
+        assert!(
+            script.contains("ln -sfn invok /usr/bin/vok"),
+            "{confezione}: l'alias deve essere un symlink RELATIVO a `invok`"
+        );
+        // La cautela: un `/usr/bin/vok` che non è un symlink appartiene a
+        // qualcun altro e non si sovrascrive.
+        assert!(
+            script.contains("[ ! -L /usr/bin/vok ]"),
+            "{confezione}: non deve sovrascrivere un /usr/bin/vok che non sia un collegamento"
+        );
+    }
+
+    let rimuovono = [
+        ("deb", leggi("debian/postrm")),
+        ("rpm", leggi("rpm/postun.sh")),
+    ];
+    for (confezione, script) in &rimuovono {
+        // Si rimuove solo il NOSTRO link: se punta altrove, non è nostro.
+        assert!(
+            script.contains(r#"[ "$(readlink /usr/bin/vok)" = "invok" ]"#),
+            "{confezione}: deve rimuovere solo un link che punta ancora a invok"
+        );
+    }
+    // E solo alla rimozione vera, mai durante un aggiornamento — scritto nelle
+    // due convenzioni diverse, che è esattamente perché i file sono due.
+    assert!(
+        rimuovono[0].1.contains("remove | purge") || rimuovono[0].1.contains("remove|purge"),
+        "deb: la rimozione dell'alias non deve avvenire su `upgrade`"
+    );
+    assert!(
+        rimuovono[1].1.contains(r#"[ "$1" = "0" ]"#),
+        "rpm: la rimozione dell'alias deve avvenire solo con $1 = 0 (disinstallazione vera)"
+    );
+
+    // I due percorsi dichiarati in Cargo.toml devono ESISTERE: `cargo-generate-rpm`
+    // accetta indifferentemente uno script inline o un percorso, e distingue in
+    // base all'esistenza del file. Un percorso sbagliato non dà errore — finisce
+    // nel pacchetto come comando letterale, e si scopre sulla macchina di un
+    // cliente. È un controllo che qui può dire di no, e là no.
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+    for campo in ["post_install_script", "post_uninstall_script"] {
+        let percorso = manifest
+            .lines()
+            .find_map(|l| l.trim().strip_prefix(&format!("{campo} = ")))
+            .map(|v| v.trim().trim_matches('"'))
+            .unwrap_or_else(|| panic!("Cargo.toml deve dichiarare {campo}"));
+        assert!(
+            Path::new(percorso).is_file(),
+            "{campo} punta a `{percorso}`, che non è un file: finirebbe nel .rpm \
+             come comando letterale invece che come scriptlet"
+        );
+    }
 }

@@ -5,25 +5,23 @@
 //!   password 'admin' se serve → costruisci il [`Context`] → preflight → esegui
 //!   gli step con rollback automatico in caso di errore.
 //! - **`rollback`** (alias `uninstall`) → annulla un'installazione a partire
-//!   dallo stato persistito. Vedi [`odoo_installer::rollback`].
+//!   dallo stato persistito. Vedi [`invok::rollback`].
 
 use std::path::{Path, PathBuf};
 
 use anyhow::{anyhow, bail, Result};
 use clap::Parser;
 
-use odoo_installer::checks;
-use odoo_installer::cli::{Cli, Command, RollbackArgs};
-use odoo_installer::config::{self, AdminConfirm, RawConfig, ResolvedConfig};
-use odoo_installer::context::Context;
-use odoo_installer::engine::{dry_run_plan, Installer};
-use odoo_installer::progress::{IndicatifReporter, LogReporter, ProgressReporter};
-use odoo_installer::prompt;
-use odoo_installer::rollback::{
-    self, ConfirmationGate, InstallStatus, RollbackReport, UndoOutcome,
-};
-use odoo_installer::state::{self, InstallConfig, InstallState, StartDecision};
-use odoo_installer::steps;
+use invok::checks;
+use invok::cli::{Cli, Command, RollbackArgs};
+use invok::config::{self, AdminConfirm, RawConfig, ResolvedConfig};
+use invok::context::Context;
+use invok::engine::{dry_run_plan, Installer};
+use invok::progress::{IndicatifReporter, LogReporter, ProgressReporter};
+use invok::prompt;
+use invok::rollback::{self, ConfirmationGate, InstallStatus, RollbackReport, UndoOutcome};
+use invok::state::{self, InstallConfig, InstallState, StartDecision};
+use invok::steps;
 
 fn main() -> Result<()> {
     let cli = Cli::parse();
@@ -39,7 +37,7 @@ fn main() -> Result<()> {
 fn run_install(cli: &Cli) -> Result<()> {
     // Logging TTY + file (degrada senza root; niente file in dry-run). Il guard
     // va tenuto in vita per tutta l'esecuzione.
-    let _log_guard = odoo_installer::logging::init(cli.dry_run);
+    let _log_guard = invok::logging::init(cli.dry_run);
 
     let interactive = prompt::is_interactive();
 
@@ -81,7 +79,7 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     // Si lavora sul manifesto che si **trova**: quello corrente, o quello al
     // percorso storico se è l'unico presente (istanza installata prima di R7).
-    let state_path = odoo_installer::state::resolve_state_path();
+    let state_path = invok::state::resolve_state_path();
     let mut ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
     ctx.aggressive_rollback = cli.aggressive_rollback;
     ctx.sudo_user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty());
@@ -104,7 +102,7 @@ fn run_install(cli: &Cli) -> Result<()> {
     // con un messaggio: da lì in poi la fabbrica non può fallire, ed è ciò che
     // rende possibile costruire gli step senza che nessuno di loro debba sapere
     // su che distribuzione sta girando.
-    let make_ops = odoo_installer::system_ops::backend_factory(ctx.os_family).ok_or_else(|| {
+    let make_ops = invok::system_ops::backend_factory(ctx.os_family).ok_or_else(|| {
         anyhow!(
             "questa versione dell'installer non ha un backend per la famiglia '{}': \
              non posso installare né rimuovere pacchetti su questo sistema",
@@ -135,7 +133,7 @@ fn run_install(cli: &Cli) -> Result<()> {
             println!(
                 "Nota: senza sudo alcuni step non possono ispezionare il sistema (PostgreSQL, \n\
                  pacchetti installati) e verranno elencati come «snapshot non disponibile».\n\
-                 Per il piano completo: sudo odoo-installer --dry-run …\n"
+                 Per il piano completo: sudo invok --dry-run …\n"
             );
         }
         dry_run_plan(&mut steps, &ctx, &LogReporter);
@@ -195,14 +193,13 @@ fn run_install(cli: &Cli) -> Result<()> {
     // sé (B-V3-5). Registrato **dopo** la conferma e prima delle mutazioni:
     // prima non servirebbe — non c'è niente da annullare — e il comportamento
     // di default (uscita immediata) è quello che l'utente si aspetta.
-    let interrupted = odoo_installer::interrupt::install();
+    let interrupted = invok::interrupt::install();
 
     // Lock esclusivo: impedisce due installazioni simultanee. Il guard rilascia
     // il lock al Drop (successo, errore o panic). Acquisito dopo i check e prima
     // di ogni mutazione.
-    let _lock =
-        odoo_installer::lockfile::acquire(Path::new(odoo_installer::lockfile::DEFAULT_LOCK_PATH))
-            .map_err(|e| anyhow!(e))?;
+    let _lock = invok::lockfile::acquire(Path::new(invok::lockfile::DEFAULT_LOCK_PATH))
+        .map_err(|e| anyhow!(e))?;
 
     // Reporter: barra `indicatif` solo con TTY interattivo (in dry-run non si
     // arriva qui). Costruito **qui**, non prima: `IndicatifReporter` avvia un
@@ -231,7 +228,7 @@ fn run_install(cli: &Cli) -> Result<()> {
             println!(
                 "--force: manifesto precedente archiviato in {}.\n\
                  Se quell'installazione aveva creato artefatti, resta l'unica traccia di \
-                 cosa rimuovere: conservalo (`odoo-installer rollback --state <file>`).",
+                 cosa rimuovere: conservalo (`invok rollback --state <file>`).",
                 saved.display()
             );
             Installer::new()
@@ -248,7 +245,7 @@ fn run_install(cli: &Cli) -> Result<()> {
     // Installazione riuscita: lo stato viene marcato come concluso e **resta sul
     // disco**. Non è un file stantìo — è il manifesto di disinstallazione: dice
     // cosa abbiamo creato e cosa abbiamo trovato già presente, e senza di esso
-    // `odoo-installer rollback` non avrebbe modo di rimuovere questa istanza in
+    // `invok rollback` non avrebbe modo di rimuovere questa istanza in
     // un secondo momento (A-R5-1). Fallire qui non annulla un'installazione
     // riuscita: si segnala e si prosegue, con il costo dichiarato.
     // In dry-run non si arriva qui (return anticipato) e nulla è stato scritto.
@@ -257,7 +254,7 @@ fn run_install(cli: &Cli) -> Result<()> {
             path = %ctx.state_path.display(),
             error = %e,
             "impossibile marcare lo stato come concluso: l'installazione è comunque \
-             riuscita, ma `odoo-installer rollback` potrebbe non poterla disinstallare"
+             riuscita, ma `invok rollback` potrebbe non poterla disinstallare"
         );
     }
 
@@ -286,7 +283,7 @@ enum Start {
 
 /// Applica la politica di avvio (A-V3-1) e ne formatta l'esito per l'utente.
 ///
-/// La **regola** non sta qui: sta in [`odoo_installer::state::start_decision`],
+/// La **regola** non sta qui: sta in [`invok::state::start_decision`],
 /// pura e verificabile senza filesystem. Qui restano le due cose che sono
 /// davvero di `main`: leggere il manifesto dal disco e trasformare un rifiuto in
 /// un messaggio che dica all'utente cosa fare. La separazione è deliberata —
@@ -305,7 +302,7 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
                 "Installazione interrotta trovata in {}: {} step già completati, si riprende.\n\
                  Gli step già eseguiti non vengono rifatti e la proprietà degli artefatti \n\
                  registrata allora viene conservata.\n\
-                 (Per ricominciare da capo: `sudo odoo-installer rollback`, oppure `--force`.)",
+                 (Per ricominciare da capo: `sudo invok rollback`, oppure `--force`.)",
                 ctx.state_path.display(),
                 state.completed.len()
             );
@@ -330,7 +327,7 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
                 "Risulta già un'installazione completata su questa macchina.\n\
                  \n  Manifesto : {}\n  Istanza   : {}\n  Step      : {} registrati\n\
                  \n\
-                 Per rimuoverla:                        sudo odoo-installer rollback\n\
+                 Per rimuoverla:                        sudo invok rollback\n\
                  Per reinstallare sopra (manifesto messo da parte):  --force\n\
                  \n\
                  Proseguire senza una scelta esplicita sovrascriverebbe il manifesto con \
@@ -355,7 +352,7 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
                  rollback agirebbe in parte sugli artefatti sbagliati.\n\
                  \n\
                  Rilancia con gli stessi parametri per riprendere, oppure \
-                 `sudo odoo-installer rollback` per ripulire prima.",
+                 `sudo invok rollback` per ripulire prima.",
                 state.completed.len(),
                 ctx.state_path.display(),
                 elenco.join("\n")
@@ -367,7 +364,7 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
              la configurazione (formato precedente alla R4): non posso verificare che \
              descriva gli stessi artefatti, quindi non la riprendo.\n\
              \n\
-             Usa `sudo odoo-installer rollback --state {}` per ripulire, oppure `--force` \
+             Usa `sudo invok rollback --state {}` per ripulire, oppure `--force` \
              per ricominciare mettendo da parte il manifesto.",
             state.completed.len(),
             ctx.state_path.display(),
@@ -409,7 +406,7 @@ fn archive_manifest(path: &Path) -> Result<PathBuf> {
 fn run_environment_checks(
     ctx: &Context,
     port_is_ours: bool,
-    make_ops: &dyn Fn() -> Box<dyn odoo_installer::system_ops::SystemOps>,
+    make_ops: &dyn Fn() -> Box<dyn invok::system_ops::SystemOps>,
 ) -> Result<()> {
     let required_gb = std::env::var("MIN_DISK_GB")
         .ok()
@@ -499,7 +496,7 @@ fn print_install_summary(ctx: &Context) {
     }
     println!();
     println!("  Gestione         odoo start|stop|restart|status   (riapri la shell)");
-    println!("  Disinstallazione sudo odoo-installer rollback");
+    println!("  Disinstallazione sudo invok rollback");
     println!();
     println!(
         "Lo stato in {} è il manifesto di disinstallazione: dice cosa\n\
@@ -515,7 +512,7 @@ fn print_install_summary(ctx: &Context) {
 /// Il rollback automatico copre i **fallimenti** di uno step, non le
 /// interruzioni: un Ctrl-C uccide il processo prima che la gestione dell'errore
 /// giri, e il sistema resta con gli artefatti a metà. Da R4 esiste la via
-/// d'uscita — il file di stato è scritto dopo ogni step e `odoo-installer
+/// d'uscita — il file di stato è scritto dopo ogni step e `invok
 /// rollback` lo consuma — ma serve saperlo *prima* di premere Ctrl-C, non
 /// dopo. Un handler SIGINT che stampi il messaggio al momento giusto è
 /// pianificato a parte (vedi audit R4).
@@ -530,7 +527,7 @@ fn print_interrupt_notice(state_path: &Path) {
      \n\
          Un secondo Ctrl-C esce **subito**: in quel caso il sistema resta a metà e si \n\
          ripulisce con\n\
-     \n    sudo odoo-installer rollback\n\n\
+     \n    sudo invok rollback\n\n\
          Lo stato necessario è registrato in {} dopo ogni step — vale anche se la \n\
          macchina si spegne.\n",
         state_path.display()
@@ -540,7 +537,7 @@ fn print_interrupt_notice(state_path: &Path) {
 // --- Rollback da stato persistito (R4) ---------------------------------------
 
 fn run_rollback(args: &RollbackArgs) -> Result<()> {
-    let _log_guard = odoo_installer::logging::init(args.dry_run);
+    let _log_guard = invok::logging::init(args.dry_run);
 
     // Senza `--state`, il manifesto si cerca prima dove lo scriviamo oggi e poi
     // dove lo scriveva la 2.1.0: un'istanza installata da una versione
@@ -548,7 +545,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     let state_path = args
         .state
         .clone()
-        .unwrap_or_else(odoo_installer::state::resolve_state_path);
+        .unwrap_or_else(invok::state::resolve_state_path);
 
     let state = InstallState::load(&state_path).map_err(|e| anyhow!(e))?;
 
@@ -595,7 +592,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // usare la versione giusta invece di scoprirlo a rollback fatto.
     if let Some(nota) = state::version_mismatch_note(
         config.installer_version.as_deref(),
-        odoo_installer::INSTALLER_VERSION,
+        invok::INSTALLER_VERSION,
     ) {
         tracing::warn!("{nota}");
     }
@@ -627,8 +624,8 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // default che nessuno può smentire.
     tracing::info!(famiglia = %config.os_family, "rollback: famiglia letta dal manifesto");
     let detected = checks::os_id_from(Path::new(checks::OS_RELEASE_PATH))
-        .and_then(|id| odoo_installer::distro::OsFamily::from_os_id(&id));
-    if let Some(avviso) = odoo_installer::distro::family_mismatch(config.os_family, detected) {
+        .and_then(|id| invok::distro::OsFamily::from_os_id(&id));
+    if let Some(avviso) = invok::distro::family_mismatch(config.os_family, detected) {
         tracing::warn!("{avviso}");
         eprintln!("Attenzione: {avviso}");
     }
@@ -637,15 +634,14 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // manifesto**, non da questa macchina. Se questo binario non ne ha uno, ci
     // si ferma qui invece di eseguire i comandi di un'altra famiglia: rimuovere
     // pacchetti con il gestore sbagliato non rimuove niente e lo dichiara fatto.
-    let make_ops =
-        odoo_installer::system_ops::backend_factory(config.os_family).ok_or_else(|| {
-            anyhow!(
+    let make_ops = invok::system_ops::backend_factory(config.os_family).ok_or_else(|| {
+        anyhow!(
             "il manifesto descrive un'installazione su '{}', ma questa versione dell'installer \
              non ha un backend per quella famiglia: non posso annullarla. Usa un binario che la \
              supporti.",
             config.os_family
         )
-        })?;
+    })?;
 
     print_rollback_summary(
         &state,
@@ -679,10 +675,8 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     } else {
         checks::check_root().map_err(|e| anyhow!(e))?;
         Some(
-            odoo_installer::lockfile::acquire(Path::new(
-                odoo_installer::lockfile::DEFAULT_LOCK_PATH,
-            ))
-            .map_err(|e| anyhow!(e))?,
+            invok::lockfile::acquire(Path::new(invok::lockfile::DEFAULT_LOCK_PATH))
+                .map_err(|e| anyhow!(e))?,
         )
     };
 
@@ -719,7 +713,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     } else {
         println!(
             "Il file di stato {} NON è stato rimosso: descrive ancora ciò che non è stato \n\
-             ripulito. Sistemato il problema, puoi rieseguire `odoo-installer rollback` \n\
+             ripulito. Sistemato il problema, puoi rieseguire `invok rollback` \n\
              (gli undo sono idempotenti).",
             state_path.display()
         );
@@ -732,7 +726,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
 fn print_rollback_summary(
     state: &InstallState,
     state_path: &Path,
-    config: &odoo_installer::state::InstallConfig,
+    config: &invok::state::InstallConfig,
     args: &RollbackArgs,
     canonical_steps: usize,
 ) {
@@ -852,7 +846,7 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
     println!();
     println!(
         "Il dettaglio completo è nel log ({}).",
-        odoo_installer::logging::DEFAULT_LOG_PATH
+        invok::logging::DEFAULT_LOG_PATH
     );
     println!("================================================================");
     println!();

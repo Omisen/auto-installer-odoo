@@ -24,9 +24,9 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::distro::OsFamily;
-use odoo_installer::step::Step;
+use invok::context::Context;
+use invok::distro::OsFamily;
+use invok::step::Step;
 
 fn ctx(family: OsFamily) -> Context {
     Context {
@@ -88,7 +88,7 @@ fn senza_suffissi_casuali(op: &Op) -> String {
 /// Esegue snapshot → run → undo di uno step, per una famiglia, e restituisce
 /// ciò che il sistema ha visto e ciò che è stato persistito.
 fn esegui<S: Step>(
-    costruisci: impl Fn(Box<dyn odoo_installer::system_ops::SystemOps>) -> S,
+    costruisci: impl Fn(Box<dyn invok::system_ops::SystemOps>) -> S,
     family: OsFamily,
 ) -> (Vec<String>, serde_json::Value) {
     let (ops, log) = MockSystemOps::new(cfg(family));
@@ -108,7 +108,7 @@ fn esegui<S: Step>(
 /// Il cuore: uno step deve fare **le stesse cose** su entrambe le famiglie.
 fn indifferente_alla_famiglia<S: Step>(
     nome: &str,
-    costruisci: impl Fn(Box<dyn odoo_installer::system_ops::SystemOps>) -> S,
+    costruisci: impl Fn(Box<dyn invok::system_ops::SystemOps>) -> S,
 ) {
     let (ops_debian, snap_debian) = esegui(&costruisci, OsFamily::Debian);
     let (ops_fedora, snap_fedora) = esegui(&costruisci, OsFamily::Fedora);
@@ -133,7 +133,7 @@ fn indifferente_alla_famiglia<S: Step>(
 /// che anche lui lo è — e di scoprire subito se non lo è.
 #[test]
 fn the_critical_protections_do_not_depend_on_the_family() {
-    use odoo_installer::steps::*;
+    use invok::steps::*;
 
     // anti-drop del database: il verdetto è `PreState`, il comando è `dropdb`.
     indifferente_alla_famiglia("create-database", |o| {
@@ -192,7 +192,7 @@ fn the_critical_protections_do_not_depend_on_the_family() {
 /// che si otterrebbe se la famiglia non arrivasse mai a destinazione.
 #[test]
 fn the_packaging_steps_do_depend_on_the_family() {
-    use odoo_installer::steps::apt_packages::AptPackagesStep;
+    use invok::steps::apt_packages::AptPackagesStep;
 
     let (ops_debian, _) = esegui(
         AptPackagesStep::odoo_dependencies_with_ops,
@@ -230,7 +230,7 @@ fn the_packaging_steps_do_depend_on_the_family() {
 /// sullo stesso pacchetto (A-MD-1 nella sua forma strutturale).
 #[test]
 fn the_fedora_delta_has_no_duplicates() {
-    use odoo_installer::steps::apt_packages::AptPackagesStep;
+    use invok::steps::apt_packages::AptPackagesStep;
 
     let (ops, _) = esegui(
         AptPackagesStep::odoo_dependencies_with_ops,

@@ -3,9 +3,9 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::step::Step;
-use odoo_installer::steps::write_control_script::{control_script_content, WriteControlScript};
+use invok::context::Context;
+use invok::step::Step;
+use invok::steps::write_control_script::{control_script_content, WriteControlScript};
 
 fn ctx(sudo_user: Option<&str>) -> Context {
     Context {

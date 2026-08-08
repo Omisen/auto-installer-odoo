@@ -4,7 +4,7 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use odoo_installer::config::{
+use invok::config::{
     self, check_admin_password, normalize_version, parse_env_file, validate_port, AdminConfirm,
     ConfigError, RawConfig, ResolvedConfig,
 };

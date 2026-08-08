@@ -26,7 +26,7 @@ use crate::error::StepError;
 ///    prosegue).
 /// 4. **Stato persistito.** Dopo un `run` riuscito il motore persiste il record
 ///    dello step (nome + [`Step::snapshot_value`]) su disco. Lo stato ha un
-///    consumatore: `odoo-installer rollback` lo rilegge, ricostruisce gli step
+///    consumatore: `invok rollback` lo rilegge, ricostruisce gli step
 ///    con [`Step::rehydrate`] e ne esegue gli `undo` in ordine inverso (vedi
 ///    [`crate::rollback`]).
 ///
@@ -65,7 +65,7 @@ pub trait Step {
     ///
     /// `undo` decide cosa fare leggendo il `PreState` che `snapshot` ha
     /// registrato *prima* del run. Per annullare da disco — Ctrl-C, `kill -9`,
-    /// o un `odoo-installer rollback` a installazione conclusa — quel
+    /// o un `invok rollback` a installazione conclusa — quel
     /// `PreState` va rimesso nello step **così com'era all'epoca**. Rieseguire
     /// `snapshot` darebbe la risposta sbagliata: fotograferebbe il sistema
     /// *dopo* le nostre mutazioni, e un artefatto che abbiamo creato noi

@@ -7,13 +7,13 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op, OpLog};
-use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
-use odoo_installer::step::Step;
-use odoo_installer::steps::clone_odoo_repo::CloneOdooRepo;
-use odoo_installer::steps::create_virtualenv::CreateVirtualenv;
-use odoo_installer::steps::noop::NoopStep;
-use odoo_installer::system_ops::OdooSourceState;
+use invok::context::Context;
+use invok::engine::Installer;
+use invok::step::Step;
+use invok::steps::clone_odoo_repo::CloneOdooRepo;
+use invok::steps::create_virtualenv::CreateVirtualenv;
+use invok::steps::noop::NoopStep;
+use invok::system_ops::OdooSourceState;
 
 #[test]
 fn rollback_removes_venv_then_sources_once() {

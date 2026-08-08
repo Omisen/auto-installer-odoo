@@ -6,7 +6,7 @@
 //! **uccideva il processo all'istante**, quindi il rollback in-process non
 //! partiva mai e il sistema restava a metà. Al suo posto R4 aveva messo un
 //! avviso stampato prima delle mutazioni, che indirizzava a
-//! `odoo-installer rollback` — utile, ma scorreva via nel log molto prima di
+//! `invok rollback` — utile, ma scorreva via nel log molto prima di
 //! servire.
 //!
 //! Il punto che rende la correzione semplice: **il segnale va a tutto il process
@@ -33,14 +33,14 @@
 //!
 //! In quel caso il sistema resta a metà per davvero — ed è una scelta
 //! dell'utente, non un difetto: il manifesto è sul disco e
-//! `odoo-installer rollback` lo ripulisce.
+//! `invok rollback` lo ripulisce.
 //!
 //! ## Attenzione a *come* si manda il segnale da script
 //!
 //! «Due Ctrl-C» significa **due segnali ricevuti**, non «due pressioni di
 //! tasti». Da un terminale la distinzione non si nota: Ctrl-C consegna al
 //! process group una volta sola, e `sudo` senza pty non rilancia il segnale.
-//! Ma un `sudo pkill -INT -f odoo-installer` colpisce **due** processi — il
+//! Ma un `sudo pkill -INT -f invok` colpisce **due** processi — il
 //! `sudo` e l'installer — e l'installer si vede arrivare due segnali in rapida
 //! successione: uscita immediata, nessun annullamento. L'opposto di ciò che chi
 //! ha lanciato quel comando voleva.
@@ -48,7 +48,7 @@
 //! Da script si manda un segnale al **solo** installer:
 //!
 //! ```text
-//! sudo pkill -INT -x odoo-installer    # -x: nome esatto del processo
+//! sudo pkill -INT -x invok    # -x: nome esatto del processo
 //! ```
 //!
 //! Non è un'ipotesi: è successo alla prima esecuzione del job di CI che verifica
@@ -92,7 +92,7 @@ pub fn install() -> Arc<AtomicBool> {
                 signal,
                 error = %e,
                 "impossibile gestire questo segnale: un'interruzione ucciderà il processo \
-                 senza annullare nulla (usa `odoo-installer rollback` per ripulire)"
+                 senza annullare nulla (usa `invok rollback` per ripulire)"
             );
         }
     }
@@ -111,7 +111,7 @@ pub fn interrupted_error() -> StepError {
         "installazione interrotta su richiesta (Ctrl-C o segnale di terminazione).\n\
          Gli step già eseguiti vengono annullati: al termine il sistema sarà come prima.\n\
          Un secondo Ctrl-C esce subito — in quel caso il sistema resta a metà e si \
-         ripulisce con `sudo odoo-installer rollback`."
+         ripulisce con `sudo invok rollback`."
             .to_string(),
     )
 }

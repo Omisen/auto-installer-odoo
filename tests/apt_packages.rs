@@ -5,13 +5,13 @@ mod common;
 use std::collections::HashSet;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::packaging::apt::AptBackend;
-use odoo_installer::packaging::{PackageManager, PackageSpec};
-use odoo_installer::state::{InstallState, StepRecord};
-use odoo_installer::step::Step;
-use odoo_installer::steps::apt_packages::{AptDeltaSnapshot, AptPackagesStep, UndoPolicy};
-use odoo_installer::system_ops::{has_installable_candidate, total_package_names};
+use invok::context::Context;
+use invok::packaging::apt::AptBackend;
+use invok::packaging::{PackageManager, PackageSpec};
+use invok::state::{InstallState, StepRecord};
+use invok::step::Step;
+use invok::steps::apt_packages::{AptDeltaSnapshot, AptPackagesStep, UndoPolicy};
+use invok::system_ops::{has_installable_candidate, total_package_names};
 
 use common::model::{ModelState, SystemModel};
 

@@ -23,11 +23,11 @@ mod common;
 use std::collections::HashSet;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::distro::OsFamily;
-use odoo_installer::step::Step;
-use odoo_installer::steps::apt_packages::{dedup_keeping_order, AptPackagesStep, UndoPolicy};
-use odoo_installer::system_ops::backend_factory;
+use invok::context::Context;
+use invok::distro::OsFamily;
+use invok::step::Step;
+use invok::steps::apt_packages::{dedup_keeping_order, AptPackagesStep, UndoPolicy};
+use invok::system_ops::backend_factory;
 
 fn ctx() -> Context {
     Context {
@@ -79,7 +79,7 @@ fn the_default_family_is_the_one_every_existing_manifest_describes() {
 #[test]
 fn the_package_lists_come_from_the_backend_catalog() {
     let ops = MockSystemOps::new(MockConfig::default()).0;
-    let catalog = odoo_installer::system_ops::SystemOps::packages(&ops).catalog();
+    let catalog = invok::system_ops::SystemOps::packages(&ops).catalog();
 
     assert!(
         catalog
@@ -148,8 +148,8 @@ fn two_groups_resolving_to_the_same_name_appear_once_in_the_delta() {
         Box::new(ops),
         "install-system-dependencies",
         vec![
-            odoo_installer::packaging::PackageSpec::one("libjpeg-dev"),
-            odoo_installer::packaging::PackageSpec::any(&[
+            invok::packaging::PackageSpec::one("libjpeg-dev"),
+            invok::packaging::PackageSpec::any(&[
                 "libjpeg8-dev",
                 "libjpeg-turbo8-dev",
                 "libjpeg-dev",
@@ -159,7 +159,7 @@ fn two_groups_resolving_to_the_same_name_appear_once_in_the_delta() {
     );
     step.snapshot(&ctx()).expect("snapshot");
 
-    let snap: odoo_installer::steps::apt_packages::AptDeltaSnapshot =
+    let snap: invok::steps::apt_packages::AptDeltaSnapshot =
         serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile");
 
     assert_eq!(
@@ -186,14 +186,14 @@ fn a_preexisting_package_shared_by_two_groups_is_listed_once() {
         Box::new(ops),
         "install-system-dependencies",
         vec![
-            odoo_installer::packaging::PackageSpec::one("libjpeg-dev"),
-            odoo_installer::packaging::PackageSpec::any(&["libjpeg8-dev", "libjpeg-dev"]),
+            invok::packaging::PackageSpec::one("libjpeg-dev"),
+            invok::packaging::PackageSpec::any(&["libjpeg8-dev", "libjpeg-dev"]),
         ],
         UndoPolicy::PurgeDelta,
     );
     step.snapshot(&ctx()).expect("snapshot");
 
-    let snap: odoo_installer::steps::apt_packages::AptDeltaSnapshot =
+    let snap: invok::steps::apt_packages::AptDeltaSnapshot =
         serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile");
 
     assert_eq!(snap.already_installed, names(&["libjpeg-dev"]));
@@ -218,8 +218,8 @@ fn the_install_command_does_not_repeat_a_package() {
         Box::new(ops),
         "install-system-dependencies",
         vec![
-            odoo_installer::packaging::PackageSpec::one("libjpeg-dev"),
-            odoo_installer::packaging::PackageSpec::any(&["libjpeg8-dev", "libjpeg-dev"]),
+            invok::packaging::PackageSpec::one("libjpeg-dev"),
+            invok::packaging::PackageSpec::any(&["libjpeg8-dev", "libjpeg-dev"]),
         ],
         UndoPolicy::PurgeDelta,
     );
@@ -322,7 +322,7 @@ fn the_rehydration_path_does_not_need_the_production_timings() {
     let make_ops = backend_factory(OsFamily::Debian).expect("backend Debian");
     for name in ["clone-odoo-repo", "setup-systemd"] {
         assert!(
-            odoo_installer::steps::step_by_name(name, &make_ops).is_some(),
+            invok::steps::step_by_name(name, &make_ops).is_some(),
             "'{name}' dev'essere ricostruibile per l'undo"
         );
     }
@@ -379,7 +379,7 @@ fn the_undo_still_removes_only_what_we_added() {
 /// sopravviveva a tutta la suite.
 #[test]
 fn a_real_candidate_always_beats_a_virtual_name() {
-    use odoo_installer::packaging::{availability_from, Availability};
+    use invok::packaging::{availability_from, Availability};
 
     assert_eq!(availability_from(true, false), Availability::Real);
     assert_eq!(

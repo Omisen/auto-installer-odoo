@@ -3,9 +3,9 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::step::Step;
-use odoo_installer::steps::patch_bashrc::{remove_exact_line, PatchBashrc};
+use invok::context::Context;
+use invok::step::Step;
+use invok::steps::patch_bashrc::{remove_exact_line, PatchBashrc};
 
 const PATH_LINE: &str = r#"export PATH="$HOME/.local/bin:$PATH""#;
 

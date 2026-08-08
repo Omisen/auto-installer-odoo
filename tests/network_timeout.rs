@@ -12,8 +12,8 @@
 
 use std::time::{Duration, Instant};
 
-use odoo_installer::error::StepError;
-use odoo_installer::system_ops::{
+use invok::error::StepError;
+use invok::system_ops::{
     network_timeout, run_with_timeout, timeout_from_setting, DEFAULT_NETWORK_TIMEOUT_SECS,
     NETWORK_TIMEOUT_ENV,
 };

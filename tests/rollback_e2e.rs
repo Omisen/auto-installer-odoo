@@ -13,30 +13,30 @@ use std::path::PathBuf;
 
 use common::model::{ModelState, SystemModel};
 use common::MockDownloader;
-use odoo_installer::checks::OsInfo;
-use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
-use odoo_installer::error::StepError;
-use odoo_installer::secret::Secret;
-use odoo_installer::step::Step;
-use odoo_installer::steps::apt_packages::AptPackagesStep;
-use odoo_installer::steps::clone_odoo_repo::CloneOdooRepo;
-use odoo_installer::steps::create_database::CreateDatabase;
-use odoo_installer::steps::create_db_role::CreateDbRole;
-use odoo_installer::steps::create_odoo_user::CreateOdooUser;
-use odoo_installer::steps::create_virtualenv::CreateVirtualenv;
-use odoo_installer::steps::generate_config::GenerateConfig;
-use odoo_installer::steps::initialize_odoo_database::InitializeOdooDatabase;
-use odoo_installer::steps::install_wkhtmltopdf::InstallWkhtmltopdf;
-use odoo_installer::steps::nginx_enable_site::NginxEnableSite;
-use odoo_installer::steps::nginx_firewall::NginxFirewall;
-use odoo_installer::steps::nginx_install::NginxInstall;
-use odoo_installer::steps::nginx_reload::NginxReload;
-use odoo_installer::steps::nginx_write_config::NginxWriteConfig;
-use odoo_installer::steps::noop::NoopStep;
-use odoo_installer::steps::patch_bashrc::PatchBashrc;
-use odoo_installer::steps::setup_systemd::SetupSystemd;
-use odoo_installer::steps::write_control_script::WriteControlScript;
+use invok::checks::OsInfo;
+use invok::context::Context;
+use invok::engine::Installer;
+use invok::error::StepError;
+use invok::secret::Secret;
+use invok::step::Step;
+use invok::steps::apt_packages::AptPackagesStep;
+use invok::steps::clone_odoo_repo::CloneOdooRepo;
+use invok::steps::create_database::CreateDatabase;
+use invok::steps::create_db_role::CreateDbRole;
+use invok::steps::create_odoo_user::CreateOdooUser;
+use invok::steps::create_virtualenv::CreateVirtualenv;
+use invok::steps::generate_config::GenerateConfig;
+use invok::steps::initialize_odoo_database::InitializeOdooDatabase;
+use invok::steps::install_wkhtmltopdf::InstallWkhtmltopdf;
+use invok::steps::nginx_enable_site::NginxEnableSite;
+use invok::steps::nginx_firewall::NginxFirewall;
+use invok::steps::nginx_install::NginxInstall;
+use invok::steps::nginx_reload::NginxReload;
+use invok::steps::nginx_write_config::NginxWriteConfig;
+use invok::steps::noop::NoopStep;
+use invok::steps::patch_bashrc::PatchBashrc;
+use invok::steps::setup_systemd::SetupSystemd;
+use invok::steps::write_control_script::WriteControlScript;
 
 const HOME: &str = "/opt/odoo";
 const INSTALL: &str = "/opt/odoo/odoo18";
@@ -106,7 +106,7 @@ fn chain(model: &SystemModel) -> Vec<Box<dyn Step>> {
     ]
 }
 
-use odoo_installer::steps::setup_postgres::SetupPostgres;
+use invok::steps::setup_postgres::SetupPostgres;
 
 #[test]
 fn full_chain_failure_returns_to_virgin_state() {
@@ -630,7 +630,7 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
     let bytes = b"contenuto .deb di prova".to_vec();
     let probe = dir.path().join("probe.bin");
     std::fs::write(&probe, &bytes).expect("probe");
-    let sha = odoo_installer::system_ops::sha256_hex(&probe).expect("hash");
+    let sha = invok::system_ops::sha256_hex(&probe).expect("hash");
     let checksums = [("jammy".to_string(), sha)].into_iter().collect();
 
     let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -657,7 +657,7 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
         id: "ubuntu".to_string(),
         version: "22.04".to_string(),
         codename: Some("jammy".to_string()),
-        family: odoo_installer::distro::OsFamily::Debian,
+        family: invok::distro::OsFamily::Debian,
     });
 
     let mut installer = Installer::new();

@@ -5,9 +5,9 @@ mod common;
 use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::step::Step;
-use odoo_installer::steps::install_python_requirements::{
+use invok::context::Context;
+use invok::step::Step;
+use invok::steps::install_python_requirements::{
     filter_out_gevent_stack, gevent_stack_lines, InstallPythonRequirements,
 };
 

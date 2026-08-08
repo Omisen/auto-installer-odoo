@@ -5,13 +5,11 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::secret::Secret;
-use odoo_installer::step::Step;
-use odoo_installer::steps::generate_config::GenerateConfig;
-use odoo_installer::steps::generate_config::{
-    normalize_empty_directives, render_config, validate_rendered,
-};
+use invok::context::Context;
+use invok::secret::Secret;
+use invok::step::Step;
+use invok::steps::generate_config::GenerateConfig;
+use invok::steps::generate_config::{normalize_empty_directives, render_config, validate_rendered};
 
 fn ctx(install_dir: PathBuf) -> Context {
     Context {

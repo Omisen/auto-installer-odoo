@@ -1,12 +1,21 @@
 [package]
-name = "odoo-installer"
-version = "2.4.0"
+name = "invok"
+# 3.0.0: il rename di crate, binario e pacchetti cambia il NOME degli artefatti
+# (`invok_3.0.0-1_amd64.deb`), che per questo progetto è parte del contratto con
+# chi installa — il README li nomina per intero. Un cambio del genere non sta in
+# una minor.
+version = "3.0.0"
 edition = "2021"
-description = "Installer Odoo con rollback chirurgico (Ubuntu/Debian/Fedora)"
+# «Odoo» resta nel testo: è uso nominativo, serve a dire cosa installa il
+# programma ed è ciò che lo rende trovabile. Fuori dal NOME, dentro la
+# descrizione — è esattamente la distinzione su cui poggia il rename.
+description = "Installer for Odoo — independent CLI installer (not affiliated with Odoo S.A.)"
 license = "MIT"
+repository = "https://github.com/Omisen/invok"
+homepage = "https://github.com/Omisen/invok"
 
 # Metadati per `cargo deb`: producono un .deb che deposita SOLO il binario CLI
-# `odoo-installer` in /usr/bin (+ la doc). Il pacchetto NON installa servizi, NON
+# `invok` in /usr/bin (+ la doc). Il pacchetto NON installa servizi, NON
 # crea utenti, NON tocca PostgreSQL/Nginx: quelle cose le crea l'installer a
 # runtime sul target quando l'utente lo lancia. Perciò niente `systemd-units` e
 # niente `depends` su postgresql/nginx/python — sono compito del binario, non del
@@ -22,13 +31,16 @@ transazionale. \
 Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, \
 systemd e Nginx opzionale; annulla in modo pulito in caso di errore. \
 Il pacchetto installa solo il tool a riga di comando: l'installazione di Odoo \
-avviene a runtime quando l'utente esegue `odoo-installer`."""
+avviene a runtime quando l'utente esegue `invok`. \
+Progetto indipendente: non affiliato a Odoo S.A. né sostenuto da essa. «Odoo» è \
+un marchio di Odoo S.A. Questo pacchetto non contiene né redistribuisce codice \
+Odoo."""
 section = "admin"
 priority = "optional"
 depends = "$auto"
 # La revisione del pacchetto, DICHIARATA e non ereditata (A-V3-17).
 #
-# `cargo deb` la mette comunque — il file si chiama `odoo-installer_2.4.0-1_amd64.deb`,
+# `cargo deb` la mette comunque — il file si chiama `invok_2.4.0-1_amd64.deb`,
 # col `-1` — ma il valore veniva da un default dello strumento, cioè da fuori.
 # Il README nomina quel file per intero, quindi il nome è parte del contratto con
 # chi installa: un default che cambia versione di `cargo-deb` cambierebbe il nome
@@ -37,9 +49,14 @@ depends = "$auto"
 # Scritta qui, la revisione è un dato che i test possono leggere e confrontare.
 revision = "1"
 assets = [
-    ["target/release/odoo-installer", "usr/bin/", "755"],
-    ["README.md", "usr/share/doc/odoo-installer/README", "644"],
+    ["target/release/invok", "usr/bin/", "755"],
+    ["README.md", "usr/share/doc/invok/README", "644"],
 ]
+# L'alias breve `vok` è un SYMLINK creato dai maintainer script, non un secondo
+# binario: due eseguibili identici in /usr/bin sarebbero 8 MB sprecati e due cose
+# che possono divergere. Gli script vivono in `debian/` e sono condivisi come
+# intento — non come file — con gli scriptlet del `.rpm` più sotto.
+maintainer-scripts = "debian/"
 
 # Metadati per `cargo generate-rpm`: la controparte rpm del blocco sopra, con la
 # stessa promessa — il pacchetto deposita SOLO il binario CLI, non installa
@@ -52,22 +69,51 @@ assets = [
 # perché due liste che devono coincidere e nessuno che lo verifichi è il modo
 # in cui si finisce per pubblicare un `.rpm` che non contiene il binario.
 [package.metadata.generate-rpm]
-summary = "Installer Odoo con rollback chirurgico (Ubuntu/Debian/Fedora)"
+# Il disclaimer di non affiliazione sta DENTRO il summary, e non accanto, perché
+# `cargo-generate-rpm` non ha un campo di descrizione lunga: `summary` è l'unico
+# testo che possiamo scrivere noi, ed è quello che `dnf info` e `dnf search`
+# mostrano. Sul `.deb` la stessa frase vive in `extended-description`, che è il
+# posto giusto lì. Due formulazioni, stessa promessa — se una delle due cambia,
+# vanno cambiate entrambe.
+summary = "Installer Odoo con rollback chirurgico (Ubuntu/Debian/Fedora) — progetto indipendente, non affiliato a Odoo S.A."
 # Come `revision` per il `.deb`, e per lo stesso motivo: il `-1` di
-# `odoo-installer-2.4.0-1.x86_64.rpm` è nel README, quindi non può dipendere dal
+# `invok-2.4.0-1.x86_64.rpm` è nel README, quindi non può dipendere dal
 # default di uno strumento esterno (A-V3-17).
 release = "1"
 assets = [
-    { source = "target/release/odoo-installer", dest = "/usr/bin/odoo-installer", mode = "755" },
-    { source = "README.md", dest = "/usr/share/doc/odoo-installer/README", mode = "644" },
+    { source = "target/release/invok", dest = "/usr/bin/invok", mode = "755" },
+    { source = "README.md", dest = "/usr/share/doc/invok/README", mode = "644" },
 ]
+# L'alias `vok`, controparte rpm di `maintainer-scripts` del blocco deb.
+#
+# Due cautele, entrambe della stessa famiglia delle protezioni dell'installer —
+# non si distrugge ciò che non è nostro:
+#   - si crea il link solo se `/usr/bin/vok` non esiste o è già un symlink; se
+#     qualcuno ci ha messo un file vero, si avvisa e si rinuncia;
+#   - si rimuove solo se punta ancora a `invok`, e solo alla disinstallazione
+#     VERA (`$1 = 0`): durante un aggiornamento rpm esegue comunque il postun
+#     della versione uscente, e cancellare lì lascerebbe l'utente senza alias.
+#
+# I due scriptlet stanno in FILE, non come stringhe qui dentro: la logica è la
+# stessa di `debian/postinst` e `debian/postrm`, e due copie in due formati
+# diversi — una in `debian/`, una dentro un manifesto TOML — divergono senza che
+# nulla lo dica. In file, un test le confronta.
+#
+# ATTENZIONE: questi campi accettano *o* uno script inline *o* un percorso, e la
+# distinzione la fa l'esistenza del file. Un percorso sbagliato non è un errore:
+# diventa uno scriptlet che contiene la stringa `rpm/post.sh`, cioè un comando
+# che sul sistema del cliente non esiste. C'è un test che pretende che questi
+# due file esistano davvero, perché è un difetto che non si vedrebbe fino
+# all'installazione su una macchina vera.
+post_install_script = "rpm/post.sh"
+post_uninstall_script = "rpm/postun.sh"
 
 [lib]
-name = "odoo_installer"
+name = "invok"
 path = "src/lib.rs"
 
 [[bin]]
-name = "odoo-installer"
+name = "invok"
 path = "src/main.rs"
 
 [dependencies]

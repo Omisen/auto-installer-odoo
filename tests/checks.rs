@@ -3,14 +3,14 @@
 use std::io::Write;
 use std::path::Path;
 
-use odoo_installer::checks::{
+use invok::checks::{
     check_disk, check_os_from, check_ports, ensure_root_euid, ensure_sudo_user, format_python,
     format_release, is_newer_than_tested, parse_python_version, ports_to_check,
     python_is_newer_than_tested, untested_python_warning, untested_release_warning, validate_os,
     CheckError, OsInfo, NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_PYTHON,
     NEWEST_TESTED_UBUNTU,
 };
-use odoo_installer::distro::OsFamily;
+use invok::distro::OsFamily;
 
 fn write_os_release(dir: &Path, body: &str) -> std::path::PathBuf {
     let path = dir.join("os-release");

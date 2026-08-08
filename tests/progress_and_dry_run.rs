@@ -3,12 +3,12 @@
 mod common;
 
 use common::{events_of, ops_of, MockConfig, MockSystemOps, RecordingReporter};
-use odoo_installer::context::Context;
-use odoo_installer::engine::{dry_run_plan, Installer};
-use odoo_installer::progress::NoopReporter;
-use odoo_installer::step::Step;
-use odoo_installer::steps::create_odoo_user::CreateOdooUser;
-use odoo_installer::steps::noop::NoopStep;
+use invok::context::Context;
+use invok::engine::{dry_run_plan, Installer};
+use invok::progress::NoopReporter;
+use invok::step::Step;
+use invok::steps::create_odoo_user::CreateOdooUser;
+use invok::steps::noop::NoopStep;
 
 fn ctx_state(dir: &tempfile::TempDir, dry_run: bool) -> Context {
     Context {

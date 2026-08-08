@@ -17,12 +17,12 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::distro::OsFamily;
-use odoo_installer::error::StepError;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::setup_postgres::{PostgresSnapshot, SetupPostgres};
+use invok::context::Context;
+use invok::distro::OsFamily;
+use invok::error::StepError;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::setup_postgres::{PostgresSnapshot, SetupPostgres};
 
 fn ctx(aggressive: bool) -> Context {
     Context {
@@ -295,7 +295,7 @@ fn the_fourth_axis_survives_serialisation() {
 /// decisione della produzione, la decisione va provata **anche** dov'è scritta.
 #[test]
 fn each_family_declares_its_own_cluster_policy() {
-    use odoo_installer::distro::{debian::Debian, fedora::Fedora, Distro};
+    use invok::distro::{debian::Debian, fedora::Fedora, Distro};
 
     assert_eq!(
         Debian::new().postgres_data_dir(),
@@ -322,7 +322,7 @@ fn each_family_declares_its_own_cluster_policy() {
 /// arriverebbe in campo invece che qui.
 #[test]
 fn initialising_where_it_is_not_needed_succeeds_quietly() {
-    use odoo_installer::distro::{debian::Debian, Distro};
+    use invok::distro::{debian::Debian, Distro};
 
     assert!(
         Debian::new().init_postgres_cluster().is_ok(),
@@ -341,7 +341,7 @@ fn initialising_where_it_is_not_needed_succeeds_quietly() {
 /// volte in questo progetto, e sempre così (A-R8-1-ter).
 #[test]
 fn the_declared_pgdata_is_read_the_way_postgresql_setup_reads_it() {
-    use odoo_installer::distro::fedora::pgdata_from_environment;
+    use invok::distro::fedora::pgdata_from_environment;
     use std::path::PathBuf;
 
     assert_eq!(
@@ -375,7 +375,7 @@ fn the_declared_pgdata_is_read_the_way_postgresql_setup_reads_it() {
 /// La regola: si rifiuta **solo** quando le due risposte divergono davvero.
 #[test]
 fn a_conflict_is_only_a_conflict_when_both_answers_exist_and_differ() {
-    use odoo_installer::steps::setup_postgres::cluster_path_conflict;
+    use invok::steps::setup_postgres::cluster_path_conflict;
     use std::path::Path;
 
     let nostro = Path::new("/var/lib/pgsql/data");
@@ -443,7 +443,7 @@ fn the_usual_fedora_is_not_stopped_by_this_check() {
     for dichiarato in [
         None,
         Some(std::path::PathBuf::from(
-            odoo_installer::distro::fedora::POSTGRES_DATA_DIR,
+            invok::distro::fedora::POSTGRES_DATA_DIR,
         )),
     ] {
         let cfg = MockConfig {

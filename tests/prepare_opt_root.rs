@@ -11,10 +11,10 @@ mod common;
 use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
+use invok::context::Context;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::prepare_opt_root::PrepareOptRoot;
 
 /// Context minimale: al passo servono `odoo_home`, `odoo_user` e `dry_run`.
 fn ctx(home: PathBuf, dry_run: bool) -> Context {

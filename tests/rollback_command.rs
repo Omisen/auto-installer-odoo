@@ -16,16 +16,16 @@ use std::path::PathBuf;
 
 use clap::Parser;
 use common::model::{ModelState, SystemModel};
-use odoo_installer::cli::{Cli, Command};
-use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
-use odoo_installer::progress::NoopReporter;
-use odoo_installer::rollback::{self, ConfirmationGate, InstallStatus, StepOutcome, UndoOutcome};
-use odoo_installer::secret::Secret;
-use odoo_installer::state::{InstallConfig, InstallState, StepRecord};
-use odoo_installer::step::Step;
-use odoo_installer::steps;
-use odoo_installer::system_ops::SystemOps;
+use invok::cli::{Cli, Command};
+use invok::context::Context;
+use invok::engine::Installer;
+use invok::progress::NoopReporter;
+use invok::rollback::{self, ConfirmationGate, InstallStatus, StepOutcome, UndoOutcome};
+use invok::secret::Secret;
+use invok::state::{InstallConfig, InstallState, StepRecord};
+use invok::step::Step;
+use invok::steps;
+use invok::system_ops::SystemOps;
 
 const HOME: &str = "/opt/odoo";
 const INSTALL: &str = "/opt/odoo/odoo18";
@@ -104,14 +104,14 @@ fn chain_from_factory(model: &SystemModel, names: &[&str]) -> Vec<Box<dyn Step>>
 /// Esegue un'installazione che **riesce** e lascia il file di stato sul disco.
 ///
 /// Non chiama `mark_finished`: il file resta quindi come lo troverebbe un
-/// `odoo-installer rollback` dopo un'**interruzione**. Il caso "installazione
+/// `invok rollback` dopo un'**interruzione**. Il caso "installazione
 /// conclusa e poi disinstallata" ha il suo test dedicato
 /// (`a_successful_installation_leaves_a_state_that_can_still_be_rolled_back`).
 /// La sequenza canonica non dipende dalla famiglia (una sola per tutte), ma per
 /// costruirla serve comunque una fabbrica di `ops`: qui quella di produzione,
 /// che nei costruttori non esegue alcun comando.
 fn canonical_len() -> usize {
-    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+    let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
     steps::canonical_step_names(&make_ops).len()
 }
@@ -150,7 +150,7 @@ fn the_factory_covers_the_whole_canonical_sequence() {
     // romperebbe nulla in installazione: si scoprirebbe mesi dopo, su una
     // macchina cliente, come "quel pezzo non è stato rimosso". Questo test lo
     // fa fallire subito.
-    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+    let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
     for name in steps::canonical_step_names(&make_ops) {
         assert!(
@@ -163,7 +163,7 @@ fn the_factory_covers_the_whole_canonical_sequence() {
 
 #[test]
 fn the_factory_rejects_an_unknown_name() {
-    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+    let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
     assert!(steps::step_by_name("passo-inventato", &make_ops).is_none());
 }
@@ -576,7 +576,7 @@ fn the_state_file_carries_the_config_and_no_passwords() {
 
 #[test]
 fn install_status_recognises_a_complete_installation() {
-    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+    let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
     let names = steps::canonical_step_names(&make_ops);
     let state = InstallState {
@@ -606,7 +606,7 @@ fn install_status_recognises_a_complete_installation() {
 fn a_successful_installation_leaves_a_state_that_can_still_be_rolled_back() {
     // Il caso d'uso principale del comando: disinstallare un'istanza
     // **funzionante**. Fino a R5 era impossibile — `main` cancellava lo stato a
-    // successo avvenuto, e `odoo-installer rollback` rispondeva "nessuna
+    // successo avvenuto, e `invok rollback` rispondeva "nessuna
     // installazione da annullare" su un sistema pieno di artefatti nostri.
     //
     // Qui l'installazione arriva in fondo, viene marcata conclusa, e il rollback
@@ -686,11 +686,11 @@ fn the_confirmation_gate_protects_a_destructive_operation() {
 fn the_bare_command_still_installs() {
     // Retrocompatibilità: l'uso storico non cambia. Nessun sottocomando e le
     // stesse opzioni di prima.
-    let cli = Cli::parse_from(["odoo-installer"]);
+    let cli = Cli::parse_from(["invok"]);
     assert!(cli.command.is_none(), "nessun sottocomando = installazione");
 
     let cli = Cli::parse_from([
-        "odoo-installer",
+        "invok",
         "--version",
         "18",
         "--db-name",
@@ -710,7 +710,7 @@ fn the_bare_command_still_installs() {
 /// (A-V3-1), e non deve aver spostato nulla del parsing preesistente.
 #[test]
 fn force_is_an_install_flag_and_defaults_to_off() {
-    let cli = Cli::parse_from(["odoo-installer", "--force"]);
+    let cli = Cli::parse_from(["invok", "--force"]);
     assert!(
         cli.command.is_none(),
         "resta un'installazione, non un sottocomando"
@@ -721,7 +721,7 @@ fn force_is_an_install_flag_and_defaults_to_off() {
 
 #[test]
 fn rollback_and_its_uninstall_alias_parse_with_their_options() {
-    let cli = Cli::parse_from(["odoo-installer", "rollback"]);
+    let cli = Cli::parse_from(["invok", "rollback"]);
     let Some(Command::Rollback(args)) = &cli.command else {
         panic!("atteso il sottocomando rollback");
     };
@@ -732,7 +732,7 @@ fn rollback_and_its_uninstall_alias_parse_with_their_options() {
     assert!(!args.dry_run && !args.yes && !args.aggressive_rollback);
 
     let cli = Cli::parse_from([
-        "odoo-installer",
+        "invok",
         "rollback",
         "--state",
         "/tmp/altro-stato.json",
@@ -750,7 +750,7 @@ fn rollback_and_its_uninstall_alias_parse_with_their_options() {
     assert!(args.dry_run && args.yes && args.aggressive_rollback);
 
     // L'alias `uninstall` è lo stesso comando.
-    let cli = Cli::parse_from(["odoo-installer", "uninstall", "--yes"]);
+    let cli = Cli::parse_from(["invok", "uninstall", "--yes"]);
     let Some(Command::Rollback(args)) = &cli.command else {
         panic!("l'alias uninstall deve mappare su rollback");
     };
@@ -778,7 +778,7 @@ fn the_init_hard_stop_points_at_the_rollback_command() {
     let msg = err.to_string();
 
     assert!(
-        msg.contains("odoo-installer rollback"),
+        msg.contains("invok rollback"),
         "il messaggio deve indicare il comando reale, non una promessa: {msg}"
     );
     assert!(
@@ -796,17 +796,17 @@ fn the_init_hard_stop_points_at_the_rollback_command() {
 /// questione di nomi sarebbe un danno maggiore del difetto.
 #[test]
 fn the_https_port_flag_keeps_its_historical_alias() {
-    let nuovo = Cli::parse_from(["odoo-installer", "--with-nginx", "--open-https-port"]);
+    let nuovo = Cli::parse_from(["invok", "--with-nginx", "--open-https-port"]);
     assert!(nuovo.open_https_port);
 
     // `try_parse_from` e non `parse_from`: se l'alias sparisse, `parse_from`
     // chiamerebbe `exit(2)` e il test morirebbe senza dire perché — un guardiano
     // che fallisce senza spiegarsi costringe il prossimo a indagare da zero.
-    let storico = Cli::try_parse_from(["odoo-installer", "--with-nginx", "--enable-ssl"])
+    let storico = Cli::try_parse_from(["invok", "--with-nginx", "--enable-ssl"])
         .expect("`--enable-ssl` deve continuare a essere accettato: è il nome con cui il flag è nato, e vive negli script dei clienti");
     assert!(storico.open_https_port);
 
-    let assente = Cli::parse_from(["odoo-installer"]);
+    let assente = Cli::parse_from(["invok"]);
     assert!(!assente.open_https_port);
 }
 
@@ -934,16 +934,12 @@ fn rollback_con_home(home_esiste: bool) -> rollback::RollbackReport {
     rollback_su_mock(&ctx, home_esiste)
 }
 
-fn rollback_su_mock(
-    ctx: &odoo_installer::context::Context,
-    home_esiste: bool,
-) -> rollback::RollbackReport {
+fn rollback_su_mock(ctx: &invok::context::Context, home_esiste: bool) -> rollback::RollbackReport {
     let mut state = InstallState::default();
     state.set_config(InstallConfig::from_context(ctx));
     state.record(StepRecord {
         name: "setup-log-dir".to_string(),
-        snapshot: serde_json::to_value(odoo_installer::state::PreState::Untracked)
-            .expect("serialize"),
+        snapshot: serde_json::to_value(invok::state::PreState::Untracked).expect("serialize"),
     });
 
     let make_ops = || -> Box<dyn SystemOps> {
@@ -964,7 +960,7 @@ fn rollback_su_mock(
 /// escono, senza toccare `--version`, che qui è la versione di Odoo.
 ///
 /// Il difetto è stato trovato installando il `.rpm` della 2.3.0 su una Fedora
-/// vera: `odoo-installer --version` rispondeva *«a value is required»*, e non
+/// vera: `invok --version` rispondeva *«a value is required»*, e non
 /// esisteva alcun modo di chiedere al binario la propria versione. La
 /// tentazione — rinominare il flag — è la stessa che R12 ha scartato: si
 /// mantiene ciò che è in campo e si aggiunge la via che manca.
@@ -977,7 +973,7 @@ fn the_installer_can_be_asked_its_own_version() {
     use clap::error::ErrorKind;
 
     for flag in ["-V", "--installer-version"] {
-        let err = Cli::try_parse_from(["odoo-installer", flag])
+        let err = Cli::try_parse_from(["invok", flag])
             .expect_err("un'azione Version interrompe il parsing: è il suo mestiere");
         assert_eq!(
             err.kind(),
@@ -985,7 +981,7 @@ fn the_installer_can_be_asked_its_own_version() {
             "`{flag}` deve stampare la versione, non un errore d'uso"
         );
         assert!(
-            err.to_string().contains(odoo_installer::INSTALLER_VERSION),
+            err.to_string().contains(invok::INSTALLER_VERSION),
             "`{flag}` deve stampare la versione di QUESTO binario: {err}"
         );
     }
@@ -999,7 +995,7 @@ fn the_installer_can_be_asked_its_own_version() {
 /// comunque *qualcosa*.
 #[test]
 fn the_odoo_version_flag_is_untouched() {
-    let cli = Cli::try_parse_from(["odoo-installer", "--version", "18"])
+    let cli = Cli::try_parse_from(["invok", "--version", "18"])
         .expect("--version <VER> resta la versione di Odoo");
     assert_eq!(cli.version.as_deref(), Some("18"));
 }
@@ -1011,7 +1007,7 @@ fn the_manifest_records_which_installer_wrote_it() {
     let config = config_fixture();
     assert_eq!(
         config.installer_version.as_deref(),
-        Some(odoo_installer::INSTALLER_VERSION),
+        Some(invok::INSTALLER_VERSION),
         "un manifesto scritto ora deve dire da chi"
     );
 
@@ -1026,7 +1022,7 @@ fn the_manifest_records_which_installer_wrote_it() {
         .expect("un oggetto")
         .remove("installer_version")
         .expect("il campo c'era");
-    let vecchio: odoo_installer::state::InstallConfig =
+    let vecchio: invok::state::InstallConfig =
         serde_json::from_value(json).expect("un manifesto pre-A-V3-16 deve restare leggibile");
     assert_eq!(
         vecchio.installer_version, None,
@@ -1038,7 +1034,7 @@ fn the_manifest_records_which_installer_wrote_it() {
 /// entrambe le versioni.
 #[test]
 fn a_manifest_from_another_installer_is_announced_not_refused() {
-    use odoo_installer::state::version_mismatch_note;
+    use invok::state::version_mismatch_note;
 
     assert_eq!(
         version_mismatch_note(Some("2.3.0"), "2.3.0"),

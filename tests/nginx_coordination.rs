@@ -8,15 +8,15 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op, OpLog};
-use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
-use odoo_installer::step::Step;
-use odoo_installer::steps::nginx_enable_site::NginxEnableSite;
-use odoo_installer::steps::nginx_firewall::NginxFirewall;
-use odoo_installer::steps::nginx_install::NginxInstall;
-use odoo_installer::steps::nginx_reload::NginxReload;
-use odoo_installer::steps::nginx_write_config::NginxWriteConfig;
-use odoo_installer::steps::noop::NoopStep;
+use invok::context::Context;
+use invok::engine::Installer;
+use invok::step::Step;
+use invok::steps::nginx_enable_site::NginxEnableSite;
+use invok::steps::nginx_firewall::NginxFirewall;
+use invok::steps::nginx_install::NginxInstall;
+use invok::steps::nginx_reload::NginxReload;
+use invok::steps::nginx_write_config::NginxWriteConfig;
+use invok::steps::noop::NoopStep;
 
 #[test]
 fn full_rollback_restores_default_site_and_removes_only_delta() {

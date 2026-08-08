@@ -1,8 +1,10 @@
-# Odoo Auto Installer
+# Invok
+
+> Installer for Odoo
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/Omisen/auto-installer-odoo/actions/workflows/test.yml/badge.svg)](https://github.com/Omisen/auto-installer-odoo/actions/workflows/test.yml)
-[![Integration](https://github.com/Omisen/auto-installer-odoo/actions/workflows/integration.yml/badge.svg)](https://github.com/Omisen/auto-installer-odoo/actions/workflows/integration.yml)
+[![CI](https://github.com/Omisen/invok/actions/workflows/test.yml/badge.svg)](https://github.com/Omisen/invok/actions/workflows/test.yml)
+[![Integration](https://github.com/Omisen/invok/actions/workflows/integration.yml/badge.svg)](https://github.com/Omisen/invok/actions/workflows/integration.yml)
 ![Odoo 16–19](https://img.shields.io/badge/Odoo-16%20%7C%2017%20%7C%2018%20%7C%2019-875A7B)
 ![Ubuntu · Debian · Fedora](https://img.shields.io/badge/Ubuntu%20%C2%B7%20Debian%20%C2%B7%20Fedora-supportati-informational)
 
@@ -10,6 +12,17 @@ Installer per **Odoo 16 / 17 / 18 / 19** su Ubuntu ≥ 22.04, Debian ≥ 11 e Fe
 **rollback transazionale**: *o l'installazione riesce completamente, o il sistema torna esattamente
 com'era prima.* Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, config,
 servizio systemd e (opzionale) Nginx.
+
+**Il comando si chiama `invok`.** Il pacchetto installa anche l'alias breve **`vok`**, che è un
+collegamento allo stesso programma: `vok --dry-run` e `invok --dry-run` fanno esattamente la stessa
+cosa. Negli esempi qui sotto si usa la forma estesa; l'alias è sempre equivalente.
+
+*Invok — da «invoke»: chiamare qualcosa perché prenda forma.*
+
+> **Progetto indipendente.** Non è affiliato a Odoo S.A., né sostenuto o sponsorizzato da essa.
+> «Odoo» è un marchio di Odoo S.A. e qui è usato solo per indicare il software che questo strumento
+> installa. L'installer **non redistribuisce codice Odoo**: lo scarica a runtime dal repository
+> ufficiale [`odoo/odoo`](https://github.com/odoo/odoo), sulla macchina di destinazione.
 
 ---
 
@@ -20,7 +33,7 @@ servizio systemd e (opzionale) Nginx.
 | | |
 |---|---|
 | [📋 Requisiti](#-requisiti) | OS, Python, privilegi, spazio, porte |
-| [🚀 Installazione rapida](#-installazione-rapida) | quattro strade, [A](#opzione-a--qualsiasi-distro-binario-precompilato-consigliata-niente-rust) binario · [B](#opzione-b--ubuntu--debian-pacchetto-deb-esperienza-apt-nativa) `.deb` · [C](#opzione-c--fedora-pacchetto-rpm-esperienza-dnf-nativa) `.rpm` · [D](#opzione-d--qualsiasi-distro-build-da-sorgente) sorgente |
+| [🚀 Installazione rapida](#-installazione-rapida) | cinque strade, [A](#opzione-a--qualsiasi-distro-binario-precompilato-consigliata-niente-rust) binario · [B](#opzione-b--ubuntu--debian-pacchetto-deb-esperienza-apt-nativa) `.deb` · [C](#opzione-c--fedora-pacchetto-rpm-esperienza-dnf-nativa) `.rpm` · [D](#opzione-d--repository-aptdnf-aggiornamenti-automatici) repository · [E](#opzione-e--qualsiasi-distro-build-da-sorgente) sorgente |
 | [👀 Anteprima `--dry-run`](#-anteprima-con---dry-run) | cosa farebbe, senza toccare niente |
 | [✅ Verifica post-installazione](#-verifica-post-installazione) | è partito? dove sono log e helper |
 
@@ -39,7 +52,7 @@ servizio systemd e (opzionale) Nginx.
 | [✨ Cosa lo distingue](#-cosa-lo-distingue) | in cinque righe |
 | [🔍 Cosa fa, in breve](#-cosa-fa-in-breve) | i 25 step, in ordine |
 | [↩️ Rollback](#-rollback) | cosa viene annullato e cosa no · [rilancio](#rilanciare-linstaller) · [Ctrl-C](#ctrl-c) |
-| [🧹 Disinstallare](#-disinstallare--ripulire-odoo-installer-rollback) | `odoo-installer rollback`, e cosa resta di proposito |
+| [🧹 Disinstallare](#-disinstallare--ripulire-invok-rollback) | `invok rollback`, e cosa resta di proposito |
 | [🔒 Sicurezza — note oneste](#-sicurezza--note-oneste) | password, checksum, TLS · [Python](#python-linterprete-si-sceglie-non-si-subisce) · [Nginx per famiglia](#nginx-una-differenza-fra-le-famiglie-dichiarata) |
 
 **Se lavori sul codice.**
@@ -88,61 +101,70 @@ servizio systemd e (opzionale) Nginx.
 
 ## 🚀 Installazione rapida
 
-**Quale scegliere**, in una riga: se vuoi il comando `odoo-installer` nel `PATH` e rimovibile con il
+**Quale scegliere**, in una riga: se vuoi il comando `invok` nel `PATH` e rimovibile con il
 gestore di pacchetti, prendi la confezione della tua famiglia (**B** per Ubuntu/Debian, **C** per
-Fedora); se ti basta un binario da lanciare dove l'hai scaricato, **A** va su qualsiasi distro. In
-tutti e tre i casi è **lo stesso eseguibile** — musl statico, nessuna dipendenza — e in tutti e tre
-Odoo viene installato a runtime, quando lanci il comando.
+Fedora); se ti basta un binario da lanciare dove l'hai scaricato, **A** va su qualsiasi distro; se
+gestisci più macchine e vuoi che gli aggiornamenti arrivino da soli con `apt upgrade` / `dnf upgrade`,
+configura il **repository** (**D**). In tutti i casi è **lo stesso eseguibile** — musl statico, nessuna
+dipendenza — e in tutti Odoo viene installato a runtime, quando lanci il comando.
 
 ### Opzione A — Qualsiasi distro: binario precompilato (consigliata, niente Rust)
 
 Scarica il binario dalla pagina **[Releases](../../releases/latest)**. Due varianti Linux x86_64:
 
-- `odoo-installer-x86_64-unknown-linux-musl.tar.gz` → **statico**, gira su **qualsiasi** distro (consigliato per i clienti);
-- `odoo-installer-x86_64-unknown-linux-gnu.tar.gz` → dinamico, per sistemi con glibc recente.
+- `invok-x86_64-unknown-linux-musl.tar.gz` → **statico**, gira su **qualsiasi** distro (consigliato per i clienti);
+- `invok-x86_64-unknown-linux-gnu.tar.gz` → dinamico, per sistemi con glibc recente.
 
 Ogni archivio ha un file `.sha256` per **verificare l'integrità** del download.
 
-> I comandi qui sotto puntano alla **v2.4.0**, che è la release descritta da questo README. Se ne è
+> I comandi qui sotto puntano alla **v3.0.0**, che è la release descritta da questo README. Se ne è
 > uscita una più recente, la trovi su [Releases](../../releases/latest): cambia il numero nelle due
 > URL e nei nomi dei file.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-x86_64-unknown-linux-musl.tar.gz.sha256
 
-sha256sum -c odoo-installer-x86_64-unknown-linux-musl.tar.gz.sha256   # deve dire: OK
-tar xzf odoo-installer-x86_64-unknown-linux-musl.tar.gz
+sha256sum -c invok-x86_64-unknown-linux-musl.tar.gz.sha256   # deve dire: OK
+tar xzf invok-x86_64-unknown-linux-musl.tar.gz
 
-./odoo-installer -V                                          # quale versione è questa
+./invok -V                                          # quale versione è questa
 
-sudo ./odoo-installer                                        # guidato (interattivo)
+sudo ./invok                                        # guidato (interattivo)
 # oppure non-interattivo:
-sudo ./odoo-installer --config production.env --with-nginx
+sudo ./invok --config production.env --with-nginx
 ```
+
+> L'alias `vok` lo creano i **pacchetti** (opzioni B, C, D): qui hai un file solo, che puoi
+> rinominare come preferisci.
 
 ### Opzione B — Ubuntu / Debian: pacchetto `.deb` (esperienza `apt` nativa)
 
 Su Ubuntu (22.04, 24.04…) e Debian (11, 12, 13…) puoi installare l'installer come pacchetto: il
-comando `odoo-installer` finisce nel `PATH` ed è rimovibile con `apt remove odoo-installer`. Il `.deb` è **statico**
+comando `invok` finisce nel `PATH` ed è rimovibile con `apt remove invok`. Il `.deb` è **statico**
 (musl), quindi gira su qualsiasi distro. Deposita **solo** il binario CLI — non installa
 servizi né tocca il sistema: Odoo viene installato a runtime quando lanci il comando.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer_2.4.0-1_amd64.deb
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer_2.4.0-1_amd64.deb.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok_3.0.0-1_amd64.deb
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok_3.0.0-1_amd64.deb.sha256
 
-sha256sum -c odoo-installer_2.4.0-1_amd64.deb.sha256         # deve dire: OK
+sha256sum -c invok_3.0.0-1_amd64.deb.sha256         # deve dire: OK
 
-sudo apt install ./odoo-installer_2.4.0-1_amd64.deb          # oppure: sudo dpkg -i ./odoo-installer_2.4.0-1_amd64.deb
+sudo apt install ./invok_3.0.0-1_amd64.deb          # oppure: sudo dpkg -i ./invok_3.0.0-1_amd64.deb
 
-odoo-installer -V                                            # quale versione è installata
-dpkg -l odoo-installer                                       # oppure, chiedendolo ad apt
+invok -V                                            # quale versione è installata
+dpkg -l invok                                       # oppure, chiedendolo ad apt
 
-sudo odoo-installer                                          # ora è nel PATH
+sudo invok                                          # ora è nel PATH
+sudo vok                                            # alias breve: stesso programma
 # oppure non-interattivo:
-sudo odoo-installer --config production.env --with-nginx
+sudo invok --config production.env --with-nginx
 ```
+
+Il pacchetto crea `/usr/bin/vok` come collegamento a `/usr/bin/invok`. Se sulla macchina esiste già un
+`/usr/bin/vok` che **non** è un collegamento, l'alias non viene creato e l'installazione lo dice: un
+file di qualcun altro non si sovrascrive.
 
 ### Opzione C — Fedora: pacchetto `.rpm` (esperienza `dnf` nativa)
 
@@ -150,22 +172,65 @@ Su Fedora (40, 41, …, 44) la stessa cosa con l'altra confezione. È **lo stess
 e del `tar.gz` — musl statico, nessuna dipendenza — impacchettato per l'altro gestore.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-2.4.0-1.x86_64.rpm
-curl -fsSL -O https://github.com/Omisen/auto-installer-odoo/releases/download/v2.4.0/odoo-installer-2.4.0-1.x86_64.rpm.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-3.0.0-1.x86_64.rpm
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-3.0.0-1.x86_64.rpm.sha256
 
-sha256sum -c odoo-installer-2.4.0-1.x86_64.rpm.sha256        # deve dire: OK
+sha256sum -c invok-3.0.0-1.x86_64.rpm.sha256        # deve dire: OK
 
-sudo dnf install ./odoo-installer-2.4.0-1.x86_64.rpm
+sudo dnf install ./invok-3.0.0-1.x86_64.rpm
 
-odoo-installer -V                                            # quale versione è installata
-rpm -q odoo-installer                                        # oppure, chiedendolo a rpm
+invok -V                                            # quale versione è installata
+rpm -q invok                                        # oppure, chiedendolo a rpm
 
-sudo odoo-installer                                          # ora è nel PATH
+sudo invok                                          # ora è nel PATH
+sudo vok                                            # alias breve: stesso programma
 ```
 
-Rimovibile con `sudo dnf remove odoo-installer`. Come il `.deb`, deposita **solo** il binario CLI.
+Rimovibile con `sudo dnf remove invok`. Come il `.deb`, deposita **solo** il binario CLI, più il
+collegamento `vok`.
 
-### Opzione D — Qualsiasi distro: build da sorgente
+### Opzione D — Repository `apt`/`dnf` (aggiornamenti automatici)
+
+Le opzioni B e C installano **un file**: per passare alla versione successiva bisogna accorgersi che è
+uscita e rifare il download. Con il repository configurato, `invok` diventa un pacchetto come
+gli altri e l'aggiornamento arriva con `apt upgrade` / `dnf upgrade`.
+
+```bash
+# --- Ubuntu / Debian
+sudo install -d -m 0755 /etc/apt/keyrings
+sudo curl -fsSL -o /etc/apt/keyrings/invok.asc https://omisen.github.io/invok/KEY.asc
+echo "deb [signed-by=/etc/apt/keyrings/invok.asc] https://omisen.github.io/invok/apt ./" \
+  | sudo tee /etc/apt/sources.list.d/invok.list
+
+sudo apt update
+sudo apt install invok
+```
+
+```bash
+# --- Fedora
+sudo curl -fsSL -o /etc/yum.repos.d/invok.repo https://omisen.github.io/invok/rpm/invok.repo
+sudo dnf install invok
+```
+
+Tre cose dette per intero, perché nessuna delle tre è indovinabile:
+
+- **Il repository serve solo l'ultima versione.** Non è una limitazione temporanea: è il contratto del
+  canale. `apt`/`dnf` mostrano comunque solo la più recente, quindi nell'uso normale non cambia nulla;
+  quello che non puoi fare è `apt install invok=3.0.0-1` per tornare indietro. Le versioni
+  storiche restano tutte su [Releases](../../releases), che non viene mai modificata — è da lì che si
+  fa un downgrade, con le opzioni B o C.
+- **Il `./` finale nella riga `deb` non è un refuso.** È la sintassi dei repository *flat*, che è il
+  formato usato qui: senza, `apt update` non trova nulla.
+- **`repo_gpgcheck=1` con `gpgcheck=0` non è una verifica in meno.** La firma GPG copre i *metadati*
+  del repository, e i metadati contengono lo SHA-256 di ogni pacchetto: la catena è completa. I
+  pacchetti non sono firmati singolarmente perché così restano **byte-identici** a quelli allegati
+  alla release — gli stessi di cui questo README pubblica lo `sha256`. È lo stesso modello di Debian,
+  dove nessun `.deb` è firmato per conto suo.
+
+La chiave pubblica è [`KEY.asc`](https://omisen.github.io/invok/KEY.asc); il fingerprint
+con cui confrontarla è stampato sulla [pagina del repository](https://omisen.github.io/invok/).
+
+### Opzione E — Qualsiasi distro: build da sorgente
 
 ```bash
 # Toolchain Rust (una volta sola)
@@ -173,14 +238,14 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 source "$HOME/.cargo/env"
 
 # Clona il repository
-git clone https://github.com/Omisen/auto-installer-odoo.git
-cd auto-installer-odoo
+git clone https://github.com/Omisen/invok.git
+cd invok
 
-cargo build --release            # → target/release/odoo-installer
+cargo build --release            # → target/release/invok
 
-sudo ./target/release/odoo-installer
+sudo ./target/release/invok
 # oppure non-interattivo (esempi in configs/):
-sudo ./target/release/odoo-installer --config configs/production.env --with-nginx
+sudo ./target/release/invok --config configs/production.env --with-nginx
 ```
 
 Va eseguito **via `sudo` da un utente normale** (l'utente `SUDO_USER` diventa proprietario del comando
@@ -212,26 +277,26 @@ default**.
 | `-V` / `--installer-version` | stampa la versione **dell'installer** ed esce (`--version` è quella di Odoo) | — |
 | `--help` | messaggio d'aiuto | — |
 
-Sottocomandi: `odoo-installer rollback` (alias `uninstall`) — vedi
-[Disinstallare / ripulire](#-disinstallare--ripulire-odoo-installer-rollback). Senza sottocomando il
+Sottocomandi: `invok rollback` (alias `uninstall`) — vedi
+[Disinstallare / ripulire](#-disinstallare--ripulire-invok-rollback). Senza sottocomando il
 comando installa, come sempre.
 
 Esempi:
 
 ```bash
 # Nginx + versione 17
-sudo ./target/release/odoo-installer --version 17 --with-nginx
+sudo ./target/release/invok --version 17 --with-nginx
 
 # Tutto da CLI (sostituisci i valori fra parentesi quadre)
-sudo ./target/release/odoo-installer \
+sudo ./target/release/invok \
   --version 18 --odoo-user odoo --db-name odoo --port 8069 \
   --admin-passwd '[LA_TUA_PASSWORD_ADMIN]'
 
 # Con Nginx su un dominio tuo
-sudo ./target/release/odoo-installer --with-nginx --server-name '[il-tuo-dominio.example.com]'
+sudo ./target/release/invok --with-nginx --server-name '[il-tuo-dominio.example.com]'
 
 # Anteprima (nessuna modifica; senza sudo il piano è più scarno, vedi sotto)
-./target/release/odoo-installer --config configs/production.env --dry-run
+./target/release/invok --config configs/production.env --dry-run
 ```
 
 ---
@@ -286,7 +351,7 @@ Preflight non mutanti (root, sudo, OS, disco, porte, comandi) → poi la sequenz
 8. comando helper `odoo` per l'utente + patch del `PATH` nel suo `~/.bashrc`.
 
 Il dettaglio di ogni step (snapshot/run/undo) è nella
-[wiki](https://github.com/Omisen/auto-installer-odoo/wiki).
+[wiki](https://github.com/Omisen/invok/wiki).
 
 ---
 
@@ -305,7 +370,7 @@ chiave è sulle **risorse preesistenti**, che non vengono mai toccate da un roll
 
 L'installer **non sovrascrive mai** un'installazione già registrata. Al rilancio:
 
-- se l'installazione precedente era **conclusa**, si ferma e ti dice cosa fare — `odoo-installer
+- se l'installazione precedente era **conclusa**, si ferma e ti dice cosa fare — `invok
   rollback` per rimuoverla, `--force` per reinstallare sopra. Con `--force` il manifesto precedente
   viene *archiviato*, mai cancellato: se quell'installazione aveva creato qualcosa, quel file è
   l'unica traccia di cosa;
@@ -318,8 +383,8 @@ L'installer **non sovrascrive mai** un'installazione già registrata. Al rilanci
 Il rollback esiste in **due forme**, con le stesse regole:
 
 - **automatico (in-process)** — uno step fallisce e l'installazione si ritira da sola;
-- **esplicito (`odoo-installer rollback`)** — rilegge lo stato persistito in
-  `/var/lib/odoo-installer/state.json` e annulla ciò che quell'installazione aveva creato. Serve sia a
+- **esplicito (`invok rollback`)** — rilegge lo stato persistito in
+  `/var/lib/invok/state.json` e annulla ciò che quell'installazione aveva creato. Serve sia a
   **disinstallare** un'istanza funzionante, sia a **ripulire** dopo un `kill -9` o uno spegnimento —
   i casi in cui il processo muore prima di poter fare il rollback da sé.
 
@@ -335,26 +400,26 @@ In pratica l'attesa è breve: il segnale arriva a tutto il gruppo di processi, q
 corso (`apt`, `git`, `pip`) termina da sé.
 
 Un **secondo Ctrl-C esce subito**, con codice 130. Lì il sistema resta a metà per tua scelta, e si
-ripulisce con `sudo odoo-installer rollback`.
+ripulisce con `sudo invok rollback`.
 
 > **Da script, manda il segnale al solo installer.** «Due Ctrl-C» significa *due segnali ricevuti*.
-> Un `sudo pkill -INT -f odoo-installer` colpisce **due** processi — il `sudo` e l'installer — e vale
+> Un `sudo pkill -INT -f invok` colpisce **due** processi — il `sudo` e l'installer — e vale
 > quindi come seconda pressione: uscita immediata, nessun annullamento. Usa invece
-> `sudo pkill -INT -x odoo-installer` (`-x` = nome esatto del processo). Da terminale il problema non
+> `sudo pkill -INT -x invok` (`-x` = nome esatto del processo). Da terminale il problema non
 > si pone.
 
 Usa **`--dry-run`** per vedere il piano prima di eseguire davvero.
 
 ---
 
-## 🧹 Disinstallare / ripulire: `odoo-installer rollback`
+## 🧹 Disinstallare / ripulire: `invok rollback`
 
 ```bash
 # Cosa verrebbe rimosso, senza toccare nulla
-sudo ./target/release/odoo-installer rollback --dry-run
+sudo ./target/release/invok rollback --dry-run
 
 # Rimuovi davvero (chiede conferma)
-sudo ./target/release/odoo-installer rollback
+sudo ./target/release/invok rollback
 ```
 
 `uninstall` è un alias dello stesso comando.
@@ -372,14 +437,14 @@ best-effort, e non fa finta del contrario.
 
 | Flag | Valore | Default |
 |------|--------|---------|
-| `--state <FILE>` | file di stato da consumare | `/var/lib/odoo-installer/state.json` (ripiego sul percorso storico `/opt/odoo/.installer-state.json`) |
+| `--state <FILE>` | file di stato da consumare | `/var/lib/invok/state.json` (ripiego sul percorso storico `/opt/odoo/.installer-state.json`) |
 | `--dry-run` | elenca senza mutare (non serve `sudo`) | disattivo |
 | `--aggressive-rollback` | purga anche PostgreSQL/Nginx installati da noi e le utility comuni | disattivo |
 | `--yes` / `-y` | salta la conferma (obbligatorio senza terminale) | disattivo |
 
 A installazione riuscita il file di stato **resta sul disco**: è il *manifesto di disinstallazione*,
 l'unica traccia di quali artefatti quella installazione ha creato e quali ha trovato già presenti.
-Senza, `odoo-installer rollback` non avrebbe modo di distinguere le due cose e non potrebbe rimuovere
+Senza, `invok rollback` non avrebbe modo di distinguere le due cose e non potrebbe rimuovere
 l'istanza. Non va cancellato a mano.
 
 Viene rimosso solo a rollback completo: se qualcosa non è stato ripulito il file resta, e il comando
@@ -403,10 +468,10 @@ validare un `.env` o capire cosa succederà su una macchina.
 fanno passando da `sudo` (lo stato di PostgreSQL, i pacchetti installati). Senza privilegi quelle
 domande non ottengono risposta: gli step interessati compaiono come «snapshot non disponibile» e il
 piano, pur vero, è incompleto. L'installer lo dice prima di stamparlo. Per il piano completo:
-`sudo odoo-installer --dry-run …`.
+`sudo invok --dry-run …`.
 
 ```bash
-./target/release/odoo-installer --config configs/production.env --dry-run
+./target/release/invok --config configs/production.env --dry-run
 ```
 
 ---
@@ -422,7 +487,7 @@ journalctl -u odoo18 -n 50 --no-pager
 odoo status        # start | stop | restart | status | dev
 
 # Log dell'installer (post-mortem; sopravvive al rollback, apposta)
-sudo cat /var/log/odoo-installer.log
+sudo cat /var/log/invok.log
 ```
 
 ---
@@ -514,7 +579,7 @@ checksum upstream. Nota: la release `0.12.6.1-3` pubblica `.deb` amd64 **solo** 
 ## 🗂️ Struttura del progetto (port Rust)
 
 ```
-AutoInstallerOdoo/
+invok/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs              # entry point: install (parse → prompt → checks → lock → execute) | rollback
@@ -544,6 +609,7 @@ AutoInstallerOdoo/
 │       └── write_control_script.rs   patch_bashrc.rs
 ├── templates/              # odoo.conf.tpl · odoo.service.tpl · nginx.conf.tpl (embedded nel binario)
 ├── configs/               # esempi .env (dev, production) + i preset della CI (ci, ci-nginx)
+├── debian/                # postinst/postrm del .deb: creano e rimuovono l'alias `vok`
 ├── scripts/ci/            # integration-test.sh: installazione reale + verifica della pulizia
 ├── .github/workflows/     # test.yml (rapido, mock) · integration.yml (reale) · release.yml
 └── tests/                 # test per-step + coordinamenti + rollback end-to-end
@@ -554,9 +620,9 @@ il perimetro che il rollback deve poter rimuovere per intero:
 
 | File | Percorso | A cosa serve |
 |---|---|---|
-| Manifesto | `/var/lib/odoo-installer/state.json` | dice cosa è stato creato e cosa era già presente: è ciò che rende disinstallabile un'istanza |
-| Lock | `/run/odoo-installer.lock` | impedisce due installazioni simultanee; sparisce al reboot |
-| Log | `/var/log/odoo-installer.log` | post-mortem; sopravvive al rollback, di proposito |
+| Manifesto | `/var/lib/invok/state.json` | dice cosa è stato creato e cosa era già presente: è ciò che rende disinstallabile un'istanza |
+| Lock | `/run/invok.lock` | impedisce due installazioni simultanee; sparisce al reboot |
+| Log | `/var/log/invok.log` | post-mortem; sopravvive al rollback, di proposito |
 
 ---
 
@@ -578,7 +644,7 @@ end-to-end** (fallimento iniettato → stato finale == iniziale; risorse preesis
 I test qui sopra girano su un **mock** del sistema: provano la logica, non l'integrazione con il
 gestore di pacchetti,
 PostgreSQL e systemd veri. Quella la copre `.github/workflows/integration.yml`, che installa Odoo
-davvero su runner e container effimeri e poi verifica che `odoo-installer rollback` riporti il sistema
+davvero su runner e container effimeri e poi verifica che `invok rollback` riporti il sistema
 pulito — pacchetto per pacchetto, confrontando il delta registrato nel file di stato.
 
 Gira su richiesta (`workflow_dispatch`) e sui rami `main`/`dev`, non su ogni push: sono decine di
@@ -631,7 +697,7 @@ Se la modifica tocca il comportamento su una distribuzione, dillo nella PR: la
 che si vede.
 
 Il dettaglio tecnico — motore, step uno per uno, modello di rollback, supporto multi-distribuzione — sta
-nella **[wiki](https://github.com/Omisen/auto-installer-odoo/wiki)**.
+nella **[wiki](https://github.com/Omisen/invok/wiki)**.
 
 ---
 
@@ -647,6 +713,13 @@ L'installer era originariamente scritto in **Bash**. Quelle versioni sono archiv
 
 MIT — vedi [LICENSE](LICENSE).
 
+Il `.tar.gz`, il `.deb` e l'`.rpm` pubblicati contengono **solo** il binario `invok` e questo
+README: nessun codice di terze parti viene ridistribuito. Odoo e wkhtmltopdf (entrambi LGPLv3) sono
+scaricati a runtime dalle rispettive fonti ufficiali e restano soggetti alle loro licenze.
+
+Questo progetto è indipendente e non è affiliato a Odoo S.A. né sostenuto da essa; «Odoo» è un marchio
+di Odoo S.A.
+
 ---
 
-> ## [click -> Documentazione tecnica](https://github.com/Omisen/auto-installer-odoo/wiki)
+> ## [click -> Documentazione tecnica](https://github.com/Omisen/invok/wiki)

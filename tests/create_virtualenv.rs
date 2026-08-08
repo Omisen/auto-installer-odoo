@@ -6,9 +6,9 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::step::Step;
-use odoo_installer::steps::create_virtualenv::CreateVirtualenv;
+use invok::context::Context;
+use invok::step::Step;
+use invok::steps::create_virtualenv::CreateVirtualenv;
 
 fn ctx() -> Context {
     Context {

@@ -58,19 +58,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: taiki-e/upload-rust-binary-action@v1
         with:
-          bin: odoo-installer
+          bin: invok
           target: ${{ matrix.target }}
-          # Naming chiaro: odoo-installer-<target>.tar.gz
+          # Naming chiaro: invok-<target>.tar.gz
           archive: $bin-$target
           checksum: sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # Pacchetto .deb "nativo" per Debian/Ubuntu, ACCANTO ai tar.gz (non li
-  # sostituisce). Chi vuole `apt install ./odoo-installer_x.y.z_amd64.deb` e il
+  # sostituisce). Chi vuole `apt install ./invok_x.y.z_amd64.deb` e il
   # comando nel PATH usa questo; chi vuole il binario nudo usa il tar.gz.
   #
-  # Il .deb impacchetta il TOOL, non Odoo: deposita solo /usr/bin/odoo-installer
+  # Il .deb impacchetta il TOOL, non Odoo: deposita solo /usr/bin/invok
   # (+ doc). Nessun servizio, nessun utente, nessuna dipendenza su postgres/nginx
   # — quelle le crea l'installer a runtime. Buildato da musl statico, così gira
   # su qualsiasi distro.
@@ -124,7 +124,7 @@ jobs:
         run: gh release upload "${GITHUB_REF_NAME}" "$DEB" "$DEB.sha256" --clobber
 
   # Il .rpm, per la famiglia Fedora: stessa promessa del .deb — impacchetta il
-  # TOOL, non Odoo. Chi vuole `dnf install ./odoo-installer-x.y.z.x86_64.rpm` e
+  # TOOL, non Odoo. Chi vuole `dnf install ./invok-x.y.z.x86_64.rpm` e
   # il comando nel PATH usa questo.
   #
   # Nessuna dipendenza dichiarata: il binario è musl statico, ed è lo **stesso

@@ -6,11 +6,11 @@
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex};
 
-use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
-use odoo_installer::state::{InstallState, PreState, StepRecord};
-use odoo_installer::step::Step;
-use odoo_installer::steps::noop::{NoopStep, UndoLog};
+use invok::context::Context;
+use invok::engine::Installer;
+use invok::state::{InstallState, PreState, StepRecord};
+use invok::step::Step;
+use invok::steps::noop::{NoopStep, UndoLog};
 
 /// Context non-dry con file di stato in una tempdir (niente root, niente `/opt`).
 /// Il motore usa solo `dry_run` e `state_path`; il resto è irrilevante qui.
@@ -353,7 +353,7 @@ fn a_rolled_back_step_is_re_executed_on_the_next_run() {
 
 /// Ma un undo **fallito** lascia il record: lì l'artefatto è (forse) ancora sul
 /// sistema, e quel record è l'unica traccia del residuo che
-/// `odoo-installer rollback` potrà ritentare. Dimenticarlo sarebbe perdere
+/// `invok rollback` potrà ritentare. Dimenticarlo sarebbe perdere
 /// l'informazione proprio nel caso in cui serve.
 #[test]
 fn a_failed_undo_keeps_its_record() {
@@ -379,7 +379,7 @@ fn a_failed_undo_keeps_its_record() {
 /// nemmeno lui.
 ///
 /// Un file che descrive zero artefatti è un residuo che dice il falso: farebbe
-/// credere a `odoo-installer rollback` che ci sia qualcosa da consumare, e
+/// credere a `invok rollback` che ci sia qualcosa da consumare, e
 /// resterebbe sul disco a tempo indeterminato. Trovato dalla CI, che asseriva
 /// — giustamente — che il manifesto fosse stato consumato.
 #[test]
@@ -400,7 +400,7 @@ fn an_empty_manifest_is_removed_not_left_behind() {
 }
 
 /// Ma se qualcosa resta — un undo fallito — il manifesto **deve** restare: è
-/// l'unica traccia del residuo che `odoo-installer rollback` potrà ritentare.
+/// l'unica traccia del residuo che `invok rollback` potrà ritentare.
 #[test]
 fn a_manifest_with_residue_stays_on_disk() {
     let dir = tempfile::tempdir().expect("tempdir");

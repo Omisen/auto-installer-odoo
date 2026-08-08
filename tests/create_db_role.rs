@@ -3,11 +3,11 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::secret::Secret;
-use odoo_installer::step::Step;
-use odoo_installer::steps::create_db_role::CreateDbRole;
-use odoo_installer::system_ops::escape_sql_literal;
+use invok::context::Context;
+use invok::secret::Secret;
+use invok::step::Step;
+use invok::steps::create_db_role::CreateDbRole;
+use invok::system_ops::escape_sql_literal;
 
 fn ctx(db_user: &str, password: Option<&str>) -> Context {
     Context {

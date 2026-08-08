@@ -1,0 +1,26 @@
+#!/bin/sh
+# Crea l'alias breve `vok` → `invok`.
+#
+# È un SYMLINK, non un secondo binario: due copie dello stesso eseguibile in
+# /usr/bin sarebbero megabyte sprecati e due cose che possono divergere. Il link
+# è RELATIVO (`invok`, non `/usr/bin/invok`) così resta valido anche sotto un
+# chroot o una root alternativa.
+#
+# Non si sovrascrive un file che non è nostro: se `/usr/bin/vok` esiste ed è un
+# file regolare, appartiene a qualcun altro e ce lo si tiene — si avvisa e si
+# rinuncia all'alias. È la stessa regola che l'installer applica agli artefatti
+# del cliente: `Preexisting` non si tocca.
+set -e
+
+case "$1" in
+configure)
+    if [ -e /usr/bin/vok ] && [ ! -L /usr/bin/vok ]; then
+        echo "invok: /usr/bin/vok esiste e non è un collegamento simbolico." >&2
+        echo "invok: alias 'vok' NON creato; usa il comando 'invok'." >&2
+    else
+        ln -sfn invok /usr/bin/vok
+    fi
+    ;;
+esac
+
+exit 0

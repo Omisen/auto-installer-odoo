@@ -126,7 +126,7 @@ impl Installer {
         let mut completed: Vec<usize> = Vec::new();
 
         // La configurazione va nello stato *prima* del primo step: è ciò che
-        // permette a `odoo-installer rollback` di sapere quali artefatti
+        // permette a `invok rollback` di sapere quali artefatti
         // annullare se questo processo non arriva mai alla fine (vedi
         // `crate::state::InstallConfig`). Nessuna password vi entra.
         //
@@ -225,7 +225,7 @@ impl Installer {
     /// Da chiamare a esecuzione riuscita. Il file che resta sul disco è il
     /// **manifesto di disinstallazione**: dice quali artefatti abbiamo creato e
     /// quali abbiamo trovato già presenti, ed è ciò che permette a
-    /// `odoo-installer rollback` di rimuovere l'istanza in un secondo momento
+    /// `invok rollback` di rimuovere l'istanza in un secondo momento
     /// senza toccare nulla del cliente (A-R5-1).
     ///
     /// In `dry_run` non scrive nulla: una preview non lascia artefatti.
@@ -283,7 +283,7 @@ impl Installer {
         //
         // E se non resta **niente**, il manifesto non deve restare nemmeno lui:
         // un file che descrive zero artefatti è un residuo che dice il falso —
-        // farebbe credere a `odoo-installer rollback` che ci sia qualcosa da
+        // farebbe credere a `invok rollback` che ci sia qualcosa da
         // consumare, e resterebbe sul disco a tempo indeterminato.
         if !ctx.dry_run {
             let esito = if self.state.completed.is_empty() {

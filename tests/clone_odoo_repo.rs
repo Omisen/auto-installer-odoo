@@ -5,11 +5,11 @@ mod common;
 use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::error::StepError;
-use odoo_installer::step::Step;
-use odoo_installer::steps::clone_odoo_repo::CloneOdooRepo;
-use odoo_installer::system_ops::OdooSourceState;
+use invok::context::Context;
+use invok::error::StepError;
+use invok::step::Step;
+use invok::steps::clone_odoo_repo::CloneOdooRepo;
+use invok::system_ops::OdooSourceState;
 
 fn ctx() -> Context {
     Context {

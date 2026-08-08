@@ -11,13 +11,13 @@
 
 use std::sync::{Arc, Mutex};
 
-use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
-use odoo_installer::state::{
+use invok::context::Context;
+use invok::engine::Installer;
+use invok::state::{
     start_decision, InstallConfig, InstallState, PreState, StartDecision, StepRecord,
 };
-use odoo_installer::step::Step;
-use odoo_installer::steps::noop::{NoopStep, UndoLog};
+use invok::step::Step;
+use invok::steps::noop::{NoopStep, UndoLog};
 
 // --- helper ------------------------------------------------------------------
 

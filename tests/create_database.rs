@@ -4,10 +4,10 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::create_database::CreateDatabase;
+use invok::context::Context;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::create_database::CreateDatabase;
 
 fn ctx() -> Context {
     Context {

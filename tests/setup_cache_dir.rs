@@ -11,10 +11,10 @@ mod common;
 use std::path::{Path, PathBuf};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::setup_cache_dir::{CacheDirSnapshot, SetupCacheDir};
+use invok::context::Context;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::setup_cache_dir::{CacheDirSnapshot, SetupCacheDir};
 
 fn ctx(home: &Path) -> Context {
     Context {
@@ -192,9 +192,9 @@ fn the_cache_is_undone_after_everything_that_could_write_into_it() {
     // `setup-cache-dir` deve stare PRESTO nella sequenza per essere rimossa TARDI
     // nel rollback — dopo che il servizio è fermo, il venv è sparito e nessuno
     // può più ricreare la cache appena cancellata.
-    let make_ops = odoo_installer::system_ops::backend_factory(Default::default())
+    let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
-    let names = odoo_installer::steps::canonical_step_names(&make_ops);
+    let names = invok::steps::canonical_step_names(&make_ops);
     let pos = |name: &str| {
         names
             .iter()

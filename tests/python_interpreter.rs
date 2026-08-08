@@ -13,12 +13,12 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::checks::{choose_python, PythonPlan, NEWEST_TESTED_PYTHON};
-use odoo_installer::context::Context;
-use odoo_installer::packaging::{AlternatePython, PackageSpec};
-use odoo_installer::step::Step;
-use odoo_installer::steps::apt_packages::AptPackagesStep;
-use odoo_installer::steps::create_virtualenv::CreateVirtualenv;
+use invok::checks::{choose_python, PythonPlan, NEWEST_TESTED_PYTHON};
+use invok::context::Context;
+use invok::packaging::{AlternatePython, PackageSpec};
+use invok::step::Step;
+use invok::steps::apt_packages::AptPackagesStep;
+use invok::steps::create_virtualenv::CreateVirtualenv;
 use std::path::PathBuf;
 
 fn fedora_alternates() -> Vec<AlternatePython> {
@@ -262,10 +262,9 @@ fn the_failure_diagnosis_asks_the_interpreter_the_venv_actually_uses() {
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
-    let mut step =
-        odoo_installer::steps::install_python_requirements::InstallPythonRequirements::with_ops(
-            Box::new(mock),
-        );
+    let mut step = invok::steps::install_python_requirements::InstallPythonRequirements::with_ops(
+        Box::new(mock),
+    );
     step.snapshot(&ctx).expect("snapshot");
     let _ = step.run(&ctx).expect_err("il passo gevent è fallito");
 
@@ -288,9 +287,9 @@ fn the_failure_diagnosis_asks_the_interpreter_the_venv_actually_uses() {
 /// installerebbe più nulla — e nessun rosso lo direbbe.
 #[test]
 fn fedora_offers_at_least_one_interpreter_covered_by_the_pins() {
-    use odoo_installer::checks::python_is_newer_than_tested;
-    use odoo_installer::packaging::dnf::DnfBackend;
-    use odoo_installer::packaging::PackageManager;
+    use invok::checks::python_is_newer_than_tested;
+    use invok::packaging::dnf::DnfBackend;
+    use invok::packaging::PackageManager;
 
     let catalog = DnfBackend.catalog();
     assert!(

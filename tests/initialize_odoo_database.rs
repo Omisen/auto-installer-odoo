@@ -7,10 +7,10 @@ use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::initialize_odoo_database::InitializeOdooDatabase;
+use invok::context::Context;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::initialize_odoo_database::InitializeOdooDatabase;
 
 fn ctx(db_created_by_us: bool) -> Context {
     Context {

@@ -13,14 +13,14 @@
 //!
 //! Che i nomi Fedora siano **giusti**. Sono la traduzione della lista Debian e
 //! nessuno li ha ancora provati su una macchina vera: quel controllo lo fa
-//! `sudo odoo-installer --dry-run` su una VM Fedora, che risolve tutti i gruppi
+//! `sudo invok --dry-run` su una VM Fedora, che risolve tutti i gruppi
 //! senza mutare nulla e riporta in un solo messaggio quelli che non esistono.
 //! Qui si verifica la **struttura** — che nessun bisogno sia scoperto — che è
 //! l'unica cosa che un test su mock può garantire.
 
-use odoo_installer::packaging::apt::AptBackend;
-use odoo_installer::packaging::dnf::DnfBackend;
-use odoo_installer::packaging::{DepId, PackageManager};
+use invok::packaging::apt::AptBackend;
+use invok::packaging::dnf::DnfBackend;
+use invok::packaging::{DepId, PackageManager};
 
 /// Ogni bisogno dichiarato è coperto da **entrambe** le famiglie.
 #[test]
@@ -84,7 +84,7 @@ fn a_need_may_cost_more_packages_on_one_family() {
     let debian = AptBackend.catalog();
     let fedora = DnfBackend.catalog();
 
-    let voce = |catalog: &odoo_installer::packaging::PackageCatalog, id: DepId| {
+    let voce = |catalog: &invok::packaging::PackageCatalog, id: DepId| {
         catalog
             .odoo
             .iter()
@@ -221,7 +221,7 @@ fn the_fedora_names_are_not_the_debian_ones() {
 /// configurazione che non controlliamo.
 #[test]
 fn dnf_remove_never_touches_orphaned_dependencies() {
-    let args = odoo_installer::packaging::dnf::remove_args(&["pippo", "pluto"]);
+    let args = invok::packaging::dnf::remove_args(&["pippo", "pluto"]);
 
     assert!(
         args.iter()
@@ -240,13 +240,13 @@ fn dnf_remove_never_touches_orphaned_dependencies() {
 /// che non li aveva chiesti.
 #[test]
 fn neither_family_installs_weak_dependencies() {
-    let dnf = odoo_installer::packaging::dnf::install_args(&["pippo"]);
+    let dnf = invok::packaging::dnf::install_args(&["pippo"]);
     assert!(
         dnf.iter().any(|a| a == "--setopt=install_weak_deps=False"),
         "dnf: {dnf:?}"
     );
 
-    let apt = odoo_installer::packaging::apt::install_args(&["pippo"]);
+    let apt = invok::packaging::apt::install_args(&["pippo"]);
     assert!(
         apt.iter().any(|a| a == "--no-install-recommends"),
         "apt: {apt:?}"
@@ -268,8 +268,8 @@ fn neither_family_installs_weak_dependencies() {
 #[test]
 fn dnf_does_not_use_the_argument_separator() {
     for args in [
-        odoo_installer::packaging::dnf::install_args(&["pippo"]),
-        odoo_installer::packaging::dnf::remove_args(&["pippo"]),
+        invok::packaging::dnf::install_args(&["pippo"]),
+        invok::packaging::dnf::remove_args(&["pippo"]),
     ] {
         assert!(
             !args.iter().any(|a| a == "--"),
@@ -285,8 +285,8 @@ fn dnf_does_not_use_the_argument_separator() {
 /// **promessa**, non il comando.
 #[test]
 fn the_two_families_speak_different_commands() {
-    let apt = odoo_installer::packaging::apt::remove_args(&["pippo"]);
-    let dnf = odoo_installer::packaging::dnf::remove_args(&["pippo"]);
+    let apt = invok::packaging::apt::remove_args(&["pippo"]);
+    let dnf = invok::packaging::dnf::remove_args(&["pippo"]);
 
     assert_eq!(apt.first().map(String::as_str), Some("purge"));
     assert_eq!(dnf.first().map(String::as_str), Some("remove"));
@@ -300,7 +300,7 @@ fn the_two_families_speak_different_commands() {
 /// `8080/tcp`. È A-V3-7 sulla seconda famiglia, prima che possa succedere.
 #[test]
 fn firewalld_does_not_find_port_80_inside_port_8080() {
-    use odoo_installer::distro::firewalld::port_in_list;
+    use invok::distro::firewalld::port_in_list;
 
     assert!(!port_in_list("8080/tcp 443/tcp", "80/tcp"));
     assert!(port_in_list("8080/tcp 80/tcp 53/udp", "80/tcp"));

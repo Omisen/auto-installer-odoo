@@ -10,7 +10,7 @@
 //! nel messaggio. È il comportamento giusto, e significa che la prima Fedora
 //! reale fallirà più volte prima di installare.
 //!
-//! La taratura non richiede installazioni: `sudo odoo-installer --dry-run`
+//! La taratura non richiede installazioni: `sudo invok --dry-run`
 //! esegue lo `snapshot` di ogni step senza toccare nulla, e
 //! `unavailable_packages_error` riporta **tutti** i gruppi irrisolvibili in un
 //! solo messaggio. Il ciclo è «dry-run → correggi → ripeti», di minuti.

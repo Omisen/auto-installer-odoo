@@ -15,13 +15,11 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
 
-use odoo_installer::distro::{Distro, Firewall, OsFamily};
-use odoo_installer::error::StepError;
-use odoo_installer::packaging::{Availability, PackageCatalog, PackageManager};
-use odoo_installer::progress::ProgressReporter;
-use odoo_installer::system_ops::{
-    Downloader, OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec,
-};
+use invok::distro::{Distro, Firewall, OsFamily};
+use invok::error::StepError;
+use invok::packaging::{Availability, PackageCatalog, PackageManager};
+use invok::progress::ProgressReporter;
+use invok::system_ops::{Downloader, OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
 
 /// Operazione mutante registrata dal mock.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -521,18 +519,18 @@ impl PackageManager for MockPackageManager {
     fn local_package_name(&self, version: &str, suffix: &str) -> String {
         match self.cfg.family {
             OsFamily::Debian => {
-                odoo_installer::packaging::apt::AptBackend.local_package_name(version, suffix)
+                invok::packaging::apt::AptBackend.local_package_name(version, suffix)
             }
             OsFamily::Fedora => {
-                odoo_installer::packaging::dnf::DnfBackend.local_package_name(version, suffix)
+                invok::packaging::dnf::DnfBackend.local_package_name(version, suffix)
             }
         }
     }
 
     fn refresh_command(&self) -> &'static str {
         match self.cfg.family {
-            OsFamily::Debian => odoo_installer::packaging::apt::AptBackend.refresh_command(),
-            OsFamily::Fedora => odoo_installer::packaging::dnf::DnfBackend.refresh_command(),
+            OsFamily::Debian => invok::packaging::apt::AptBackend.refresh_command(),
+            OsFamily::Fedora => invok::packaging::dnf::DnfBackend.refresh_command(),
         }
     }
 
@@ -541,8 +539,8 @@ impl PackageManager for MockPackageManager {
         // step devono vedere gli stessi nomi che vedrebbe un'installazione vera.
         // Un catalogo finto qui renderebbe verdi test che in campo fallirebbero.
         match self.cfg.family {
-            OsFamily::Debian => odoo_installer::packaging::apt::AptBackend.catalog(),
-            OsFamily::Fedora => odoo_installer::packaging::dnf::DnfBackend.catalog(),
+            OsFamily::Debian => invok::packaging::apt::AptBackend.catalog(),
+            OsFamily::Fedora => invok::packaging::dnf::DnfBackend.catalog(),
         }
     }
 }
@@ -593,7 +591,7 @@ impl Firewall for MockFirewall {
                 "{existing}                   ALLOW       Anywhere\n"
             ));
         }
-        Ok(odoo_installer::distro::ufw::rule_in_status(&status, rule))
+        Ok(invok::distro::ufw::rule_in_status(&status, rule))
     }
     fn allow(&self, rule: &str) -> Result<(), StepError> {
         self.record(Op::UfwAllow(rule.to_string()));
@@ -629,7 +627,7 @@ pub struct MockSelinux {
     cfg: MockConfig,
 }
 
-impl odoo_installer::distro::Selinux for MockSelinux {
+impl invok::distro::Selinux for MockSelinux {
     fn nginx_proxy_boolean(&self) -> &'static str {
         "httpd_can_network_connect"
     }
@@ -654,7 +652,7 @@ impl Distro for MockDistro {
 
     /// Segue la famiglia: su Debian SELinux non è in uso, e uno step che lo
     /// trovasse comunque muterebbe la politica di un sistema che non ce l'ha.
-    fn selinux(&self) -> Option<&dyn odoo_installer::distro::Selinux> {
+    fn selinux(&self) -> Option<&dyn invok::distro::Selinux> {
         match self.family {
             OsFamily::Debian => None,
             OsFamily::Fedora => Some(&self.selinux),
@@ -667,10 +665,10 @@ impl Distro for MockDistro {
     /// Il layout **di produzione** della famiglia modellata: un layout finto
     /// renderebbe verdi test che in campo scriverebbero il vhost in una
     /// directory che nginx non legge.
-    fn nginx_layout(&self) -> odoo_installer::distro::NginxLayout {
+    fn nginx_layout(&self) -> invok::distro::NginxLayout {
         match self.family {
-            OsFamily::Debian => odoo_installer::distro::debian::Debian::new().nginx_layout(),
-            OsFamily::Fedora => odoo_installer::distro::fedora::Fedora::new().nginx_layout(),
+            OsFamily::Debian => invok::distro::debian::Debian::new().nginx_layout(),
+            OsFamily::Fedora => invok::distro::fedora::Fedora::new().nginx_layout(),
         }
     }
 
@@ -685,7 +683,7 @@ impl Distro for MockDistro {
         match self.family {
             OsFamily::Debian => None,
             OsFamily::Fedora => Some(std::path::PathBuf::from(
-                odoo_installer::distro::fedora::POSTGRES_DATA_DIR,
+                invok::distro::fedora::POSTGRES_DATA_DIR,
             )),
         }
     }

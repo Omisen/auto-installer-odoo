@@ -7,11 +7,11 @@
 use std::os::unix::fs::PermissionsExt;
 use std::path::Path;
 
-use odoo_installer::lockfile;
+use invok::lockfile;
 // La famiglia è indifferente per questi test: esercitano le primitive di
 // filesystem (`create_private_file`, `write_private_file`), che non passano né
 // dal gestore di pacchetti né dalle convenzioni di distribuzione.
-use odoo_installer::system_ops::{argv, private_temp_path, RealSystemOps, SystemOps, UserSpec};
+use invok::system_ops::{argv, private_temp_path, RealSystemOps, SystemOps, UserSpec};
 
 // --- A2.1 — TOCTOU / symlink sul temporaneo privato --------------------------
 

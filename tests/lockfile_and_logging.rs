@@ -3,11 +3,11 @@
 
 use std::path::{Path, PathBuf};
 
-use odoo_installer::context::Context;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::prepare_opt_root::PrepareOptRoot;
-use odoo_installer::{config, lockfile, logging, state};
+use invok::context::Context;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::prepare_opt_root::PrepareOptRoot;
+use invok::{config, lockfile, logging, state};
 
 #[test]
 fn second_concurrent_lock_is_refused_and_released_on_drop() {
@@ -85,26 +85,70 @@ fn installer_bookkeeping_lives_outside_the_reversible_perimeter() {
 #[test]
 fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let current = dir.path().join("var-lib").join("state.json");
-    let legacy = dir.path().join("opt-odoo").join(".installer-state.json");
-    std::fs::create_dir_all(current.parent().expect("parent")).expect("mkdir");
-    std::fs::create_dir_all(legacy.parent().expect("parent")).expect("mkdir");
+    let current = dir.path().join("var-lib-invok").join("state.json");
+    // I due posti storici, dal più recente al più vecchio: `odoo-installer` è
+    // dove scrivevano le versioni 2.2.0–2.4.0, `/opt/odoo` quelle fino alla
+    // 2.1.0. Il rename in `invok` ha aggiunto il primo.
+    let rinominato = dir.path().join("var-lib-odoo-installer").join("state.json");
+    let storico = dir.path().join("opt-odoo").join(".installer-state.json");
+    for p in [&current, &rinominato, &storico] {
+        std::fs::create_dir_all(p.parent().expect("parent")).expect("mkdir");
+    }
+    let legacy: Vec<&Path> = vec![&rinominato, &storico];
 
-    // Nessuno dei due esiste → si nomina quello corrente, così il messaggio
-    // "nessuna installazione da annullare" indica dove l'utente deve guardare.
+    // Nessuno esiste → si nomina quello corrente, così il messaggio "nessuna
+    // installazione da annullare" indica dove l'utente deve guardare.
     assert_eq!(state::pick_state_path(&current, &legacy), current);
 
-    // Solo lo storico esiste → si consuma quello (istanza pre-migrazione).
-    std::fs::write(&legacy, b"{}").expect("write legacy");
+    // Solo il più vecchio esiste → si consuma quello (istanza pre-migrazione).
+    std::fs::write(&storico, b"{}").expect("write storico");
     assert_eq!(
         state::pick_state_path(&current, &legacy),
-        legacy,
+        storico,
         "un manifesto scritto da una versione precedente deve restare consumabile"
     );
 
-    // Esistono entrambi → vince il corrente.
+    // Esiste anche quello del nome precedente → vince il più recente dei due.
+    // È il caso REALE del rename: una macchina installata dalla 2.4.0.
+    std::fs::write(&rinominato, b"{}").expect("write rinominato");
+    assert_eq!(
+        state::pick_state_path(&current, &legacy),
+        rinominato,
+        "fra due manifesti storici si consuma il più recente"
+    );
+
+    // Esiste il corrente → vince lui, sempre.
     std::fs::write(&current, b"{}").expect("write current");
     assert_eq!(state::pick_state_path(&current, &legacy), current);
+}
+
+/// Il manifesto della versione `odoo-installer` è ancora nell'elenco storico.
+///
+/// Guardia esplicita perché la conseguenza di perderlo non è visibile qui: le
+/// macchine dei clienti non si rinominano insieme al repository, e un manifesto
+/// che smette di essere letto è un'istanza che nessuno sa più disinstallare
+/// senza indovinare i nomi degli artefatti — cioè la violazione dell'anti-drop
+/// per un'altra strada.
+#[test]
+fn the_pre_rename_manifest_path_is_still_read() {
+    assert!(
+        state::LEGACY_STATE_PATHS.contains(&state::RENAMED_STATE_PATH),
+        "il percorso pre-rename deve restare fra quelli letti"
+    );
+    assert!(
+        state::LEGACY_STATE_PATHS.contains(&state::LEGACY_STATE_PATH),
+        "il percorso pre-2.2.0 deve restare fra quelli letti"
+    );
+    assert_eq!(
+        state::LEGACY_STATE_PATHS.first(),
+        Some(&state::RENAMED_STATE_PATH),
+        "l'elenco va dal più recente al più vecchio: l'ordine decide quale \
+         manifesto si consuma se ne esistessero due"
+    );
+    assert!(
+        !state::DEFAULT_STATE_PATH.contains("odoo"),
+        "il percorso CORRENTE non deve più portare il nome vecchio"
+    );
 }
 
 /// `clear` non deve rimuovere la directory genitrice di un `--state`
@@ -178,7 +222,7 @@ fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
     // `/run` finto: esiste già, è fuori dalla home, e non lo tocca nessuno.
     let run_dir = root.path().join("run");
     std::fs::create_dir(&run_dir).expect("mkdir run");
-    let lock_path = run_dir.join("odoo-installer.lock");
+    let lock_path = run_dir.join("invok.lock");
 
     // `/opt/odoo` finto: NON esiste, come su una macchina vergine.
     let home = root.path().join("opt").join("odoo");
@@ -198,8 +242,7 @@ fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
         dry_run: false,
         ..Default::default()
     };
-    let mut step =
-        PrepareOptRoot::with_ops(Box::new(odoo_installer::system_ops::RealSystemOps::debian()));
+    let mut step = PrepareOptRoot::with_ops(Box::new(invok::system_ops::RealSystemOps::debian()));
     step.snapshot(&ctx).expect("snapshot");
     step.run(&ctx).expect("run");
 
@@ -240,8 +283,7 @@ fn lock_inside_the_home_is_what_made_the_undo_dead_code() {
         dry_run: false,
         ..Default::default()
     };
-    let mut step =
-        PrepareOptRoot::with_ops(Box::new(odoo_installer::system_ops::RealSystemOps::debian()));
+    let mut step = PrepareOptRoot::with_ops(Box::new(invok::system_ops::RealSystemOps::debian()));
     step.snapshot(&ctx).expect("snapshot");
     step.run(&ctx).expect("run");
     step.undo(&ctx).expect("undo");
@@ -271,6 +313,6 @@ fn log_does_not_depend_on_a_directory_the_installer_must_still_create() {
         "senza la home, un log al suo interno non può nascere"
     );
     // …uno fuori sì, e senza far comparire la home.
-    assert!(logging::try_open(&var_log.join("odoo-installer.log")).is_some());
+    assert!(logging::try_open(&var_log.join("invok.log")).is_some());
     assert!(!home.exists(), "aprire il log non deve creare la home");
 }

@@ -8,8 +8,8 @@
 //!
 //! # Sottocomandi (R4)
 //!
-//! `odoo-installer` **senza** sottocomando installa, esattamente come prima:
-//! è l'uso documentato e non cambia. `odoo-installer rollback` (alias
+//! `invok` **senza** sottocomando installa, esattamente come prima:
+//! è l'uso documentato e non cambia. `invok rollback` (alias
 //! `uninstall`) annulla un'installazione a partire dallo stato persistito.
 //! Il sottocomando è `Option`, quindi la forma senza resta valida.
 
@@ -20,7 +20,7 @@ use clap::{Args, Parser, Subcommand};
 /// Installer Odoo con rollback chirurgico.
 #[derive(Parser, Debug)]
 #[command(
-    name = "odoo-installer",
+    name = "invok",
     about = "Installer Odoo (16/17/18/19) con rollback chirurgico",
     version = crate::INSTALLER_VERSION,
     // Niente auto `--version` di clap: `--version` qui è la versione di Odoo.
@@ -133,10 +133,10 @@ pub enum Command {
     Rollback(RollbackArgs),
 }
 
-/// Opzioni di `odoo-installer rollback`.
+/// Opzioni di `invok rollback`.
 #[derive(Args, Debug)]
 pub struct RollbackArgs {
-    /// File di stato da consumare (default: /var/lib/odoo-installer/state.json,
+    /// File di stato da consumare (default: /var/lib/invok/state.json,
     /// con ripiego sul percorso storico /opt/odoo/.installer-state.json).
     #[arg(long, value_name = "FILE")]
     pub state: Option<PathBuf>,

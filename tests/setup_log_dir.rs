@@ -5,10 +5,10 @@ mod common;
 use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::setup_log_dir::SetupLogDir;
+use invok::context::Context;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::setup_log_dir::SetupLogDir;
 
 fn ctx(logfile: Option<PathBuf>) -> Context {
     Context {

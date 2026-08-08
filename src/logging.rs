@@ -30,7 +30,7 @@ use tracing_subscriber::{fmt, EnvFilter};
 /// l'unico resoconto di cosa è successo, e serve soprattutto quando qualcosa è
 /// andato storto. Vale come prima: cambia solo che ora vive in un posto suo
 /// invece di tenere in piedi una directory che doveva sparire.
-pub const DEFAULT_LOG_PATH: &str = "/var/log/odoo-installer.log";
+pub const DEFAULT_LOG_PATH: &str = "/var/log/invok.log";
 
 /// Prova ad aprire (in append, creando) il file di log. `None` se il percorso
 /// non è scrivibile: il logging degrada al solo TTY.
@@ -77,7 +77,7 @@ pub fn init(dry_run: bool) -> Option<WorkerGuard> {
     // e fra 2.1.0, 2.2.0 e 2.3.0 cambiano il percorso del manifesto e la scelta
     // dell'interprete. Scrivendola qui, ogni comando — installazione e rollback —
     // la porta, e nessuno può dimenticarsene aggiungendo un entry point.
-    tracing::info!(version = crate::INSTALLER_VERSION, "odoo-installer");
+    tracing::info!(version = crate::INSTALLER_VERSION, "invok");
 
     guard
 }

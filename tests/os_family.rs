@@ -14,13 +14,13 @@
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use odoo_installer::checks::{
+use invok::checks::{
     check_os_from, is_newer_than_tested, os_id_from, required_commands, validate_os, CheckError,
     OsInfo,
 };
-use odoo_installer::context::Context;
-use odoo_installer::distro::{family_mismatch, OsFamily};
-use odoo_installer::state::{
+use invok::context::Context;
+use invok::distro::{family_mismatch, OsFamily};
+use invok::state::{
     start_decision, InstallConfig, InstallState, PreState, StartDecision, StepRecord,
 };
 

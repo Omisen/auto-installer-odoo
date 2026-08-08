@@ -7,12 +7,12 @@ mod common;
 use std::sync::{Arc, Mutex};
 
 use common::{ops_of, MockConfig, MockSystemOps, Op, OpLog};
-use odoo_installer::context::Context;
-use odoo_installer::engine::Installer;
-use odoo_installer::step::Step;
-use odoo_installer::steps::create_database::CreateDatabase;
-use odoo_installer::steps::create_db_role::CreateDbRole;
-use odoo_installer::steps::noop::NoopStep;
+use invok::context::Context;
+use invok::engine::Installer;
+use invok::step::Step;
+use invok::steps::create_database::CreateDatabase;
+use invok::steps::create_db_role::CreateDbRole;
+use invok::steps::noop::NoopStep;
 
 #[test]
 fn rollback_drops_database_before_role() {

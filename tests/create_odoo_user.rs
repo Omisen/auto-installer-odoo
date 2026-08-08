@@ -5,12 +5,12 @@ mod common;
 use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::error::StepError;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::create_odoo_user::{CreateOdooUser, CreateUserSnapshot};
-use odoo_installer::system_ops::OwnerId;
+use invok::context::Context;
+use invok::error::StepError;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::create_odoo_user::{CreateOdooUser, CreateUserSnapshot};
+use invok::system_ops::OwnerId;
 
 fn ctx() -> Context {
     Context {
@@ -246,7 +246,7 @@ fn a_root_owned_home_is_fine_when_we_create_the_user() {
 /// compare **sempre** e insegna a ignorare i warning.
 #[test]
 fn a_group_removed_together_with_the_user_is_not_a_failure() {
-    use odoo_installer::steps::create_odoo_user::group_already_gone;
+    use invok::steps::create_odoo_user::group_already_gone;
 
     let gia_rimosso = StepError::CommandFailed {
         command: "groupdel -- odoo".to_string(),
@@ -263,7 +263,7 @@ fn a_group_removed_together_with_the_user_is_not_a_failure() {
 /// residuo che l'utente deve sapere di avere.
 #[test]
 fn a_real_groupdel_failure_is_still_reported() {
-    use odoo_installer::steps::create_odoo_user::group_already_gone;
+    use invok::steps::create_odoo_user::group_already_gone;
 
     // Il caso concreto: il gruppo è ancora primario per un altro utente.
     let in_uso = StepError::CommandFailed {
@@ -302,7 +302,7 @@ fn a_real_groupdel_failure_is_still_reported() {
 /// è documentato da shadow-utils e non si traduce.
 #[test]
 fn the_verdict_does_not_depend_on_the_system_language() {
-    use odoo_installer::steps::create_odoo_user::group_already_gone;
+    use invok::steps::create_odoo_user::group_already_gone;
 
     let in_italiano = StepError::CommandFailed {
         command: "groupdel -- odoo".to_string(),

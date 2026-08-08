@@ -7,8 +7,8 @@
 
 use std::path::PathBuf;
 
-use odoo_installer::distro::ufw::rule_in_status as ufw_rule_in_status;
-use odoo_installer::state::{trust_verdict, InstallConfig};
+use invok::distro::ufw::rule_in_status as ufw_rule_in_status;
+use invok::state::{trust_verdict, InstallConfig};
 
 // --- A-V3-7: `80/tcp` non è dentro `8080/tcp` --------------------------------
 
@@ -84,7 +84,7 @@ fn config_with(home: &str, install_dir: &str) -> InstallConfig {
         odoo_logfile: None,
         with_nginx: false,
         sudo_user: None,
-        os_family: odoo_installer::distro::OsFamily::Debian,
+        os_family: invok::distro::OsFamily::Debian,
         installer_version: None,
     }
 }

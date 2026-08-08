@@ -23,7 +23,7 @@ use crate::error::StepError;
 /// non poteva attivarsi in nessuna esecuzione reale. `/run` è tmpfs: esiste
 /// sempre, sparisce al reboot (semantica giusta per un lock) e non appartiene
 /// al perimetro che l'installer deve saper rimuovere.
-pub const DEFAULT_LOCK_PATH: &str = "/run/odoo-installer.lock";
+pub const DEFAULT_LOCK_PATH: &str = "/run/invok.lock";
 
 /// Modalità del lock file: `0600`, come gli altri file dell'installer (stato,
 /// temporanei di config). Il file è vuoto e serve solo al `flock`, ma non c'è

@@ -48,7 +48,7 @@ env:
 jobs:
   # ---------------------------------------------------------------------------
   # Il test completo: installazione reale, verifica che Odoo risponda, poi
-  # `odoo-installer rollback` e verifica che il sistema sia tornato pulito.
+  # `invok rollback` e verifica che il sistema sia tornato pulito.
   #
   # Gira sui runner GitHub **nativi**, non in container, per una ragione
   # precisa: sono VM vere con systemd come PID 1. In un container Docker
@@ -108,14 +108,14 @@ jobs:
           MODE: full
         run: bash scripts/ci/integration-test.sh
 
-      # Il log su file. Da A-V3-2 vive in /var/log/odoo-installer.log e non
+      # Il log su file. Da A-V3-2 vive in /var/log/invok.log e non
       # dipende più da una directory che l'installer deve ancora creare: nasce
       # quindi anche alla **prima** installazione su macchina pulita, che è il
       # caso in cui A-R5-2 lasciava senza post-mortem. Lo stderr resta comunque
       # nel log del job.
       - name: Log dell'installer, se presente
         if: always()
-        run: sudo cp /var/log/odoo-installer.log "installer-${{ matrix.os }}.log" || true
+        run: sudo cp /var/log/invok.log "installer-${{ matrix.os }}.log" || true
 
       - name: Carica il log
         if: always()
@@ -147,8 +147,8 @@ jobs:
         run: cargo build --release --target x86_64-unknown-linux-musl --locked
       - uses: actions/upload-artifact@v4
         with:
-          name: odoo-installer-musl
-          path: target/x86_64-unknown-linux-musl/release/odoo-installer
+          name: invok-musl
+          path: target/x86_64-unknown-linux-musl/release/invok
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
@@ -219,27 +219,27 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: odoo-installer-musl
+          name: invok-musl
           path: bin
 
       - name: Prepara il binario e i permessi
         run: |
           set -eux
-          chmod +x bin/odoo-installer
-          bin/odoo-installer --help >/dev/null
+          chmod +x bin/invok
+          bin/invok --help >/dev/null
           # Il workspace è di root: l'installer gira come `tester` via sudo e
           # deve poter leggere config e script.
           chown -R tester:tester "$GITHUB_WORKSPACE"
 
       - name: Sonda di portabilità (installazione reale + pulizia)
         run: |
-          su tester -c "cd '$GITHUB_WORKSPACE' && MODE=probe BIN=./bin/odoo-installer bash scripts/ci/integration-test.sh"
+          su tester -c "cd '$GITHUB_WORKSPACE' && MODE=probe BIN=./bin/invok bash scripts/ci/integration-test.sh"
 
       - name: Log dell'installer, se presente
         if: always()
         run: |
           tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
-          cp /var/log/odoo-installer.log "installer-$tag.log" 2>/dev/null || true
+          cp /var/log/invok.log "installer-$tag.log" 2>/dev/null || true
 
       - name: Carica il log
         if: always()
@@ -332,7 +332,7 @@ jobs:
 
       - uses: actions/download-artifact@v4
         with:
-          name: odoo-installer-musl
+          name: invok-musl
           path: bin
 
       - name: Immagine con systemd e i prerequisiti del test
@@ -468,19 +468,19 @@ jobs:
           DOCKERFILE
           sed -i "s|FEDORA_IMAGE|${{ matrix.image }}|" Dockerfile.ci
           cat Dockerfile.ci
-          docker build -t odoo-installer-fedora:ci -f Dockerfile.ci .
+          docker build -t invok-fedora:ci -f Dockerfile.ci .
 
       - name: Avvia il container con systemd come PID 1
         run: |
           set -eux
-          chmod +x bin/odoo-installer
+          chmod +x bin/invok
           docker run -d --name fedora-test \
             --privileged \
             --cgroupns=host \
             -v /sys/fs/cgroup:/sys/fs/cgroup:rw \
             -v "$GITHUB_WORKSPACE":/work \
             -w /work \
-            odoo-installer-fedora:ci
+            invok-fedora:ci
 
           # systemd ci mette qualche secondo ad arrivare a regime. `degraded` va
           # bene: in un container alcune unit non partono (e non ci servono), ma
@@ -631,7 +631,7 @@ jobs:
       - name: Installazione + rollback reali
         run: |
           docker exec -u tester -w /work fedora-test \
-            env MODE=full BIN=./bin/odoo-installer \
+            env MODE=full BIN=./bin/invok \
                 ENV_FILE='${{ matrix.env_file }}' \
                 FW_REQUIRED='${{ matrix.fw_required }}' \
             bash scripts/ci/integration-test.sh
@@ -640,7 +640,7 @@ jobs:
         if: always()
         run: |
           tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
-          docker cp "fedora-test:/var/log/odoo-installer.log" "installer-$tag.log" 2>/dev/null || true
+          docker cp "fedora-test:/var/log/invok.log" "installer-$tag.log" 2>/dev/null || true
 
       - name: Carica il log
         if: always()
@@ -774,7 +774,7 @@ jobs:
 
       - name: Log dell'installer, se presente
         if: always()
-        run: sudo cp /var/log/odoo-installer.log "installer-nginx-${{ matrix.default_site }}.log" || true
+        run: sudo cp /var/log/invok.log "installer-nginx-${{ matrix.default_site }}.log" || true
 
       - name: Carica il log
         if: always()
@@ -833,7 +833,7 @@ jobs:
         run: |
           sudo mkdir -p /opt/odoo
           set +e
-          sudo ./target/release/odoo-installer --config configs/ci.env > refuse.log 2>&1
+          sudo ./target/release/invok --config configs/ci.env > refuse.log 2>&1
           rc=$?
           set -e
           echo "exit code: $rc"; cat refuse.log
@@ -853,10 +853,10 @@ jobs:
           [ -z "$(sudo ls -A /opt/odoo)" ] || { echo "::error::ha mutato /opt/odoo prima di rifiutare"; exit 1; }
           test ! -d /opt/odoo/odoo18 || { echo "::error::ha creato la install dir"; exit 1; }
           test ! -f /etc/systemd/system/odoo18.service || { echo "::error::ha installato l'unit"; exit 1; }
-          if sudo test -f /var/lib/odoo-installer/state.json; then
-            if sudo grep -q '"CreatedByUs"' /var/lib/odoo-installer/state.json; then
+          if sudo test -f /var/lib/invok/state.json; then
+            if sudo grep -q '"CreatedByUs"' /var/lib/invok/state.json; then
               echo "::error::il manifesto registra artefatti creati da noi: la precondizione non ha fermato nulla"
-              sudo cat /var/lib/odoo-installer/state.json
+              sudo cat /var/lib/invok/state.json
               exit 1
             fi
             echo "  manifesto presente ma senza artefatti nostri: corretto"
@@ -867,9 +867,9 @@ jobs:
           # cancellarlo a mano: altrimenti lo scenario 2 lo troverebbe e
           # partirebbe come **resume**, saltando `prepare-opt-root` — cioè
           # proprio lo step che deve creare e consegnare la home.
-          sudo ./target/release/odoo-installer rollback --yes || true
+          sudo ./target/release/invok rollback --yes || true
           sudo rmdir /opt/odoo
-          sudo test ! -e /var/lib/odoo-installer/state.json \
+          sudo test ! -e /var/lib/invok/state.json \
             || { echo "::error::il manifesto parziale non è stato consumato"; exit 1; }
 
       # Scenario 2: la home la creiamo noi, e va consegnata subito all'utente che
@@ -890,7 +890,7 @@ jobs:
 
       - name: Log dell'installer, se presente
         if: always()
-        run: sudo cp /var/log/odoo-installer.log installer-preexisting-user.log || true
+        run: sudo cp /var/log/invok.log installer-preexisting-user.log || true
 
       - name: Carica il log
         if: always()
@@ -937,11 +937,11 @@ jobs:
       - name: Installazione, interrotta appena il database esiste
         run: |
           set -x
-          sudo ./target/release/odoo-installer --config configs/ci.env > install.log 2>&1 &
+          sudo ./target/release/invok --config configs/ci.env > install.log 2>&1 &
           shell_pid=$!
 
           # Si aspetta un artefatto REALE nel manifesto, non un tempo.
-          manifesto=/var/lib/odoo-installer/state.json
+          manifesto=/var/lib/invok/state.json
           for _ in $(seq 1 240); do
             if sudo test -f "$manifesto" && \
                sudo grep -q '"create-database"' "$manifesto"; then
@@ -957,31 +957,31 @@ jobs:
 
           # UN solo segnale, e all'installer soltanto.
           #
-          # `pkill -f 'odoo-installer --config'` matcherebbe **due** processi —
+          # `pkill -f 'invok --config'` matcherebbe **due** processi —
           # il `sudo` e l'installer — quindi l'installer riceverebbe SIGINT due
           # volte in rapida successione. Ma il secondo SIGINT è, per progetto,
           # la via d'uscita d'emergenza: esce subito con 130 e NON annulla
           # niente. Il test proverebbe la funzionalità sbagliata, e fallirebbe
           # dicendo il vero («il processo è stato ucciso»).
           #
-          # `-x` matcha il nome esatto del processo (`odoo-installer`), non la
+          # `-x` matcha il nome esatto del processo (`invok`), non la
           # riga di comando: `sudo` non viene toccato. In un terminale vero il
           # problema non si pone — Ctrl-C consegna al process group una volta
           # sola, e sudo senza pty non rilancia il segnale.
-          sudo pkill -INT -x odoo-installer \
-            || { echo "::error::nessun processo odoo-installer da interrompere"; ps -ef | grep -i odoo; exit 1; }
+          sudo pkill -INT -x invok \
+            || { echo "::error::nessun processo invok da interrompere"; ps -ef | grep -i odoo; exit 1; }
 
           # Gli si dà il tempo di annullare: il rollback fa dropdb, purge apt,
           # rimozioni. Non è istantaneo, ed è giusto così. Si aspetta la fine
           # dell'INSTALLER, non del `sudo` che lo avvolge: sono due processi e
           # possono terminare in momenti diversi.
           for _ in $(seq 1 300); do
-            pgrep -x odoo-installer >/dev/null 2>&1 || break
+            pgrep -x invok >/dev/null 2>&1 || break
             sleep 2
           done
-          if pgrep -x odoo-installer >/dev/null 2>&1; then
+          if pgrep -x invok >/dev/null 2>&1; then
             echo "::error::l'installer non è terminato dopo l'interruzione"
-            sudo pkill -KILL -x odoo-installer || true
+            sudo pkill -KILL -x invok || true
             cat install.log; exit 1
           fi
           # `sudo` esce subito dopo il figlio; se restasse appeso, non è un
@@ -1034,7 +1034,7 @@ jobs:
 
       - name: Log dell'installer, se presente
         if: always()
-        run: sudo cp /var/log/odoo-installer.log installer-interrupt.log || true
+        run: sudo cp /var/log/invok.log installer-interrupt.log || true
 
       - name: Carica il log
         if: always()

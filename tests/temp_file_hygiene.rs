@@ -11,7 +11,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use odoo_installer::system_ops::{private_temp_path, private_temp_path_keeping_extension};
+use invok::system_ops::{private_temp_path, private_temp_path_keeping_extension};
 
 /// Tutti i `.rs` sotto `dir`, ricorsivamente, come (percorso relativo, contenuto).
 fn rust_sources(dir: &Path) -> Vec<(String, String)> {
@@ -183,8 +183,8 @@ fn temp_names_are_hidden_and_unpredictable() {
 /// partito.
 #[test]
 fn the_downloader_refuses_a_destination_that_already_exists() {
-    use odoo_installer::error::StepError;
-    use odoo_installer::system_ops::{Downloader, RealDownloader};
+    use invok::error::StepError;
+    use invok::system_ops::{Downloader, RealDownloader};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let dest = dir.path().join("gia-occupato.deb");
@@ -211,7 +211,7 @@ fn the_downloader_refuses_a_destination_that_already_exists() {
 /// bersaglio resta intatto. È il vettore classico in una directory condivisa.
 #[test]
 fn the_downloader_does_not_follow_a_symlink_at_the_destination() {
-    use odoo_installer::system_ops::{Downloader, RealDownloader};
+    use invok::system_ops::{Downloader, RealDownloader};
 
     let dir = tempfile::tempdir().expect("tempdir");
     let bersaglio = dir.path().join("file-di-sistema");

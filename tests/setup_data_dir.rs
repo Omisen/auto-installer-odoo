@@ -14,11 +14,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::Ordering;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::generate_config;
-use odoo_installer::steps::setup_data_dir::{DataDirSnapshot, SetupDataDir};
+use invok::context::Context;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::generate_config;
+use invok::steps::setup_data_dir::{DataDirSnapshot, SetupDataDir};
 
 /// Context su una home reale (tempdir), così `path_exists` risponde davvero:
 /// i livelli `.local` / `.local/share` vanno distinti uno per uno.

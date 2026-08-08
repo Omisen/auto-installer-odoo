@@ -1,4 +1,4 @@
-//! Odoo Auto-Installer — motore di installazione reversibile.
+//! Invok — installer Odoo reversibile.
 //!
 //! Questa libreria espone il **motore** dell'installer: il trait [`step::Step`],
 //! il pattern [`state::PreState`], il [`context::Context`] e l'orchestratore

@@ -14,10 +14,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use odoo_installer::distro::{Distro, Firewall};
-use odoo_installer::error::StepError;
-use odoo_installer::packaging::{Availability, PackageCatalog, PackageManager};
-use odoo_installer::system_ops::{OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
+use invok::distro::{Distro, Firewall};
+use invok::error::StepError;
+use invok::packaging::{Availability, PackageCatalog, PackageManager};
+use invok::system_ops::{OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
 
 /// Stato del sistema modellato. `PartialEq` per confrontare inizio/fine.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -237,15 +237,15 @@ impl PackageManager for ModelPackages {
         Ok(())
     }
     fn local_package_name(&self, version: &str, suffix: &str) -> String {
-        odoo_installer::packaging::apt::AptBackend.local_package_name(version, suffix)
+        invok::packaging::apt::AptBackend.local_package_name(version, suffix)
     }
 
     fn refresh_command(&self) -> &'static str {
-        odoo_installer::packaging::apt::AptBackend.refresh_command()
+        invok::packaging::apt::AptBackend.refresh_command()
     }
 
     fn catalog(&self) -> PackageCatalog {
-        odoo_installer::packaging::apt::AptBackend.catalog()
+        invok::packaging::apt::AptBackend.catalog()
     }
 }
 
@@ -297,12 +297,12 @@ impl Distro for ModelDistro {
     /// Il modello rappresenta una macchina Debian: il cluster lo crea il
     /// pacchetto, non noi.
     /// Il modello rappresenta una macchina Debian: niente SELinux.
-    fn selinux(&self) -> Option<&dyn odoo_installer::distro::Selinux> {
+    fn selinux(&self) -> Option<&dyn invok::distro::Selinux> {
         None
     }
 
-    fn nginx_layout(&self) -> odoo_installer::distro::NginxLayout {
-        odoo_installer::distro::debian::Debian::new().nginx_layout()
+    fn nginx_layout(&self) -> invok::distro::NginxLayout {
+        invok::distro::debian::Debian::new().nginx_layout()
     }
 
     fn postgres_data_dir(&self) -> Option<PathBuf> {

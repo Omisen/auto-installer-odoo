@@ -7,15 +7,15 @@ use std::collections::BTreeMap;
 use std::path::Path;
 
 use common::{ops_of, MockConfig, MockDownloader, MockSystemOps, Op};
-use odoo_installer::checks::OsInfo;
-use odoo_installer::context::Context;
-use odoo_installer::distro::OsFamily;
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::install_wkhtmltopdf::{
+use invok::checks::OsInfo;
+use invok::context::Context;
+use invok::distro::OsFamily;
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::install_wkhtmltopdf::{
     default_checksums, map_package_suffix, InstallWkhtmltopdf,
 };
-use odoo_installer::system_ops::sha256_hex;
+use invok::system_ops::sha256_hex;
 
 fn ctx(codename: &str) -> Context {
     Context {
@@ -465,7 +465,7 @@ fn any_other_fedora_falls_back_to_the_only_package_built_for_its_family() {
 /// download. Verificato contro gli asset realmente pubblicati.
 #[test]
 fn the_package_file_name_follows_the_format_of_its_family() {
-    use odoo_installer::packaging::{apt::AptBackend, dnf::DnfBackend, PackageManager};
+    use invok::packaging::{apt::AptBackend, dnf::DnfBackend, PackageManager};
 
     assert_eq!(
         AptBackend.local_package_name("0.12.6.1-3", "jammy"),

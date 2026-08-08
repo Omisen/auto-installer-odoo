@@ -21,13 +21,11 @@
 mod common;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
-use odoo_installer::context::Context;
-use odoo_installer::distro::{debian::Debian, fedora::Fedora, Distro, OsFamily};
-use odoo_installer::state::PreState;
-use odoo_installer::step::Step;
-use odoo_installer::steps::{
-    nginx_enable_site::NginxEnableSite, nginx_write_config::NginxWriteConfig,
-};
+use invok::context::Context;
+use invok::distro::{debian::Debian, fedora::Fedora, Distro, OsFamily};
+use invok::state::PreState;
+use invok::step::Step;
+use invok::steps::{nginx_enable_site::NginxEnableSite, nginx_write_config::NginxWriteConfig};
 
 fn ctx(family: OsFamily) -> Context {
     Context {
@@ -240,8 +238,7 @@ fn the_vhost_step_writes_where_the_layout_says() {
 /// alcun guadagno.
 #[test]
 fn the_vhost_content_does_not_depend_on_the_family() {
-    let reso =
-        |family: OsFamily| odoo_installer::steps::nginx_write_config::render_vhost(&ctx(family));
+    let reso = |family: OsFamily| invok::steps::nginx_write_config::render_vhost(&ctx(family));
     assert_eq!(
         reso(OsFamily::Debian),
         reso(OsFamily::Fedora),
@@ -252,7 +249,7 @@ fn the_vhost_content_does_not_depend_on_the_family() {
 
 // --- M4b: SELinux, aggiunto perché il campo l'ha chiesto --------------------
 
-use odoo_installer::steps::nginx_selinux::NginxSelinux;
+use invok::steps::nginx_selinux::NginxSelinux;
 
 /// **Il difetto osservato in campo.** Su Fedora, con il vhost corretto,
 /// `nginx -t` valido e il reload riuscito, il browser riceve **502**: SELinux
@@ -399,7 +396,7 @@ fn an_unreadable_policy_is_not_a_policy_to_write() {
 /// decisione della produzione, la decisione va provata **anche dov'è scritta**.
 #[test]
 fn the_boolean_is_the_one_the_kernel_actually_denies() {
-    use odoo_installer::distro::{debian::Debian, fedora::Fedora, Distro};
+    use invok::distro::{debian::Debian, fedora::Fedora, Distro};
 
     let selinux = Fedora::new()
         .selinux()
@@ -427,7 +424,7 @@ fn the_boolean_is_the_one_the_kernel_actually_denies() {
 /// a chi ha dnf.
 #[test]
 fn the_firewall_is_called_by_its_real_name() {
-    use odoo_installer::distro::{debian::Debian, fedora::Fedora, Distro};
+    use invok::distro::{debian::Debian, fedora::Fedora, Distro};
 
     assert_eq!(Debian::new().firewall().name(), "ufw");
     assert_eq!(Fedora::new().firewall().name(), "firewalld");

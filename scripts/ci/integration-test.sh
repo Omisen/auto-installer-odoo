@@ -3,7 +3,7 @@
 # scripts/ci/integration-test.sh — test di INTEGRAZIONE REALE (R5)
 #
 # Installa Odoo davvero, verifica che funzioni, poi esegue
-# `odoo-installer rollback` e verifica che il sistema sia tornato pulito.
+# `invok rollback` e verifica che il sistema sia tornato pulito.
 #
 # È l'automazione della sessione di verifica manuale su Multipass che ha
 # trovato A-RT-1 (dpkg -i non risolve le dipendenze → installazione impossibile
@@ -33,7 +33,7 @@
 set -euo pipefail
 
 MODE="${MODE:-full}"
-BIN="${BIN:-./target/release/odoo-installer}"
+BIN="${BIN:-./target/release/invok}"
 ENV_FILE="${ENV_FILE:-configs/ci.env}"
 
 # Il test si adatta alla configurazione che gli viene data invece di assumerla:
@@ -60,7 +60,7 @@ ODOO_HOME=/opt/odoo
 INSTALL_DIR="$ODOO_HOME/odoo${VER_SHORT}"
 UNIT="odoo${VER_SHORT}"
 UNIT_FILE="/etc/systemd/system/${UNIT}.service"
-STATE="/var/lib/odoo-installer/state.json"
+STATE="/var/lib/invok/state.json"
 # shellcheck source=scripts/ci/journal.sh
 . "$(dirname "$0")/journal.sh"
 
@@ -876,5 +876,5 @@ for check in "${FAILED_CHECKS[@]}"; do
   echo "::error::$check"
 done
 echo "Log dell'installer:"
-sudo tail -n 100 /var/log/odoo-installer.log 2>/dev/null || echo "(nessun log)"
+sudo tail -n 100 /var/log/invok.log 2>/dev/null || echo "(nessun log)"
 exit 1
