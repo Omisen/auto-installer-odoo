@@ -105,11 +105,6 @@ impl NoopStep {
     pub fn undo_call_handle(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.undo_calls)
     }
-
-    /// Numero di volte in cui `undo` è stato invocato su questo step.
-    pub fn undo_call_count(&self) -> usize {
-        self.undo_calls.load(Ordering::SeqCst)
-    }
 }
 
 impl Step for NoopStep {

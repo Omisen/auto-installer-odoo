@@ -22,8 +22,6 @@ use crate::packaging::{AlternatePython, Availability, DepId, PackageSpec};
 pub const OS_RELEASE_PATH: &str = "/etc/os-release";
 /// Soglia disco di default (GB).
 pub const DEFAULT_MIN_DISK_GB: u64 = 5;
-/// Home Odoo di default (target della misura disco).
-pub const DEFAULT_DISK_TARGET: &str = "/opt/odoo";
 
 /// Informazioni sull'OS rilevate da `os-release` (servono, es., a wkhtmltopdf).
 #[derive(Debug, Clone, PartialEq, Eq)]

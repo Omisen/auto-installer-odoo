@@ -235,8 +235,9 @@ cd invok
 cargo build --release            # → target/release/invok
 
 sudo ./target/release/invok
-# oppure non-interattivo (esempi in configs/):
-sudo ./target/release/invok --config configs/production.env --with-nginx
+# oppure non-interattivo (il .env lo scrivi tu — formato più sotto;
+# configs/ci.env è un esempio completo da copiare):
+sudo ./target/release/invok --config production.env --with-nginx
 ```
 
 Va eseguito **via `sudo` da un utente normale** (l'utente `SUDO_USER` diventa proprietario del comando
@@ -287,7 +288,7 @@ sudo ./target/release/invok \
 sudo ./target/release/invok --with-nginx --server-name '[il-tuo-dominio.example.com]'
 
 # Anteprima (nessuna modifica; senza sudo il piano è più scarno, vedi sotto)
-./target/release/invok --config configs/production.env --dry-run
+./target/release/invok --config production.env --dry-run
 ```
 
 ---
@@ -303,8 +304,14 @@ Chiavi riconosciute: `ODOO_VERSION`, `ODOO_USER`, `DB_USER`, `DB_PASSWORD`, `ODO
 `ODOO_INSTALL_DIR`, `ODOO_ADMIN_PASSWD`, `ODOO_LOGFILE`, `WITH_NGINX`, `NGINX_SERVER_NAME`,
 `NGINX_OPEN_HTTPS_PORT` (alias storico `NGINX_ENABLE_SSL`). (`ODOO_HOME` è costante e viene ignorata.)
 
+> **Il file lo scrivi tu.** Il repository non spedisce un `production.env`: un `.env` contiene la
+> password admin e la password del database, quindi `configs/*.env` è escluso da git per scelta
+> (`.gitignore`). Le uniche due eccezioni sono i preset della CI — `configs/ci.env` e
+> `configs/ci-nginx.env`, usa-e-getta per runner effimeri — che valgono come **esempio completo da
+> copiare**.
+
 ```bash
-# configs/production.env
+# production.env
 ODOO_VERSION=18
 ODOO_USER=odoo
 ODOO_PORT=8069
@@ -462,7 +469,7 @@ piano, pur vero, è incompleto. L'installer lo dice prima di stamparlo. Per il p
 `sudo invok --dry-run …`.
 
 ```bash
-./target/release/invok --config configs/production.env --dry-run
+./target/release/invok --config production.env --dry-run
 ```
 
 ---
@@ -574,6 +581,8 @@ invok/
 ├── Cargo.toml
 ├── src/
 │   ├── main.rs              # entry point: install (parse → prompt → checks → lock → execute) | rollback
+│   ├── lib.rs               # la libreria che i test usano: main.rs è solo il guscio
+│   ├── error.rs             # errori di dominio (thiserror), per step
 │   ├── cli.rs               # argomenti CLI (clap) + sottocomando `rollback`/`uninstall`
 │   ├── rollback.rs          # rollback dallo stato persistito (reidratazione step + report residui)
 │   ├── config.rs            # cascata CLI/.env/default + parser .env dichiarativo + validatori
@@ -589,6 +598,16 @@ invok/
 │   ├── logging.rs           # tracing TTY + file
 │   ├── lockfile.rs          # lock anti-concorrenza (RAII)
 │   ├── interrupt.rs         # Ctrl-C/SIGTERM: alza un flag, il motore lo osserva
+│   ├── packaging/           # PRIMO CONFINE: "con quali comandi si installa, e come si chiama qui"
+│   │   ├── mod.rs           #   PackageManager + i gruppi di alternative per famiglia
+│   │   ├── apt.rs           #   backend Debian/Ubuntu
+│   │   └── dnf.rs           #   backend Fedora
+│   ├── distro/              # SECONDO CONFINE: "dove stanno i file, chi governa il firewall"
+│   │   ├── mod.rs           #   trait Distro + OsFamily (persistita nel manifesto)
+│   │   ├── debian.rs        #   percorsi nginx, cluster PostgreSQL già inizializzato
+│   │   ├── fedora.rs        #   default site dentro nginx.conf, SELinux, init del cluster
+│   │   ├── ufw.rs           #   firewall della famiglia deb
+│   │   └── firewalld.rs     #   firewall della famiglia rpm
 │   └── steps/               # gli step reali (uno per file)
 │       ├── prepare_opt_root.rs   create_odoo_user.rs   setup_log_dir.rs
 │       ├── setup_cache_dir.rs    setup_data_dir.rs
@@ -599,12 +618,18 @@ invok/
 │       ├── nginx_*.rs (install/write_config/enable_site/firewall/reload)
 │       └── write_control_script.rs   patch_bashrc.rs
 ├── templates/              # odoo.conf.tpl · odoo.service.tpl · nginx.conf.tpl (embedded nel binario)
-├── configs/               # esempi .env (dev, production) + i preset della CI (ci, ci-nginx)
+├── configs/               # i preset della CI (ci.env, ci-nginx.env) — il tuo .env lo scrivi tu
 ├── debian/                # postinst/postrm del .deb: creano e rimuovono l'alias `vok`
-├── scripts/ci/            # integration-test.sh: installazione reale + verifica della pulizia
+├── rpm/                   # post.sh/postun.sh: gli stessi due gesti per l'altro gestore
+├── scripts/ci/            # integration-test.sh (installazione reale) · journal.sh (lettura del
+│                          #   diario dal log) · selftest-journal.sh (che journal.sh sappia leggerlo)
 ├── .github/workflows/     # test.yml (rapido, mock) · integration.yml (reale) · release.yml
 └── tests/                 # test per-step + coordinamenti + rollback end-to-end
 ```
+
+I due **confini** (`packaging/` e `distro/`) sono il motivo per cui nessuno dei 25 step contiene un
+`match` sulla distribuzione: chi diverge chiede a loro. Aggiungere una famiglia significa aggiungere
+un backend a ciascuno dei due, non toccare gli step — e il trait `Step` non cambia.
 
 I **percorsi che l'installer usa per sé** — manifesto, lock, log — vivono fuori da `/opt/odoo`, che è
 il perimetro che il rollback deve poter rimuovere per intero:

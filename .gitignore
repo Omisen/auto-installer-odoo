@@ -7,7 +7,6 @@ configs/*.env
 # La variante con Nginx (B-V3-7): senza di lei il job `nginx` non troverebbe il
 # file al checkout, e `tests/ci_config.rs` fallirebbe pure in CI.
 !configs/ci-nginx.env
-temp/*.txt
 docs/*.md
 
 # Rust build artifacts
