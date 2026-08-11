@@ -17,25 +17,39 @@
 # La CI di qualità (fmt/clippy/build/test) resta in test.yml, su push/PR.
 # Qui si producono solo gli artefatti, su tag. Tagga commit già verdi.
 #
-# DUE EVENTI, DUE MOMENTI — e la distinzione è la cosa da non perdere di vista
-# leggendo questo file:
+# COME SI RILASCIA, e perché il file è fatto così.
 #
-#   push di un tag       → si COSTRUISCONO gli artefatti e si allegano a una
-#                          release in BOZZA. Reversibile: se qualcosa è storto,
-#                          si cancella la bozza e si ritagga.
-#   release published    → si pubblica su crates.io. IRREVERSIBILE: dal registro
-#                          non si cancella, si può solo `yank`. Perciò è agganciato
-#                          alla pubblicazione manuale della bozza — lo stesso
-#                          checkpoint umano che aveva il publish del repository
-#                          apt/dnf prima di essere rimosso.
+# La release e il suo tag li crea un UMANO, dalla UI di GitHub: si apre una
+# bozza, ci si scrive dentro il tag nuovo (`v3.0.0`) con target `main`, e si
+# preme Publish. Il tag NON esiste finché non si pubblica: nasce in quel
+# momento. Quel singolo gesto fa scattare DUE eventi insieme, ed è la cosa da
+# tenere a mente leggendo il resto:
 #
-# Ogni job dichiara quindi a QUALE dei due eventi appartiene, con un
-# `if: github.event_name == ...`. Non è una formalità: senza quella riga, alla
-# pubblicazione della release ripartirebbero anche i job di build, e
-# `create-gh-release-action` proverebbe a creare una release che esiste già.
-# C'è un test che pretende la condizione su ogni job (`tests/ci_config.rs`),
-# perché è una riga che si dimentica di aggiungere al prossimo job e il sintomo
-# arriverebbe solo il giorno della release.
+#   push del tag (appena creato) → si COSTRUISCONO gli artefatti e si allegano
+#                                  alla release che hai appena pubblicato
+#   release published            → si pubblica su crates.io. IRREVERSIBILE: dal
+#                                  registro non si cancella, si può solo `yank`
+#
+# Ogni job dichiara a QUALE dei due appartiene con `if: github.event_name == ...`.
+# Senza quella riga GitHub li esegue TUTTI a ENTRAMBI gli eventi. C'è un test che
+# la pretende su ogni job (`tests/ci_config.rs`), perché è una riga che si
+# dimentica di aggiungere al PROSSIMO job e il sintomo arriverebbe solo il giorno
+# della release.
+#
+# NON C'È UN JOB CHE CREA LA RELEASE, ed è una rimozione deliberata: ce n'era uno
+# (`create-gh-release-action` con `draft: true`) scritto per il flusso opposto —
+# spingi il tag da CLI, la CI ti prepara la bozza. Con il flusso vero i due si
+# combattevano: pubblicavi, nasceva il tag, quel job partiva e RIMETTEVA IN BOZZA
+# la release appena pubblicata; tu ripubblicavi, e il secondo `release: published`
+# rieseguiva `cargo publish` su una versione già caricata → `already exists`, job
+# rosso, con la pubblicazione in realtà riuscita al primo giro. Un job che crea
+# ciò che l'utente ha già creato non è ridondante: è un antagonista.
+#
+# Conseguenza dichiarata: gli asset compaiono qualche minuto DOPO che la release
+# è visibile, e il controllo «il README nomina questo file» gira a release già
+# pubblica. È il SECONDO livello di quella guardia, non il primo: il primo è
+# `cargo test`, che compone i nomi attesi da Cargo.toml a ogni push e ferma molto
+# prima del tag (A-V3-17).
 # =============================================================================
 
 name: Release
@@ -51,25 +65,14 @@ permissions:
   contents: write # necessario per creare la Release e caricare gli asset
 
 jobs:
-  # Crea la GitHub Release dal tag. Bozza: gli asset vengono allegati ma la
-  # release non è pubblica finché non la revisioni (incolli il changelog) e la
-  # pubblichi manualmente.
-  create-release:
-    if: github.event_name == 'push'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - uses: taiki-e/create-gh-release-action@v1
-        with:
-          draft: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
   # Builda e carica un archivio per ogni target. L'action gestisce cross-build
   # (musl) e genera archivio .tar.gz + file .sha256 accanto ad esso.
+  #
+  # Nessun `needs`: la release esiste già quando questo job parte — l'hai creata
+  # tu, ed è il gesto di pubblicarla ad aver fatto nascere il tag che ci ha
+  # svegliati. Non c'è niente da aspettare.
   upload-assets:
     if: github.event_name == 'push'
-    needs: create-release
     strategy:
       fail-fast: false
       matrix:
@@ -100,7 +103,6 @@ jobs:
   # su qualsiasi distro.
   deb:
     if: github.event_name == 'push'
-    needs: create-release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -157,7 +159,6 @@ jobs:
   # confezioni.
   rpm:
     if: github.event_name == 'push'
-    needs: create-release
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -250,19 +251,66 @@ jobs:
       # shell, ed è la classe di difetti che questo progetto ha già pagato
       # altrove (mai `source`/`eval` su dati che vengono da fuori).
       - name: La versione del manifesto è quella del tag
+        id: manifesto
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
           atteso="${TAG#v}"
-          reale="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          metadati="$(cargo metadata --no-deps --format-version 1)"
+          nome="$(printf '%s' "$metadati" | jq -r '.packages[0].name')"
+          reale="$(printf '%s' "$metadati" | jq -r '.packages[0].version')"
           if [ "$atteso" != "$reale" ]; then
             echo "::error::il tag dice '$atteso', Cargo.toml dice '$reale': su crates.io la versione non si corregge"
             exit 1
           fi
-          echo "✔ tag e manifesto concordano: $reale"
+          echo "✔ tag e manifesto concordano: $nome $reale"
+          echo "nome=$nome" >> "$GITHUB_OUTPUT"
+          echo "versione=$reale" >> "$GITHUB_OUTPUT"
+
+      # Questa versione è GIÀ sul registro?
+      #
+      # Serve perché `release: published` può scattare più di una volta per la
+      # stessa release, e la seconda volta `cargo publish` esce 101 con
+      # `already exists`: un job rosso su una pubblicazione perfettamente
+      # riuscita al primo giro. Succede solo se qualcosa riporta la release in
+      # bozza e la si ripubblica — la ragione per cui `create-release` non esiste
+      # più — ma un evento ripetuto non è sotto il nostro controllo, e un rosso
+      # che non significa niente insegna a ignorare i rossi.
+      #
+      # È sicuro saltare perché il passo QUI SOPRA ha già stabilito che la
+      # versione del manifesto è quella del tag: se quella versione è sul
+      # registro, è la nostra, e ripubblicarla è impossibile per definizione.
+      # Fuori dal 200 e dal 404 NON si indovina: si prosegue e l'ultima parola
+      # resta a `cargo`, che i duplicati li rifiuta comunque. Questa guardia può
+      # solo trasformare un rosso inutile in un verde onesto — mai autorizzare
+      # una pubblicazione che altrimenti non avverrebbe.
+      - name: È già su crates.io?
+        id: registro
+        env:
+          NOME: ${{ steps.manifesto.outputs.nome }}
+          VERSIONE: ${{ steps.manifesto.outputs.versione }}
+        run: |
+          codice="$(curl -sS -o /dev/null -w '%{http_code}' \
+            -H "User-Agent: invok-release (https://github.com/Omisen/invok)" \
+            "https://crates.io/api/v1/crates/$NOME/$VERSIONE" || echo 000)"
+          case "$codice" in
+            200)
+              echo "salta=si" >> "$GITHUB_OUTPUT"
+              echo "::notice::$NOME $VERSIONE è già su crates.io: niente da pubblicare."
+              ;;
+            404)
+              echo "✔ $NOME $VERSIONE non è ancora sul registro: si procede."
+              ;;
+            *)
+              echo "::warning::crates.io ha risposto $codice, che non so interpretare: decide cargo."
+              ;;
+          esac
+
       - name: cargo publish --dry-run
+        if: steps.registro.outputs.salta != 'si'
         run: cargo publish --dry-run --locked
       - name: cargo publish
+        if: steps.registro.outputs.salta != 'si'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked

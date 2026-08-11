@@ -831,12 +831,19 @@ fn every_release_job_declares_which_event_it_belongs_to() {
         }
     }
 
-    assert!(
-        visti.len() >= 5,
-        "{WORKFLOW}: attesi almeno 5 job, trovati {}: {:?}",
-        visti.len(),
-        visti.iter().map(|(n, _)| n).collect::<Vec<_>>()
-    );
+    // Il ciclo qui sotto non può fallire su una lista VUOTA: se il parsing
+    // smettesse di riconoscere i job — cambia l'indentazione, cambia il formato —
+    // scorrerebbe zero elementi e il test resterebbe verde mentre non guarda
+    // niente. Si pretendono quindi i job per NOME, non solo un conteggio: un
+    // numero si aggiorna distrattamente quando se ne toglie uno (è successo
+    // rimuovendo `create-release`), un nome mancante dice quale.
+    let nomi: Vec<&str> = visti.iter().map(|(n, _)| n.as_str()).collect();
+    for atteso in ["upload-assets", "deb", "rpm", "crates-io"] {
+        assert!(
+            nomi.contains(&atteso),
+            "{WORKFLOW}: manca il job `{atteso}`; trovati: {nomi:?}"
+        );
+    }
 
     for (nome, cond) in &visti {
         let cond = cond.as_deref().unwrap_or_else(|| {
