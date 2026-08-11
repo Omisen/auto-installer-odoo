@@ -13,6 +13,21 @@ description = "Installer for Odoo — independent CLI installer (not affiliated 
 license = "MIT"
 repository = "https://github.com/Omisen/invok"
 homepage = "https://github.com/Omisen/invok"
+# Metadati della scheda su crates.io. `readme` non è decorativo: senza, la
+# pagina del crate mostra solo la `description` di una riga, e chi arriva da
+# `cargo search` non vede né il rollback né le distribuzioni supportate.
+readme = "README.md"
+# Vincoli del registro, che valgono la pena di essere scritti perché li fa
+# rispettare crates.io e NON cargo: al massimo 5 keyword, ognuna ≤ 20 caratteri,
+# primo carattere alfanumerico. Una violazione non si vede in locale — si vede
+# quando `cargo publish` la rifiuta, cioè dopo il tag, che è il momento peggiore.
+# Per questo c'è un test che le conta e le misura prima.
+keywords = ["odoo", "installer", "cli", "devops", "rollback"]
+# Dalla lista CHIUSA di crates.io (https://crates.io/categories): un valore
+# inventato viene rifiutato al publish. `command-line-utilities` è ciò che
+# questo crate è — un eseguibile, non una libreria da linkare, benché esponga
+# anche un `[lib]` per i test.
+categories = ["command-line-utilities"]
 
 # Metadati per `cargo deb`: producono un .deb che deposita SOLO il binario CLI
 # `invok` in /usr/bin (+ la doc). Il pacchetto NON installa servizi, NON

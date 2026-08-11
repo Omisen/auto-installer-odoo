@@ -33,7 +33,7 @@ cosa. Negli esempi qui sotto si usa la forma estesa; l'alias è sempre equivalen
 | | |
 |---|---|
 | [📋 Requisiti](#-requisiti) | OS, Python, privilegi, spazio, porte |
-| [🚀 Installazione rapida](#-installazione-rapida) | quattro strade, [A](#opzione-a--qualsiasi-distro-binario-precompilato-consigliata-niente-rust) binario · [B](#opzione-b--ubuntu--debian-pacchetto-deb-esperienza-apt-nativa) `.deb` · [C](#opzione-c--fedora-pacchetto-rpm-esperienza-dnf-nativa) `.rpm` · [E](#opzione-e--qualsiasi-distro-build-da-sorgente) sorgente |
+| [🚀 Installazione rapida](#-installazione-rapida) | cinque strade, [A](#opzione-a--qualsiasi-distro-binario-precompilato-consigliata-niente-rust) binario · [B](#opzione-b--ubuntu--debian-pacchetto-deb-esperienza-apt-nativa) `.deb` · [C](#opzione-c--fedora-pacchetto-rpm-esperienza-dnf-nativa) `.rpm` · [D](#opzione-d--qualsiasi-distro-con-rust-cargo-install) `cargo` · [E](#opzione-e--qualsiasi-distro-build-da-sorgente) sorgente |
 | [👀 Anteprima `--dry-run`](#-anteprima-con---dry-run) | cosa farebbe, senza toccare niente |
 | [✅ Verifica post-installazione](#-verifica-post-installazione) | è partito? dove sono log e helper |
 
@@ -104,8 +104,11 @@ cosa. Negli esempi qui sotto si usa la forma estesa; l'alias è sempre equivalen
 **Quale scegliere**, in una riga: se vuoi il comando `invok` nel `PATH` e rimovibile con il
 gestore di pacchetti, prendi la confezione della tua famiglia (**B** per Ubuntu/Debian, **C** per
 Fedora); se ti basta un binario da lanciare dove l'hai scaricato, **A** va su qualsiasi distro; se
-vuoi compilarlo tu, **E** parte dai sorgenti. In tutti i casi è **lo stesso eseguibile** — musl
-statico, nessuna dipendenza — e in tutti Odoo viene installato a runtime, quando lanci il comando.
+hai già Rust, **D** è un `cargo install` e **E** parte dai sorgenti clonati. In tutti i casi è **lo
+stesso programma** — e in tutti Odoo viene installato a runtime, quando lanci il comando.
+
+La differenza che conta è **chi compila**: A, B e C ti danno un binario già pronto (musl statico,
+nessuna dipendenza, nessuna toolchain da installare); D ed E lo compilano sulla tua macchina.
 
 > Gli aggiornamenti si prendono **dalla pagina [Releases](../../releases/latest)**: ogni versione è
 > lì con i suoi `sha256`, e si aggiorna rifacendo il download. Non c'è un repository `apt`/`dnf` da
@@ -191,6 +194,32 @@ sudo vok                                            # alias breve: stesso progra
 
 Rimovibile con `sudo dnf remove invok`. Come il `.deb`, deposita **solo** il binario CLI, più il
 collegamento `vok`.
+
+### Opzione D — Qualsiasi distro con Rust: `cargo install`
+
+Se hai già la toolchain Rust, il crate è su **[crates.io](https://crates.io/crates/invok)**:
+
+```bash
+cargo install invok
+
+invok -V                                            # quale versione è installata
+
+sudo "$(command -v invok)"                          # cargo installa in ~/.cargo/bin, che root non ha nel PATH
+# oppure non-interattivo:
+sudo "$(command -v invok)" --config production.env --with-nginx
+```
+
+Due cose dette per intero, perché è la strada in cui si sbaglia più facilmente:
+
+- **`cargo install` compila dai sorgenti**, non scarica un binario: serve la toolchain Rust e
+  qualche minuto di build. È il canale per chi **ha già** Rust; se non ce l'hai, le opzioni **A**,
+  **B** e **C** ti danno lo *stesso* eseguibile già pronto, senza installare niente per costruirlo.
+- **Il binario finisce in `~/.cargo/bin/`, che è nel `PATH` del tuo utente ma non in quello di
+  root.** Un `sudo invok` secco risponderebbe `command not found`: da qui il `command -v` negli
+  esempi qui sopra. Non c'è nemmeno l'alias `vok`, che lo creano solo le confezioni B e C.
+
+L'aggiornamento è `cargo install invok --force`. Come per le altre strade, Odoo viene installato a
+runtime: `cargo install` deposita il solo comando.
 
 ### Opzione E — Qualsiasi distro: build da sorgente
 

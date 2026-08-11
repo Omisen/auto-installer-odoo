@@ -703,3 +703,165 @@ fn the_deb_and_the_rpm_install_the_same_alias() {
         );
     }
 }
+
+// --- crates.io: la quarta confezione, e l'unica irreversibile --------------
+
+/// I metadati che crates.io pretende sono presenti e nella norma.
+///
+/// Questi vincoli — al massimo 5 keyword, ognuna ≤ 20 caratteri e con il primo
+/// carattere alfanumerico, categorie da una lista chiusa — li fa rispettare il
+/// **registro**, non `cargo build`. Una violazione quindi non si vede né
+/// compilando né testando: si vede quando `cargo publish` la rifiuta, cioè dopo
+/// che il tag è stato spinto e la release pubblicata. Il momento peggiore, per
+/// il canale che è l'unico a non avere un annulla.
+///
+/// La lista delle categorie NON si verifica qui: è chiusa e vive su crates.io,
+/// e ricopiarla vorrebbe dire tenere allineata una quarta copia di un dato che
+/// non possediamo. A dire di no su quella è `cargo publish --dry-run` in
+/// `release.yml`, che interroga il registro vero. Qui si verifica ciò che il
+/// repository sa di sé.
+#[test]
+fn the_crate_metadata_is_publishable() {
+    let leggi = |chiave: &str| {
+        manifest_value("[package]", chiave)
+            .unwrap_or_else(|| panic!("[package] deve dichiarare `{chiave}` per pubblicare"))
+    };
+
+    // `readme` deve puntare a un file che esiste: se non esiste, la scheda su
+    // crates.io resta la sola `description` di una riga e nessuno se ne accorge
+    // guardando il repository.
+    let readme = leggi("readme");
+    assert!(
+        std::path::Path::new(&readme).is_file(),
+        "[package] readme = `{readme}`, che non è un file"
+    );
+
+    let parole: Vec<String> = leggi("keywords")
+        .trim_matches(|c| c == '[' || c == ']')
+        .split(',')
+        .map(|k| k.trim().trim_matches('"').to_string())
+        .filter(|k| !k.is_empty())
+        .collect();
+
+    assert!(
+        !parole.is_empty() && parole.len() <= 5,
+        "crates.io accetta da 1 a 5 keyword, qui ce ne sono {}: {parole:?}",
+        parole.len()
+    );
+    for k in &parole {
+        assert!(
+            k.len() <= 20,
+            "la keyword `{k}` è di {} caratteri: crates.io ne accetta al massimo 20",
+            k.len()
+        );
+        assert!(
+            k.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()),
+            "la keyword `{k}` deve iniziare con un carattere alfanumerico"
+        );
+        assert!(
+            k.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
+            "la keyword `{k}` contiene un carattere che crates.io non accetta"
+        );
+    }
+
+    let categorie = leggi("categories");
+    assert!(
+        categorie.contains('"'),
+        "[package] categories non dichiara nessuna categoria: {categorie}"
+    );
+
+    // Il comando che il README fa incollare nomina il crate DAVVERO pubblicato.
+    // È la stessa guardia dei nomi di file .deb/.rpm (A-V3-17) applicata alla
+    // quarta confezione: due fonti che devono coincidere, e un sintomo — un
+    // `cargo install` che non trova nulla — che non arriva mai a noi.
+    let nome = leggi("name");
+    let readme_testo = std::fs::read_to_string("README.md").expect("leggo README.md");
+    assert!(
+        readme_testo.contains(&format!("cargo install {nome}")),
+        "README: il comando deve essere `cargo install {nome}`, il crate che release.yml pubblica"
+    );
+}
+
+/// Ogni job di `release.yml` dichiara a quale dei due eventi appartiene.
+///
+/// Il workflow è agganciato a **due** eventi con due significati diversi: il
+/// push del tag costruisce gli artefatti (reversibile: si cancella la bozza e si
+/// ritagga), la pubblicazione della release manda il crate su crates.io
+/// (irreversibile: si può solo `yank`). Senza un `if` esplicito, GitHub esegue
+/// **ogni** job a **ogni** evento — quindi alla pubblicazione ripartirebbero i
+/// build e `create-gh-release-action` proverebbe a creare una release che esiste
+/// già.
+///
+/// Il test guarda i job uno per uno invece di cercare la stringa da qualche
+/// parte nel file: è precisamente il difetto che l'audit chiama «un controllo
+/// che trova la stringa giusta nel posto sbagliato», e qui basterebbe che il
+/// prossimo job aggiunto ne fosse sprovvisto perché il sintomo arrivi solo il
+/// giorno della release.
+#[test]
+fn every_release_job_declares_which_event_it_belongs_to() {
+    const WORKFLOW: &str = ".github/workflows/release.yml";
+    let testo = std::fs::read_to_string(WORKFLOW).unwrap_or_else(|_| panic!("manca {WORKFLOW}"));
+
+    let corpo = testo
+        .split_once("\njobs:\n")
+        .map(|(_, dopo)| dopo)
+        .unwrap_or_else(|| panic!("{WORKFLOW}: manca la sezione `jobs:`"));
+
+    // Un job è una chiave a DUE spazi d'indentazione; le sue chiavi (`if`,
+    // `needs`, `runs-on`…) stanno a quattro. Tutto ciò che sta più a fondo
+    // appartiene agli step e non ci riguarda.
+    let mut job: Option<String> = None;
+    let mut visti: Vec<(String, Option<String>)> = Vec::new();
+    for riga in corpo.lines() {
+        if let Some(nome) = riga
+            .strip_prefix("  ")
+            .filter(|r| !r.starts_with([' ', '#', '-']))
+            .and_then(|r| r.split_once(':'))
+            .map(|(n, _)| n)
+        {
+            job = Some(nome.to_string());
+            visti.push((nome.to_string(), None));
+        } else if let Some(cond) = riga.strip_prefix("    if:") {
+            if job.is_some() {
+                if let Some(ultimo) = visti.last_mut() {
+                    ultimo.1 = Some(cond.trim().to_string());
+                }
+            }
+        }
+    }
+
+    assert!(
+        visti.len() >= 5,
+        "{WORKFLOW}: attesi almeno 5 job, trovati {}: {:?}",
+        visti.len(),
+        visti.iter().map(|(n, _)| n).collect::<Vec<_>>()
+    );
+
+    for (nome, cond) in &visti {
+        let cond = cond.as_deref().unwrap_or_else(|| {
+            panic!(
+                "{WORKFLOW}: il job `{nome}` non dichiara un `if`, quindi gira a ENTRAMBI gli \
+                 eventi: al `release: published` ripartirebbero i build"
+            )
+        });
+        if nome == "crates-io" {
+            assert!(
+                cond.contains("github.event_name == 'release'"),
+                "{WORKFLOW}: `{nome}` deve girare sul `release: published`, non sul tag — su \
+                 crates.io non si torna indietro: {cond}"
+            );
+            assert!(
+                cond.contains("prerelease == false"),
+                "{WORKFLOW}: `{nome}` deve escludere le prerelease: crates.io non ha il concetto \
+                 di bozza, e una beta lì è indistinguibile da una stabile: {cond}"
+            );
+        } else {
+            assert!(
+                cond.contains("github.event_name == 'push'"),
+                "{WORKFLOW}: `{nome}` costruisce artefatti e deve girare solo sul push del tag: \
+                 {cond}"
+            );
+        }
+    }
+}

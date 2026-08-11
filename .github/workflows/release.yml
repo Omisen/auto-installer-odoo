@@ -16,6 +16,26 @@
 #
 # La CI di qualità (fmt/clippy/build/test) resta in test.yml, su push/PR.
 # Qui si producono solo gli artefatti, su tag. Tagga commit già verdi.
+#
+# DUE EVENTI, DUE MOMENTI — e la distinzione è la cosa da non perdere di vista
+# leggendo questo file:
+#
+#   push di un tag       → si COSTRUISCONO gli artefatti e si allegano a una
+#                          release in BOZZA. Reversibile: se qualcosa è storto,
+#                          si cancella la bozza e si ritagga.
+#   release published    → si pubblica su crates.io. IRREVERSIBILE: dal registro
+#                          non si cancella, si può solo `yank`. Perciò è agganciato
+#                          alla pubblicazione manuale della bozza — lo stesso
+#                          checkpoint umano che aveva il publish del repository
+#                          apt/dnf prima di essere rimosso.
+#
+# Ogni job dichiara quindi a QUALE dei due eventi appartiene, con un
+# `if: github.event_name == ...`. Non è una formalità: senza quella riga, alla
+# pubblicazione della release ripartirebbero anche i job di build, e
+# `create-gh-release-action` proverebbe a creare una release che esiste già.
+# C'è un test che pretende la condizione su ogni job (`tests/ci_config.rs`),
+# perché è una riga che si dimentica di aggiungere al prossimo job e il sintomo
+# arriverebbe solo il giorno della release.
 # =============================================================================
 
 name: Release
@@ -24,6 +44,8 @@ on:
   push:
     tags:
       - "v[0-9]+.*"
+  release:
+    types: [published]
 
 permissions:
   contents: write # necessario per creare la Release e caricare gli asset
@@ -33,6 +55,7 @@ jobs:
   # release non è pubblica finché non la revisioni (incolli il changelog) e la
   # pubblichi manualmente.
   create-release:
+    if: github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -45,6 +68,7 @@ jobs:
   # Builda e carica un archivio per ogni target. L'action gestisce cross-build
   # (musl) e genera archivio .tar.gz + file .sha256 accanto ad esso.
   upload-assets:
+    if: github.event_name == 'push'
     needs: create-release
     strategy:
       fail-fast: false
@@ -75,6 +99,7 @@ jobs:
   # — quelle le crea l'installer a runtime. Buildato da musl statico, così gira
   # su qualsiasi distro.
   deb:
+    if: github.event_name == 'push'
     needs: create-release
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -131,6 +156,7 @@ jobs:
   # artefatto** che finisce nel .deb e nel tar.gz. Un solo binario, tre
   # confezioni.
   rpm:
+    if: github.event_name == 'push'
     needs: create-release
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -172,4 +198,72 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" "$RPM" "$RPM.sha256" --clobber
+
+  # Pubblicazione su crates.io — `cargo install invok` per chi ha già Rust.
+  # Quarta confezione dello stesso programma, con una differenza che governa
+  # tutto il resto di questo job: **è l'unica irreversibile.** Da una GitHub
+  # Release si cancella un asset; da crates.io no. Si può solo `yank`, che
+  # nasconde la versione a chi non l'ha ancora richiesta ma non la rimuove, e il
+  # NOME del crate resta preso per sempre.
+  #
+  # Da qui le tre cautele, in ordine di quando intervengono:
+  #   1. l'aggancio è `release: published`, non il tag: si pubblica quando un
+  #      umano ha guardato la bozza e l'ha pubblicata, non quando parte una CI;
+  #   2. una PRERELEASE non arriva su crates.io. Il registro non ha il concetto
+  #      di bozza, quindi una beta pubblicata lì è indistinguibile da una stabile
+  #      per chiunque faccia `cargo install invok`;
+  #   3. `--dry-run` PRIMA del publish vero: impacchetta e compila esattamente
+  #      come farebbe il publish, ma senza caricare nulla. Un manifesto
+  #      incompleto o una keyword fuori norma cadono lì, dove costa un job rosso,
+  #      invece che a metà upload.
+  crates-io:
+    if: github.event_name == 'release' && github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # Restringe il default `contents: write` dichiarato in cima: questo job non
+    # tocca il repository, carica su un registro esterno. Il token che gli
+    # interessa è CARGO_REGISTRY_TOKEN, e non c'è motivo che abbia anche i
+    # permessi di scrittura sui contenuti.
+    permissions:
+      contents: read
+    steps:
+      # Il ref è ESPLICITO. Su un evento `release`, il checkout di default non
+      # è garantito essere il commit taggato, e pubblicare su un registro
+      # irreversibile un albero diverso da quello che è stato revisionato e
+      # taggato è il modo peggiore di scoprire la differenza.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.release.tag_name }}
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Cache di cargo
+        uses: Swatinem/rust-cache@v2
+      # Stessa filosofia dei controlli "tag ↔ versione" già presenti sul .deb e
+      # sul .rpm: il numero non si congettura, si legge dalle due fonti e si
+      # confrontano. Qui però il verso è invertito rispetto a quei due — non
+      # componiamo un nome di file, confrontiamo un tag con un manifesto — e il
+      # danno di uno scarto è più grave: `invok 3.0.0` su crates.io costruito
+      # dal tag `v3.1.0` non si corregge ripubblicando, perché quella versione
+      # è occupata.
+      #
+      # Il tag passa da una variabile d'ambiente e non da `${{ }}` dentro lo
+      # script: un valore interpolato nel corpo di un `run` è testo che diventa
+      # shell, ed è la classe di difetti che questo progetto ha già pagato
+      # altrove (mai `source`/`eval` su dati che vengono da fuori).
+      - name: La versione del manifesto è quella del tag
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          atteso="${TAG#v}"
+          reale="$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[0].version')"
+          if [ "$atteso" != "$reale" ]; then
+            echo "::error::il tag dice '$atteso', Cargo.toml dice '$reale': su crates.io la versione non si corregge"
+            exit 1
+          fi
+          echo "✔ tag e manifesto concordano: $reale"
+      - name: cargo publish --dry-run
+        run: cargo publish --dry-run --locked
+      - name: cargo publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: cargo publish --locked
 
