@@ -33,7 +33,7 @@ cosa. Negli esempi qui sotto si usa la forma estesa; l'alias è sempre equivalen
 | | |
 |---|---|
 | [📋 Requisiti](#-requisiti) | OS, Python, privilegi, spazio, porte |
-| [🚀 Installazione rapida](#-installazione-rapida) | cinque strade, [A](#opzione-a--qualsiasi-distro-binario-precompilato-consigliata-niente-rust) binario · [B](#opzione-b--ubuntu--debian-pacchetto-deb-esperienza-apt-nativa) `.deb` · [C](#opzione-c--fedora-pacchetto-rpm-esperienza-dnf-nativa) `.rpm` · [D](#opzione-d--repository-aptdnf-aggiornamenti-automatici) repository · [E](#opzione-e--qualsiasi-distro-build-da-sorgente) sorgente |
+| [🚀 Installazione rapida](#-installazione-rapida) | quattro strade, [A](#opzione-a--qualsiasi-distro-binario-precompilato-consigliata-niente-rust) binario · [B](#opzione-b--ubuntu--debian-pacchetto-deb-esperienza-apt-nativa) `.deb` · [C](#opzione-c--fedora-pacchetto-rpm-esperienza-dnf-nativa) `.rpm` · [E](#opzione-e--qualsiasi-distro-build-da-sorgente) sorgente |
 | [👀 Anteprima `--dry-run`](#-anteprima-con---dry-run) | cosa farebbe, senza toccare niente |
 | [✅ Verifica post-installazione](#-verifica-post-installazione) | è partito? dove sono log e helper |
 
@@ -104,9 +104,12 @@ cosa. Negli esempi qui sotto si usa la forma estesa; l'alias è sempre equivalen
 **Quale scegliere**, in una riga: se vuoi il comando `invok` nel `PATH` e rimovibile con il
 gestore di pacchetti, prendi la confezione della tua famiglia (**B** per Ubuntu/Debian, **C** per
 Fedora); se ti basta un binario da lanciare dove l'hai scaricato, **A** va su qualsiasi distro; se
-gestisci più macchine e vuoi che gli aggiornamenti arrivino da soli con `apt upgrade` / `dnf upgrade`,
-configura il **repository** (**D**). In tutti i casi è **lo stesso eseguibile** — musl statico, nessuna
-dipendenza — e in tutti Odoo viene installato a runtime, quando lanci il comando.
+vuoi compilarlo tu, **E** parte dai sorgenti. In tutti i casi è **lo stesso eseguibile** — musl
+statico, nessuna dipendenza — e in tutti Odoo viene installato a runtime, quando lanci il comando.
+
+> Gli aggiornamenti si prendono **dalla pagina [Releases](../../releases/latest)**: ogni versione è
+> lì con i suoi `sha256`, e si aggiorna rifacendo il download. Non c'è un repository `apt`/`dnf` da
+> aggiungere ai sorgenti della macchina.
 
 ### Opzione A — Qualsiasi distro: binario precompilato (consigliata, niente Rust)
 
@@ -135,7 +138,7 @@ sudo ./invok                                        # guidato (interattivo)
 sudo ./invok --config production.env --with-nginx
 ```
 
-> L'alias `vok` lo creano i **pacchetti** (opzioni B, C, D): qui hai un file solo, che puoi
+> L'alias `vok` lo creano i **pacchetti** (opzioni B e C): qui hai un file solo, che puoi
 > rinominare come preferisci.
 
 ### Opzione B — Ubuntu / Debian: pacchetto `.deb` (esperienza `apt` nativa)
@@ -188,47 +191,6 @@ sudo vok                                            # alias breve: stesso progra
 
 Rimovibile con `sudo dnf remove invok`. Come il `.deb`, deposita **solo** il binario CLI, più il
 collegamento `vok`.
-
-### Opzione D — Repository `apt`/`dnf` (aggiornamenti automatici)
-
-Le opzioni B e C installano **un file**: per passare alla versione successiva bisogna accorgersi che è
-uscita e rifare il download. Con il repository configurato, `invok` diventa un pacchetto come
-gli altri e l'aggiornamento arriva con `apt upgrade` / `dnf upgrade`.
-
-```bash
-# --- Ubuntu / Debian
-sudo install -d -m 0755 /etc/apt/keyrings
-sudo curl -fsSL -o /etc/apt/keyrings/invok.asc https://omisen.github.io/invok/KEY.asc
-echo "deb [signed-by=/etc/apt/keyrings/invok.asc] https://omisen.github.io/invok/apt ./" \
-  | sudo tee /etc/apt/sources.list.d/invok.list
-
-sudo apt update
-sudo apt install invok
-```
-
-```bash
-# --- Fedora
-sudo curl -fsSL -o /etc/yum.repos.d/invok.repo https://omisen.github.io/invok/rpm/invok.repo
-sudo dnf install invok
-```
-
-Tre cose dette per intero, perché nessuna delle tre è indovinabile:
-
-- **Il repository serve solo l'ultima versione.** Non è una limitazione temporanea: è il contratto del
-  canale. `apt`/`dnf` mostrano comunque solo la più recente, quindi nell'uso normale non cambia nulla;
-  quello che non puoi fare è `apt install invok=3.0.0-1` per tornare indietro. Le versioni
-  storiche restano tutte su [Releases](../../releases), che non viene mai modificata — è da lì che si
-  fa un downgrade, con le opzioni B o C.
-- **Il `./` finale nella riga `deb` non è un refuso.** È la sintassi dei repository *flat*, che è il
-  formato usato qui: senza, `apt update` non trova nulla.
-- **`repo_gpgcheck=1` con `gpgcheck=0` non è una verifica in meno.** La firma GPG copre i *metadati*
-  del repository, e i metadati contengono lo SHA-256 di ogni pacchetto: la catena è completa. I
-  pacchetti non sono firmati singolarmente perché così restano **byte-identici** a quelli allegati
-  alla release — gli stessi di cui questo README pubblica lo `sha256`. È lo stesso modello di Debian,
-  dove nessun `.deb` è firmato per conto suo.
-
-La chiave pubblica è [`KEY.asc`](https://omisen.github.io/invok/KEY.asc); il fingerprint
-con cui confrontarla è stampato sulla [pagina del repository](https://omisen.github.io/invok/).
 
 ### Opzione E — Qualsiasi distro: build da sorgente
 
