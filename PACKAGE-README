@@ -1,0 +1,76 @@
+invok — installer for Odoo, with surgical rollback
+==================================================
+
+You are reading this from an installed package, so this file does not
+explain how to install invok: you already have it. It says what you
+have, where an installation puts things, and how to remove it.
+
+The full documentation — the engine, the step-by-step reference, the
+rollback model, multi-distribution support — lives in the wiki:
+
+    https://github.com/Omisen/invok/wiki
+
+
+THE COMMAND
+-----------
+
+    invok             install Odoo, guided by prompts
+    invok --dry-run   resolve the configuration and print the plan,
+                      changing nothing on the system
+    invok --help      every option
+    invok -V          the installer's own version
+
+`vok` is a symlink to the same program, not a second binary:
+`vok --dry-run` and `invok --dry-run` do exactly the same thing.
+
+invok runs through sudo, from a normal user:
+
+    sudo invok
+
+Either the installation succeeds completely, or the system goes back to
+exactly what it was. There is no intermediate state left behind.
+
+
+WHAT AN INSTALLATION LEAVES ON THE MACHINE
+------------------------------------------
+
+    /opt/odoo/odoo<version>        sources, virtualenv, config file
+    /opt/odoo/.local/share/Odoo    the filestore (attachments)
+    /etc/systemd/system/           the odoo<version> service unit
+    /var/lib/invok/state.json      the uninstall manifest (root, 0600)
+    /var/log/invok.log             the installer's own log
+    /run/invok.lock                the lock, while a run is in progress
+
+With --with-nginx, a virtual host and the firewall rules for it.
+
+The manifest is the only record of which artifacts invok created and
+which ones it found already on the machine. Do not remove it: it is
+what makes the installation removable later.
+
+
+REMOVING AN INSTALLATION
+------------------------
+
+    sudo invok rollback --dry-run    list what would be undone
+    sudo invok rollback              undo it
+
+Only what invok created is removed. A database, a package, a user or a
+configuration file that was already on the machine is left untouched —
+that distinction is the whole point of the manifest.
+
+If an installation is interrupted, the same command cleans up whatever
+that run had already done.
+
+
+INDEPENDENT PROJECT
+-------------------
+
+Not affiliated with Odoo S.A., nor endorsed or sponsored by it. "Odoo"
+is a trademark of Odoo S.A. and is used here only to name the software
+this tool installs. invok does not redistribute Odoo code: it downloads
+it at runtime from the official odoo/odoo repository, onto the machine
+being installed.
+
+MIT licence. This package contains only the invok binary and this file.
+Odoo and wkhtmltopdf (both LGPLv3) are fetched at runtime from their
+official sources and remain subject to their own licences.

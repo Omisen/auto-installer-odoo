@@ -396,8 +396,10 @@ The installer was originally written in **Bash**; those versions are archived at
 a complete **rewrite in Rust** with transactional rollback, and is the only one in this repository.
 
 MIT — see [LICENSE](LICENSE). The published `.tar.gz`, `.deb` and `.rpm` contain **only** the `invok`
-binary and this README: no third-party code is redistributed. Odoo and wkhtmltopdf (both LGPLv3) are
-downloaded at runtime from their official sources and remain subject to their own licences.
+binary and a short plain-text guide (`PACKAGE-README`, installed as
+`/usr/share/doc/invok/README`): no third-party code is redistributed. Odoo and wkhtmltopdf (both
+LGPLv3) are downloaded at runtime from their official sources and remain subject to their own
+licences.
 
 This project is independent and is **not affiliated with Odoo S.A.**, nor endorsed by it; “Odoo” is a
 trademark of Odoo S.A.

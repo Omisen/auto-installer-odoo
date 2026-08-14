@@ -366,9 +366,19 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
             text.contains("755"),
             "{name}: a binary without the execute bit is not a binary"
         );
+        // the SOURCE, not just "README": the destination is
+        // `usr/share/doc/invok/README`, so a bare substring check passes even
+        // when the wrong file is shipped. what must be pinned is that the
+        // packages carry the plain-text `PACKAGE-README` and never `README.md`,
+        // whose install section is markdown-and-HTML for a renderer that does
+        // not exist at `less /usr/share/doc/invok/README`.
         assert!(
-            text.contains("README"),
-            "{name}: the docs travel with the package in both wrappers"
+            text.contains("PACKAGE-README"),
+            "{name}: the packages must ship PACKAGE-README, the plain-text doc"
+        );
+        assert!(
+            !text.contains("\"README.md\"") && !text.contains("= \"README.md\""),
+            "{name}: README.md is the repository's front page, not the packaged doc"
         );
     }
 
@@ -570,7 +580,8 @@ fn the_version_the_binary_reports_is_the_one_in_the_manifest() {
 #[test]
 fn every_package_face_disclaims_affiliation_with_odoo() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("reading Cargo.toml");
-    let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
+    let readme = std::fs::read_to_string("README.md").expect("reading README.md");
+    let packaged = std::fs::read_to_string("PACKAGE-README").expect("reading PACKAGE-README");
 
     // The metadata block, isolated: searching the whole manifest would pass
     // even if the disclaimer lived only in a comment — and a comment ends up in
@@ -591,6 +602,9 @@ fn every_package_face_disclaims_affiliation_with_odoo() {
 
     for (where_, text) in [
         ("README.md", readme.as_str()),
+        // the fourth face: the only one a customer reads AFTER installing, and
+        // the one a split into two documents could quietly leave behind.
+        ("PACKAGE-README", packaged.as_str()),
         (
             ".deb (extended-description)",
             &block("[package.metadata.deb]"),

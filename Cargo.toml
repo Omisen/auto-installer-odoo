@@ -60,9 +60,29 @@ depends = "$auto"
 # repository saying so, and the README command would 404. That is how A-V3-17
 # happened, in reverse. Written here, the revision is a value tests can read.
 revision = "1"
+# The packaged doc is `PACKAGE-README`, NOT `README.md`, and the two are
+# different documents rather than two renderings of one.
+#
+# The file is copied verbatim: nothing renders it, so whoever runs
+# `less /usr/share/doc/invok/README` reads the raw text. Markdown survives
+# that; HTML does not, which would put the repository README's presentation
+# and this file's legibility in direct conflict.
+#
+# The deeper reason is the ten version-pinned strings — download URLs and full
+# filenames — that live in README.md's install section, guarded by
+# `tests/ci_config.rs` and by `release.yml`. A second copy of that section
+# would carry those strings with no guard on them, and would fail SILENTLY: the
+# named file still exists from an older release, so the customer installs the
+# wrong version and nothing says so. That is A-V3-17 exactly.
+#
+# A README inside an already-installed package has no business explaining how
+# to install it, so the packaged file simply has no install section — and
+# therefore nothing to keep in step. What IS duplicated is the non-affiliation
+# disclaimer, which must appear on every face of the package, and
+# `every_package_face_disclaims_affiliation_with_odoo` checks all four.
 assets = [
     ["target/release/invok", "usr/bin/", "755"],
-    ["README.md", "usr/share/doc/invok/README", "644"],
+    ["PACKAGE-README", "usr/share/doc/invok/README", "644"],
 ]
 # The short `vok` alias is a SYMLINK created by the maintainer scripts, not a
 # second binary: two identical executables in /usr/bin would be 8 MB wasted and
@@ -92,7 +112,7 @@ summary = "Odoo installer with surgical rollback (Ubuntu/Debian/Fedora) — inde
 release = "1"
 assets = [
     { source = "target/release/invok", dest = "/usr/bin/invok", mode = "755" },
-    { source = "README.md", dest = "/usr/share/doc/invok/README", mode = "644" },
+    { source = "PACKAGE-README", dest = "/usr/share/doc/invok/README", mode = "644" },
 ]
 # The `vok` alias, rpm counterpart of the deb block's `maintainer-scripts`.
 #
