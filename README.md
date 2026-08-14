@@ -1,25 +1,48 @@
-<p align="center">
-  <img src=".github/assets/invok-logo.png" alt="Invok" width="600">
+<div align="center">
+
+<img src=".github/assets/invok-logo.png" alt="Invok" width="560">
+
+<h3>Installer for Odoo — with surgical rollback</h3>
+
+<p>
+  <em>Either the installation succeeds completely, or the system goes back to exactly what it was.</em>
 </p>
 
-> Installer for Odoo
+<p>
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/License-MIT-blue.svg"></a>
+  <a href="https://github.com/Omisen/invok/actions/workflows/test.yml"><img alt="CI" src="https://github.com/Omisen/invok/actions/workflows/test.yml/badge.svg"></a>
+  <a href="https://github.com/Omisen/invok/actions/workflows/integration.yml"><img alt="Integration" src="https://github.com/Omisen/invok/actions/workflows/integration.yml/badge.svg"></a>
+  <a href="https://crates.io/crates/invok"><img alt="crates.io" src="https://img.shields.io/crates/v/invok.svg?logo=rust&color=E37602"></a>
+</p>
 
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![CI](https://github.com/Omisen/invok/actions/workflows/test.yml/badge.svg)](https://github.com/Omisen/invok/actions/workflows/test.yml)
-[![Integration](https://github.com/Omisen/invok/actions/workflows/integration.yml/badge.svg)](https://github.com/Omisen/invok/actions/workflows/integration.yml)
-![Odoo 16–19](https://img.shields.io/badge/Odoo-16%20%7C%2017%20%7C%2018%20%7C%2019-875A7B)
-![Ubuntu · Debian · Fedora](https://img.shields.io/badge/Ubuntu%20%C2%B7%20Debian%20%C2%B7%20Fedora-supported-informational)
+<p>
+  <img alt="Odoo 16 | 17 | 18 | 19" src="https://img.shields.io/badge/Odoo-16%20%7C%2017%20%7C%2018%20%7C%2019-875A7B">
+  <img alt="Ubuntu · Debian · Fedora" src="https://img.shields.io/badge/Ubuntu%20%C2%B7%20Debian%20%C2%B7%20Fedora-supported-informational">
+  <img alt="Written in Rust" src="https://img.shields.io/badge/written%20in-Rust-CE422B?logo=rust&logoColor=white">
+</p>
+
+<p>
+  <a href="#install"><b>Install</b></a> ·
+  <a href="#configuration"><b>Configuration</b></a> ·
+  <a href="#rollback"><b>Rollback</b></a> ·
+  <a href="#uninstalling--cleaning-up"><b>Uninstall</b></a> ·
+  <a href="#security-notes"><b>Security</b></a> ·
+  <a href="https://github.com/Omisen/invok/wiki"><b>Wiki</b></a>
+</p>
+
+</div>
+
+---
 
 Installer for **Odoo 16 / 17 / 18 / 19** on Ubuntu ≥ 22.04, Debian ≥ 11 and Fedora ≥ 40, written in
-**Rust**, with **transactional rollback**: *either the installation succeeds completely, or the system
-goes back to exactly what it was.* It sets up the system user, dependencies, PostgreSQL, the Odoo
-sources, a virtualenv, the config file, a systemd service, optionally Nginx, and an `odoo` helper
+**Rust**, with **transactional rollback**. It sets up the system user, dependencies, PostgreSQL, the
+Odoo sources, a virtualenv, the config file, a systemd service, optionally Nginx, and an `odoo` helper
 command.
 
 The command is **`invok`**. The `.deb` and `.rpm` packages also install the short alias **`vok`**, a
 symlink to the same program: `vok --dry-run` and `invok --dry-run` do exactly the same thing.
 
-*Invok — from “invoke”: to call something into being.*
+<sub><i>Invok — from “invoke”: to call something into being.</i></sub>
 
 > **Independent project.** Not affiliated with Odoo S.A., nor endorsed or sponsored by it. “Odoo” is a
 > trademark of Odoo S.A. and is used here only to name the software this tool installs. The installer
@@ -135,7 +158,10 @@ invok -V
 sudo invok
 ```
 
-### D — Any distro with Rust: `cargo install`
+<details>
+<summary><b>D — Any distro with Rust: <code>cargo install</code></b></summary>
+
+<br>
 
 The crate is on **[crates.io](https://crates.io/crates/invok)**.
 
@@ -149,7 +175,12 @@ hand you the *same* executable ready-made), the binary lands in `~/.cargo/bin/` 
 `PATH` — a bare `sudo invok` answers `command not found` — and there is no `vok` alias, which only B
 and C create. Update with `cargo install invok --force`.
 
-### E — Any distro: build from source
+</details>
+
+<details>
+<summary><b>E — Any distro: build from source</b></summary>
+
+<br>
 
 ```bash
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh   # Rust toolchain, once
@@ -160,6 +191,8 @@ cargo build --release            # → target/release/invok
 
 sudo ./target/release/invok
 ```
+
+</details>
 
 Run it **via `sudo` from a normal user**: `SUDO_USER` becomes the owner of the `odoo` helper command.
 Parameters resolve in this order: **CLI → `.env` → interactive prompt → default**.
@@ -222,7 +255,10 @@ WITH_NGINX=true
 > presets — `configs/ci.env` and `configs/ci-nginx.env`, throwaway files for ephemeral runners — which
 > serve as a complete example to copy.
 
-### Environment variables (network tuning)
+<details>
+<summary><b>Environment variables (network tuning)</b></summary>
+
+<br>
 
 Not installation parameters, but knobs for difficult networks, read from the process environment.
 
@@ -234,6 +270,8 @@ Not installation parameters, but knobs for difficult networks, read from the pro
 
 `apt-get` and long local operations (DB init, `pip install`, venv creation) have **no** timeout:
 cutting them short does more damage than waiting.
+
+</details>
 
 ---
 
@@ -405,4 +443,16 @@ This project is independent and is **not affiliated with Odoo S.A.**, nor endors
 trademark of Odoo S.A.
 
 ---
-<a href="https://github.com/Omisen/invok/wiki"><h2>→ Technical documentation</h2></a>
+
+<div align="center">
+
+### [→ Technical documentation](https://github.com/Omisen/invok/wiki)
+
+<sub>Engine and the <code>Step</code> trait · step-by-step reference · rollback model ·
+multi-distribution support · security</sub>
+
+<br>
+
+<sub>Made for Ubuntu, Debian and Fedora. Independent project — not affiliated with Odoo S.A.</sub>
+
+</div>
