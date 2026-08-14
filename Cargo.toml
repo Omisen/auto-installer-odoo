@@ -1,125 +1,119 @@
 [package]
 name = "invok"
-# 3.0.0: il rename di crate, binario e pacchetti cambia il NOME degli artefatti
-# (`invok_3.0.0-1_amd64.deb`), che per questo progetto è parte del contratto con
-# chi installa — il README li nomina per intero. Un cambio del genere non sta in
-# una minor.
+# 3.0.0: renaming the crate, the binary and the packages changes the NAME of the
+# artifacts (`invok_3.0.0-1_amd64.deb`), and for this project that name is part
+# of the contract with whoever installs — the README spells them out in full.
+# A change like that does not belong in a minor.
 version = "3.0.0"
 edition = "2021"
-# «Odoo» resta nel testo: è uso nominativo, serve a dire cosa installa il
-# programma ed è ciò che lo rende trovabile. Fuori dal NOME, dentro la
-# descrizione — è esattamente la distinzione su cui poggia il rename.
+# "Odoo" stays in the text: it is nominative use, it says what the program
+# installs, and it is what makes the crate findable. Out of the NAME, inside the
+# description — exactly the distinction the rename rests on.
 description = "Installer for Odoo — independent CLI installer (not affiliated with Odoo S.A.)"
 license = "MIT"
 repository = "https://github.com/Omisen/invok"
 homepage = "https://github.com/Omisen/invok"
-# Metadati della scheda su crates.io. `readme` non è decorativo: senza, la
-# pagina del crate mostra solo la `description` di una riga, e chi arriva da
-# `cargo search` non vede né il rollback né le distribuzioni supportate.
+# `readme` is not decorative: without it the crates.io page shows only the
+# one-line `description`, and someone arriving from `cargo search` sees neither
+# the rollback nor the supported distributions.
 readme = "README.md"
-# Vincoli del registro, che valgono la pena di essere scritti perché li fa
-# rispettare crates.io e NON cargo: al massimo 5 keyword, ognuna ≤ 20 caratteri,
-# primo carattere alfanumerico. Una violazione non si vede in locale — si vede
-# quando `cargo publish` la rifiuta, cioè dopo il tag, che è il momento peggiore.
-# Per questo c'è un test che le conta e le misura prima.
+# Registry constraints, enforced by crates.io and NOT by cargo: at most 5
+# keywords, each <= 20 characters, first character alphanumeric. A violation is
+# invisible locally — it shows up when `cargo publish` rejects it, i.e. after the
+# tag, which is the worst possible moment. Hence a test that counts and measures
+# them beforehand.
 keywords = ["odoo", "installer", "cli", "devops", "rollback"]
-# Dalla lista CHIUSA di crates.io (https://crates.io/categories): un valore
-# inventato viene rifiutato al publish. `command-line-utilities` è ciò che
-# questo crate è — un eseguibile, non una libreria da linkare, benché esponga
-# anche un `[lib]` per i test.
+# From the CLOSED list at https://crates.io/categories: an invented value is
+# rejected at publish time.
 categories = ["command-line-utilities"]
 
-# Metadati per `cargo deb`: producono un .deb che deposita SOLO il binario CLI
-# `invok` in /usr/bin (+ la doc). Il pacchetto NON installa servizi, NON
-# crea utenti, NON tocca PostgreSQL/Nginx: quelle cose le crea l'installer a
-# runtime sul target quando l'utente lo lancia. Perciò niente `systemd-units` e
-# niente `depends` su postgresql/nginx/python — sono compito del binario, non del
-# pacchetto. `depends = "$auto"` copre le sole dipendenze di linking del binario
-# (per il target musl statico: pressoché nessuna).
+# Metadata for `cargo deb`: produces a .deb that drops ONLY the `invok` CLI
+# binary into /usr/bin (plus the docs). The package installs no services, creates
+# no users, touches neither PostgreSQL nor Nginx — the installer does all that at
+# runtime on the target when the user runs it. Hence no `systemd-units` and no
+# `depends` on postgresql/nginx/python. `depends = "$auto"` covers only the
+# binary's linking dependencies (for the static musl target: essentially none).
 [package.metadata.deb]
 maintainer = "Omisen"
 copyright = "2026, Omisen"
 license-file = ["LICENSE", "0"]
 extended-description = """\
-Installer per Odoo (16/17/18/19) su Ubuntu, Debian e Fedora, con rollback \
-transazionale. \
-Configura utente di sistema, dipendenze, PostgreSQL, sorgenti Odoo, virtualenv, \
-systemd e Nginx opzionale; annulla in modo pulito in caso di errore. \
-Il pacchetto installa solo il tool a riga di comando: l'installazione di Odoo \
-avviene a runtime quando l'utente esegue `invok`. \
-Progetto indipendente: non affiliato a Odoo S.A. né sostenuto da essa. «Odoo» è \
-un marchio di Odoo S.A. Questo pacchetto non contiene né redistribuisce codice \
-Odoo."""
+Installer for Odoo (16/17/18/19) on Ubuntu, Debian and Fedora, with \
+transactional rollback. \
+It sets up the system user, dependencies, PostgreSQL, the Odoo sources, a \
+virtualenv, systemd and optionally Nginx; on failure it cleanly undoes its own \
+work. \
+The package installs only the command-line tool: Odoo itself is installed at \
+runtime, when the user runs `invok`. \
+Independent project: not affiliated with Odoo S.A., nor endorsed by it. "Odoo" \
+is a trademark of Odoo S.A. This package neither contains nor redistributes \
+any Odoo code."""
 section = "admin"
 priority = "optional"
 depends = "$auto"
-# La revisione del pacchetto, DICHIARATA e non ereditata (A-V3-17).
+# The package revision, DECLARED and not inherited (A-V3-17).
 #
-# `cargo deb` la mette comunque — il file si chiama `invok_2.4.0-1_amd64.deb`,
-# col `-1` — ma il valore veniva da un default dello strumento, cioè da fuori.
-# Il README nomina quel file per intero, quindi il nome è parte del contratto con
-# chi installa: un default che cambia versione di `cargo-deb` cambierebbe il nome
-# dell'artefatto senza che nulla nel repository lo dica, e il comando del README
-# diventerebbe un 404 — che è esattamente com'è nato A-V3-17, al contrario.
-# Scritta qui, la revisione è un dato che i test possono leggere e confrontare.
+# `cargo deb` adds one anyway — the file is called `invok_3.0.0-1_amd64.deb`,
+# with the `-1` — but the value came from a tool default, i.e. from outside. The
+# README names that file in full, so the name is part of the contract: a change
+# in `cargo-deb`'s default would change the artifact name with nothing in the
+# repository saying so, and the README command would 404. That is how A-V3-17
+# happened, in reverse. Written here, the revision is a value tests can read.
 revision = "1"
 assets = [
     ["target/release/invok", "usr/bin/", "755"],
     ["README.md", "usr/share/doc/invok/README", "644"],
 ]
-# L'alias breve `vok` è un SYMLINK creato dai maintainer script, non un secondo
-# binario: due eseguibili identici in /usr/bin sarebbero 8 MB sprecati e due cose
-# che possono divergere. Gli script vivono in `debian/` e sono condivisi come
-# intento — non come file — con gli scriptlet del `.rpm` più sotto.
+# The short `vok` alias is a SYMLINK created by the maintainer scripts, not a
+# second binary: two identical executables in /usr/bin would be 8 MB wasted and
+# two things that can diverge. The scripts live in `debian/` and are shared in
+# intent — not as files — with the `.rpm` scriptlets below.
 maintainer-scripts = "debian/"
 
-# Metadati per `cargo generate-rpm`: la controparte rpm del blocco sopra, con la
-# stessa promessa — il pacchetto deposita SOLO il binario CLI, non installa
-# servizi, non crea utenti, non tocca PostgreSQL/nginx. Quelle cose le fa
-# l'installer a runtime, ed è la ragione per cui non ci sono `requires`: il
-# binario è musl statico e non dipende da nulla del sistema.
+# Metadata for `cargo generate-rpm`: the rpm counterpart of the block above, with
+# the same promise — the package drops ONLY the CLI binary, installs no services,
+# creates no users. There are no `requires` because the binary is static musl and
+# depends on nothing from the system.
 #
-# `assets` non eredita da `[package.metadata.deb]`: i due strumenti non si
-# parlano, e i percorsi vanno scritti due volte. C'è un test che li confronta,
-# perché due liste che devono coincidere e nessuno che lo verifichi è il modo
-# in cui si finisce per pubblicare un `.rpm` che non contiene il binario.
+# `assets` does not inherit from `[package.metadata.deb]`: the two tools do not
+# talk to each other and the paths have to be written twice. A test compares
+# them, because two lists that must agree with nobody checking is how one ends up
+# publishing an `.rpm` that does not contain the binary.
 [package.metadata.generate-rpm]
-# Il disclaimer di non affiliazione sta DENTRO il summary, e non accanto, perché
-# `cargo-generate-rpm` non ha un campo di descrizione lunga: `summary` è l'unico
-# testo che possiamo scrivere noi, ed è quello che `dnf info` e `dnf search`
-# mostrano. Sul `.deb` la stessa frase vive in `extended-description`, che è il
-# posto giusto lì. Due formulazioni, stessa promessa — se una delle due cambia,
-# vanno cambiate entrambe.
-summary = "Installer Odoo con rollback chirurgico (Ubuntu/Debian/Fedora) — progetto indipendente, non affiliato a Odoo S.A."
-# Come `revision` per il `.deb`, e per lo stesso motivo: il `-1` di
-# `invok-2.4.0-1.x86_64.rpm` è nel README, quindi non può dipendere dal
-# default di uno strumento esterno (A-V3-17).
+# The non-affiliation disclaimer lives INSIDE the summary rather than next to it,
+# because `cargo-generate-rpm` has no long-description field: `summary` is the
+# only text we control, and it is what `dnf info` and `dnf search` show. On the
+# `.deb` the same sentence lives in `extended-description`, which is the right
+# place there. Two wordings, one promise — change one, change both.
+summary = "Odoo installer with surgical rollback (Ubuntu/Debian/Fedora) — independent project, not affiliated with Odoo S.A."
+# Like `revision` for the `.deb`, and for the same reason: the `-1` in
+# `invok-3.0.0-1.x86_64.rpm` is in the README, so it cannot depend on an external
+# tool's default (A-V3-17).
 release = "1"
 assets = [
     { source = "target/release/invok", dest = "/usr/bin/invok", mode = "755" },
     { source = "README.md", dest = "/usr/share/doc/invok/README", mode = "644" },
 ]
-# L'alias `vok`, controparte rpm di `maintainer-scripts` del blocco deb.
+# The `vok` alias, rpm counterpart of the deb block's `maintainer-scripts`.
 #
-# Due cautele, entrambe della stessa famiglia delle protezioni dell'installer —
-# non si distrugge ciò che non è nostro:
-#   - si crea il link solo se `/usr/bin/vok` non esiste o è già un symlink; se
-#     qualcuno ci ha messo un file vero, si avvisa e si rinuncia;
-#   - si rimuove solo se punta ancora a `invok`, e solo alla disinstallazione
-#     VERA (`$1 = 0`): durante un aggiornamento rpm esegue comunque il postun
-#     della versione uscente, e cancellare lì lascerebbe l'utente senza alias.
+# Two cautions, both from the same family as the installer's own protections —
+# we do not destroy what is not ours:
+#   - the link is created only if `/usr/bin/vok` is absent or already a symlink;
+#     if someone put a real file there, we warn and give up;
+#   - it is removed only if it still points at `invok`, and only on a REAL
+#     uninstall (`$1 = 0`): during an upgrade rpm still runs the outgoing
+#     version's postun, and deleting there would leave the user without the alias.
 #
-# I due scriptlet stanno in FILE, non come stringhe qui dentro: la logica è la
-# stessa di `debian/postinst` e `debian/postrm`, e due copie in due formati
-# diversi — una in `debian/`, una dentro un manifesto TOML — divergono senza che
-# nulla lo dica. In file, un test le confronta.
+# The two scriptlets live in FILES, not as strings in here: the logic is the same
+# as `debian/postinst` and `debian/postrm`, and two copies in two different
+# formats — one in `debian/`, one inside a TOML manifest — diverge with nothing
+# saying so. As files, a test can compare them.
 #
-# ATTENZIONE: questi campi accettano *o* uno script inline *o* un percorso, e la
-# distinzione la fa l'esistenza del file. Un percorso sbagliato non è un errore:
-# diventa uno scriptlet che contiene la stringa `rpm/post.sh`, cioè un comando
-# che sul sistema del cliente non esiste. C'è un test che pretende che questi
-# due file esistano davvero, perché è un difetto che non si vedrebbe fino
-# all'installazione su una macchina vera.
+# CAREFUL: these fields accept *either* an inline script *or* a path, and what
+# tells them apart is whether the file exists. A wrong path is not an error: it
+# becomes a scriptlet containing the literal string `rpm/post.sh`, i.e. a command
+# that does not exist on the customer's system. A test demands that both files
+# really exist, because it is a defect that would not show until a real install.
 post_install_script = "rpm/post.sh"
 post_uninstall_script = "rpm/postun.sh"
 
@@ -140,17 +134,16 @@ anyhow = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-appender = "0.2"
-# Non ancora usato in Fase 0: riservato per chiamate POSIX tipizzate (uid/gid,
-# permessi) nelle fasi successive con gli step di sistema reali.
+# POSIX calls behind a typed API — today the `flock` of the lock file.
 nix = { version = "0.29", features = ["user", "fs"] }
-# Gestione dei segnali (B-V3-5), con API **safe**: il crate incapsula la parte
-# async-signal-safe, che a mano richiederebbe `unsafe` — in un programma che
-# gira come root si evita quando si puo'. Costo reale zero: era gia' nell'albero
-# come dipendenza transitiva di `crossterm` (via `inquire`).
+# Signal handling (B-V3-5), with a **safe** API: the crate encapsulates the
+# async-signal-safe part, which by hand would require `unsafe` — and in a program
+# running as root that is worth avoiding. Zero real cost: it was already in the
+# tree as a transitive dependency of `crossterm` (via `inquire`).
 signal-hook = "0.3"
-# Verifica checksum SHA-256 dei download (gap G3).
+# SHA-256 checksum verification of downloads (gap G3).
 sha2 = "0.10"
-# UI interattiva (Fase 11), dietro il confine prompt.rs / progress.rs.
+# Interactive UI, behind the prompt.rs / progress.rs boundary.
 inquire = "0.7"
 indicatif = "0.17"
 

@@ -569,36 +569,37 @@ fn the_version_the_binary_reports_is_the_one_in_the_manifest() {
     );
 }
 
-// --- Non affiliazione: la stessa promessa in tre confezioni -----------------
+// --- Non-affiliation: the same promise on three faces ----------------------
 
-/// Il disclaimer di non affiliazione a Odoo S.A. c'è **ovunque il pacchetto si
-/// presenti**: README, `.deb` e `.rpm`.
+/// The non-affiliation disclaimer is present **wherever the package shows its
+/// face**: README, `.deb` and `.rpm`.
 ///
-/// Non è una formalità: il perno della questione marchio è che nessuno confonda
-/// questo strumento con un prodotto di Odoo S.A., e chi installa da `apt`/`dnf`
-/// il README non lo apre — legge `apt show` / `dnf info`. Un disclaimer che vive
-/// solo nel README protegge esattamente il lettore che non ne aveva bisogno.
+/// Not a formality: the whole point of the trademark question is that nobody
+/// mistakes this tool for a product of Odoo S.A., and whoever installs from
+/// `apt`/`dnf` never opens the README — they read `apt show` / `dnf info`. A
+/// disclaimer living only in the README protects exactly the reader who did not
+/// need it.
 ///
-/// La forma delle tre frasi è diversa per necessità (il `.rpm` non ha un campo
-/// di descrizione lunga: `cargo-generate-rpm` espone solo `summary`), quindi non
-/// si confrontano i testi fra loro — si pretende che ciascuno **nomini Odoo S.A.
-/// e neghi l'affiliazione**. È il minimo che rende la promessa verificabile
-/// senza congelare la formulazione.
+/// The three sentences differ by necessity (the `.rpm` has no long-description
+/// field: `cargo-generate-rpm` exposes only `summary`), so their texts are not
+/// compared with each other — each is required to **name Odoo S.A. and deny the
+/// affiliation**. That is the minimum that makes the promise checkable without
+/// freezing the wording.
 #[test]
 fn every_package_face_disclaims_affiliation_with_odoo() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
     let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
 
-    // Il blocco di metadati, isolato: cercare la frase nel manifesto intero
-    // passerebbe anche se il disclaimer stesse solo in un commento — e un
-    // commento non finisce in nessun pacchetto.
+    // The metadata block, isolated: searching the whole manifest would pass even
+    // if the disclaimer lived only in a comment — and a comment ends up in no
+    // package.
     let blocco = |intestazione: &str| -> String {
         let inizio = manifest
             .find(intestazione)
             .unwrap_or_else(|| panic!("manca il blocco {intestazione}"));
         let resto = &manifest[inizio + intestazione.len()..];
         let fine = resto.find("\n[").unwrap_or(resto.len());
-        // Via i commenti: il disclaimer deve stare in un VALORE.
+        // Comments out: the disclaimer must live in a VALUE.
         resto[..fine]
             .lines()
             .filter(|r| !r.trim_start().starts_with('#'))
@@ -616,12 +617,16 @@ fn every_package_face_disclaims_affiliation_with_odoo() {
     ] {
         assert!(
             testo.contains("Odoo S.A."),
-            "{dove}: il disclaimer deve nominare il titolare del marchio"
+            "{dove}: the disclaimer must name the trademark holder"
         );
+        // Case-insensitive: the sentence opens a paragraph in one place and sits
+        // mid-sentence in another, and freezing the capital letter would fail on
+        // a correct text.
         assert!(
-            testo.contains("non affiliato a Odoo S.A.")
-                || testo.contains("non è affiliato a Odoo S.A."),
-            "{dove}: manca la negazione esplicita dell'affiliazione"
+            testo
+                .to_lowercase()
+                .contains("not affiliated with odoo s.a."),
+            "{dove}: the explicit denial of affiliation is missing"
         );
     }
 }
