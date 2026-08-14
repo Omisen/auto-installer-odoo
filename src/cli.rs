@@ -16,7 +16,7 @@ use clap::{Args, Parser, Subcommand};
 #[derive(Parser, Debug)]
 #[command(
     name = "invok",
-    about = "Installer Odoo (16/17/18/19) con rollback chirurgico",
+    about = "Odoo installer (16/17/18/19) with surgical rollback",
     version = crate::INSTALLER_VERSION,
     // no automatic `--version`: here that flag is Odoo's version. asking for
     // the installer's own is `installer_version` below (A-V3-16).

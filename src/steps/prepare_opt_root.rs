@@ -83,7 +83,7 @@ impl Step for PrepareOptRoot {
         info!(
             dir = %ctx.odoo_home.display(),
             prestate = ?self.prestate,
-            "snapshot prepare-opt-root"
+            "snapshot: prepare-opt-root"
         );
         Ok(())
     }
@@ -93,12 +93,12 @@ impl Step for PrepareOptRoot {
 
         // pre-existing and not ours: neither owner nor permissions change.
         if self.prestate == PreState::Preexisting {
-            info!(dir = %dir.display(), "run: directory già presente, nessuna azione");
+            info!(dir = %dir.display(), "run: directory already present, nothing to do");
             return Ok(());
         }
 
         if ctx.dry_run {
-            info!(dir = %dir.display(), "run (dry-run): creerei la directory (owned root, 0755)");
+            info!(dir = %dir.display(), "run (dry run): would create the directory (owned root, 0755)");
             return Ok(());
         }
 
@@ -123,32 +123,32 @@ impl Step for PrepareOptRoot {
                 dir = %dir.display(),
                 user = %user,
                 mode = format_args!("{HANDED_OVER_MODE:o}"),
-                "run: directory creata e consegnata all'utente già esistente"
+                "run: directory created and handed to the already-existing user"
             );
             return Ok(());
         }
 
-        info!(dir = %dir.display(), mode = format_args!("{OPT_ROOT_MODE:o}"), "run: directory creata (owned root, in attesa dell'utente)");
+        info!(dir = %dir.display(), mode = format_args!("{OPT_ROOT_MODE:o}"), "run: directory created (owned root, awaiting the user)");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         // invariant: the undo acts ONLY on what we created.
         if self.prestate != PreState::CreatedByUs {
-            info!(prestate = ?self.prestate, "undo NO-OP (directory non creata da noi)");
+            info!(prestate = ?self.prestate, "undo NO-OP (directory not created by us)");
             return Ok(());
         }
 
         let dir = &ctx.odoo_home;
 
         if ctx.dry_run {
-            info!(dir = %dir.display(), "undo (dry-run): rimuoverei la directory");
+            info!(dir = %dir.display(), "undo (dry run): would remove the directory");
             return Ok(());
         }
 
         // idempotent: already gone means nothing to do.
         if !dir.exists() {
-            info!(dir = %dir.display(), "undo: directory già assente");
+            info!(dir = %dir.display(), "undo: the directory is already gone");
             return Ok(());
         }
 
@@ -157,7 +157,7 @@ impl Step for PrepareOptRoot {
         let is_empty = match fs::read_dir(dir) {
             Ok(mut entries) => entries.next().is_none(),
             Err(e) => {
-                warn!(dir = %dir.display(), error = %e, "undo: impossibile leggere la directory, non rimuovo");
+                warn!(dir = %dir.display(), error = %e, "undo: cannot read the directory, not removing it");
                 return Ok(());
             }
         };
@@ -165,15 +165,15 @@ impl Step for PrepareOptRoot {
         if !is_empty {
             warn!(
                 dir = %dir.display(),
-                "undo: directory non vuota, non la rimuovo (best-effort, nessun rm -rf)"
+                "undo: the directory is not empty, leaving it (best-effort, never rm -rf)"
             );
             return Ok(());
         }
 
         match fs::remove_dir(dir) {
-            Ok(()) => info!(dir = %dir.display(), "undo: directory rimossa"),
+            Ok(()) => info!(dir = %dir.display(), "undo: directory removed"),
             Err(e) => {
-                warn!(dir = %dir.display(), error = %e, "undo: rimozione fallita, proseguo (best-effort)")
+                warn!(dir = %dir.display(), error = %e, "undo: removal failed, proceeding (best-effort)")
             }
         }
         Ok(())

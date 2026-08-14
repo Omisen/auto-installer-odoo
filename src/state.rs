@@ -71,10 +71,10 @@ pub fn ensure_trustworthy(path: &Path) -> Result<(), StepError> {
 
     trust_verdict(meta.uid(), meta.mode(), parent_mode).map_err(|reason| {
         StepError::Precondition(format!(
-            "il file di stato {} non è una fonte affidabile: {reason}.\n\
+            "the state file {} is not a trustworthy source: {reason}.\n\
              \n\
-             Guida `rm -rf`, `dropdb` e `userdel`: non lo consumo da qualcosa che un \
-             altro utente potrebbe riscrivere o sostituire.",
+             it drives `rm -rf`, `dropdb` and `userdel`: it is not consumed from somewhere \
+             another user could rewrite or replace.",
             path.display()
         ))
     })
@@ -87,11 +87,11 @@ pub fn ensure_trustworthy(path: &Path) -> Result<(), StepError> {
 /// `checks::ensure_root_euid`.
 pub fn trust_verdict(uid: u32, mode: u32, parent_mode: Option<u32>) -> Result<(), String> {
     if uid != 0 {
-        return Err(format!("non appartiene a root (uid {uid})"));
+        return Err(format!("it does not belong to root (uid {uid})"));
     }
     if mode & 0o022 != 0 {
         return Err(format!(
-            "è scrivibile da gruppo o altri (mode {:o})",
+            "it is writable by group or others (mode {:o})",
             mode & 0o777
         ));
     }
@@ -101,8 +101,8 @@ pub fn trust_verdict(uid: u32, mode: u32, parent_mode: Option<u32>) -> Result<()
         let sticky = dir_mode & 0o1000 != 0;
         if dir_mode & 0o022 != 0 && !sticky {
             return Err(format!(
-                "sta in una directory scrivibile da terzi (mode {:o}), dove chiunque \
-                 potrebbe sostituirlo",
+                "it lives in a directory writable by third parties (mode {:o}), where anyone \
+                 could replace it",
                 dir_mode & 0o777
             ));
         }
@@ -206,15 +206,15 @@ pub struct InstallConfig {
 /// `None` when they match, and also when the manifest carries no version:
 /// nothing is concluded from absent information. not a refusal — the rollback
 /// stays best-effort — but the context the unknown-step warning was missing.
-pub fn version_mismatch_note(manifesto: Option<&str>, in_esecuzione: &str) -> Option<String> {
-    let scritto_da = manifesto?;
-    if scritto_da == in_esecuzione {
+pub fn version_mismatch_note(manifest: Option<&str>, running: &str) -> Option<String> {
+    let written_by = manifest?;
+    if written_by == running {
         return None;
     }
     Some(format!(
-        "questo manifesto è stato scritto dall'installer {scritto_da}, mentre stai eseguendo la \
-         versione {in_esecuzione}: se qualche step risulta sconosciuto, è questa la ragione — usa la \
-         stessa versione (o una più recente) per annullare l'installazione"
+        "this manifest was written by installer {written_by} while you are running version \
+         {running}: if a step comes out unknown, that is why — use the same version (or a \
+         newer one) to undo the installation"
     ))
 }
 
@@ -255,18 +255,15 @@ impl InstallConfig {
     /// different administrator may legitimately resume).
     pub fn identity(&self) -> Vec<(&'static str, String)> {
         vec![
-            ("versione Odoo", self.odoo_version.clone()),
-            ("utente di sistema", self.odoo_user.clone()),
-            ("ruolo database", self.db_user.clone()),
-            ("nome database", self.db_name.clone()),
+            ("Odoo version", self.odoo_version.clone()),
+            ("system user", self.odoo_user.clone()),
+            ("database role", self.db_user.clone()),
+            ("database name", self.db_name.clone()),
             ("home", self.odoo_home.display().to_string()),
-            (
-                "directory di installazione",
-                self.install_dir.display().to_string(),
-            ),
+            ("install directory", self.install_dir.display().to_string()),
             // the family does not name an artifact but changes what the
             // recorded names mean: an apt delta is not resumable by dnf.
-            ("famiglia OS", self.os_family.to_string()),
+            ("OS family", self.os_family.to_string()),
         ]
     }
 
@@ -282,24 +279,24 @@ impl InstallConfig {
     /// [`StepError::Precondition`] when the declared home is not `ODOO_HOME`,
     /// or the install dir is not strictly below it.
     pub fn validate_perimeter(&self) -> Result<(), StepError> {
-        let atteso = Path::new(crate::config::ODOO_HOME);
-        if self.odoo_home != atteso {
+        let expected = Path::new(crate::config::ODOO_HOME);
+        if self.odoo_home != expected {
             return Err(StepError::Precondition(format!(
-                "il manifesto dichiara come home '{}', ma questo installer usa solo '{}' \
-                 (costante architetturale).\n\
+                "the manifest declares '{}' as the home, but this installer only uses '{}' \
+                 (an architectural constant).\n\
                  \n\
-                 Non descrive un'installazione fatta da questo programma, e gli undo \
-                 agirebbero su percorsi che non conosciamo: mi fermo senza toccare nulla.",
+                 it does not describe an installation made by this program, and the undos \
+                 would act on paths we do not know: stopping without touching anything.",
                 self.odoo_home.display(),
-                atteso.display()
+                expected.display()
             )));
         }
-        if !self.install_dir.starts_with(atteso) || self.install_dir == atteso {
+        if !self.install_dir.starts_with(expected) || self.install_dir == expected {
             return Err(StepError::Precondition(format!(
-                "il manifesto dichiara come directory di installazione '{}', che non sta \
-                 sotto '{}': mi fermo senza toccare nulla.",
+                "the manifest declares '{}' as the install directory, which is not under \
+                 '{}': stopping without touching anything.",
                 self.install_dir.display(),
-                atteso.display()
+                expected.display()
             )));
         }
         Ok(())
@@ -394,8 +391,8 @@ pub fn start_decision(
         .identity()
         .into_iter()
         .zip(requested.identity())
-        .filter(|((_, prima), (_, ora))| prima != ora)
-        .map(|((campo, prima), (_, ora))| (campo, prima, ora))
+        .filter(|((_, before), (_, now))| before != now)
+        .map(|((field, before), (_, now))| (field, before, now))
         .collect();
 
     if differenze.is_empty() {

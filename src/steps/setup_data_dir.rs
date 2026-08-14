@@ -110,7 +110,7 @@ impl Step for SetupDataDir {
             prestate = ?self.snap.prestate,
             created_root = ?self.snap.created_root,
             db_was_ours = self.snap.db_was_ours,
-            "snapshot setup-data-dir"
+            "snapshot: setup-data-dir"
         );
         Ok(())
     }
@@ -121,14 +121,14 @@ impl Step for SetupDataDir {
         if self.snap.prestate == PreState::Preexisting {
             info!(
                 data_dir = %data_dir.display(),
-                "run: filestore già presente, nessuna azione (non è nostro)"
+                "run: filestore already there, nothing to do (it is not ours)"
             );
             return Ok(());
         }
         if ctx.dry_run {
             info!(
                 data_dir = %data_dir.display(),
-                "run (dry-run): creerei il data_dir come utente odoo"
+                "run (dry run): would create the data_dir as the odoo user"
             );
             return Ok(());
         }
@@ -139,7 +139,7 @@ impl Step for SetupDataDir {
         self.snap.prestate = PreState::CreatedByUs;
         info!(
             data_dir = %data_dir.display(),
-            "run: data_dir creato (owned {}:{})",
+            "run: data_dir created (owned {}:{})",
             ctx.odoo_user, ctx.odoo_user
         );
         Ok(())
@@ -149,7 +149,7 @@ impl Step for SetupDataDir {
         if self.snap.prestate != PreState::CreatedByUs {
             info!(
                 prestate = ?self.snap.prestate,
-                "undo NO-OP (data_dir non creato da noi)"
+                "undo NO-OP (data_dir not created by us)"
             );
             return Ok(());
         }
@@ -158,8 +158,8 @@ impl Step for SetupDataDir {
         // customer's attachments. we created the directory, not the data.
         if !self.snap.db_was_ours {
             warn!(
-                "undo NO-OP: il database era preesistente, il filestore contiene allegati \
-                 del cliente e NON viene rimosso (protezione dati cliente)"
+                "undo NO-OP: the database was pre-existing, so the filestore holds the \
+                 customer's attachments and is NOT removed (customer data protection)"
             );
             return Ok(());
         }

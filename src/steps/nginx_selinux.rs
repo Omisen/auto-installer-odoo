@@ -60,7 +60,7 @@ impl Step for NginxSelinux {
 
         let distro = self.ops.distro();
         let Some(selinux) = distro.selinux() else {
-            info!("snapshot: su questa famiglia SELinux non è in uso, step no-op");
+            info!("snapshot: SELinux is not in use on this family, the step is a no-op");
             return Ok(());
         };
 
@@ -72,14 +72,14 @@ impl Step for NginxSelinux {
                 self.prestate = PreState::Preexisting;
                 info!(
                     boolean,
-                    "snapshot: boolean SELinux già attivo, non è nostro"
+                    "snapshot: the SELinux boolean is already on, it is not ours"
                 );
             }
             Some(false) => {
                 self.prestate = PreState::Untracked;
                 info!(
                     boolean,
-                    "snapshot: boolean SELinux spento, lo accenderemo noi"
+                    "snapshot: the SELinux boolean is off, we will turn it on"
                 );
             }
             // unqueryable is not "off": without an answer we do not touch the
@@ -88,9 +88,9 @@ impl Step for NginxSelinux {
                 self.prestate = PreState::Untracked;
                 warn!(
                     boolean,
-                    "snapshot: SELinux non interrogabile (getsebool assente o politica \
-                     disabilitata): non tocco nulla. Se il proxy risponde 502, è il primo \
-                     posto dove guardare"
+                    "snapshot: SELinux cannot be queried (getsebool absent, or the policy is \
+                     disabled): nothing is touched. if the proxy answers 502, this is the \
+                     first place to look"
                 );
             }
         }
@@ -99,7 +99,7 @@ impl Step for NginxSelinux {
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if !ctx.with_nginx {
-            info!("nginx non richiesto, skip nginx-selinux");
+            info!("nginx not requested, skipping nginx-selinux");
             return Ok(());
         }
         if self.prestate != PreState::Untracked {
@@ -119,7 +119,7 @@ impl Step for NginxSelinux {
         }
 
         if ctx.dry_run {
-            info!(boolean, "run (dry-run): accenderei il boolean SELinux");
+            info!(boolean, "run (dry run): would turn the SELinux boolean on");
             return Ok(());
         }
 
@@ -127,7 +127,7 @@ impl Step for NginxSelinux {
         self.prestate = PreState::CreatedByUs;
         info!(
             boolean,
-            "run: boolean SELinux acceso (nginx può raggiungere Odoo)"
+            "run: SELinux boolean turned on (nginx can reach Odoo)"
         );
         Ok(())
     }
@@ -138,12 +138,12 @@ impl Step for NginxSelinux {
         if self.prestate != PreState::CreatedByUs {
             info!(
                 prestate = ?self.prestate,
-                "undo NO-OP: boolean SELinux non acceso da noi"
+                "undo NO-OP: the SELinux boolean was not turned on by us"
             );
             return Ok(());
         }
         if ctx.dry_run {
-            info!("undo (dry-run): spegnerei il boolean SELinux");
+            info!("undo (dry run): would turn the SELinux boolean off");
             return Ok(());
         }
 
@@ -154,9 +154,9 @@ impl Step for NginxSelinux {
         let boolean = selinux.nginx_proxy_boolean();
 
         if let Err(e) = selinux.set(boolean, false) {
-            warn!(boolean, error = %e, "undo: spegnimento del boolean SELinux fallito, proseguo (best-effort)");
+            warn!(boolean, error = %e, "undo: turning the SELinux boolean off failed, proceeding (best-effort)");
         } else {
-            info!(boolean, "undo: boolean SELinux rimesso a spento");
+            info!(boolean, "undo: the SELinux boolean was turned back off");
         }
         Ok(())
     }

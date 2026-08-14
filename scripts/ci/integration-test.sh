@@ -110,7 +110,7 @@ case "$(. /etc/os-release && echo "$ID")" in
   fedora|rhel|centos|almalinux|rocky) PKG_FAMILY=rpm ;;
   *)                                  PKG_FAMILY=deb ;;
 esac
-info "famiglia di pacchetti: $PKG_FAMILY"
+info "package family: $PKG_FAMILY"
 
 # "installed" with the same definition the installer uses. not pedantry: the
 # naive query exits **zero** for a removed package that still has its config
@@ -129,7 +129,7 @@ pkg_installed() {
 
 # --- phase 1: installation ---------------------------------------------------
 
-group "Installazione reale ($MODE)"
+group "Real installation ($MODE)"
 echo "OS: $(. /etc/os-release && echo "$PRETTY_NAME")"
 echo "Config: $ENV_FILE"
 
@@ -140,10 +140,10 @@ echo "Config: $ENV_FILE"
 # either.
 if [ -d "$ODOO_HOME" ]; then
   OPT_ODOO_PREEXISTING=1
-  info "$ODOO_HOME esisteva già prima dell'installazione"
+  info "$ODOO_HOME already existed before the installation"
 else
   OPT_ODOO_PREEXISTING=0
-  info "$ODOO_HOME assente prima dell'installazione (macchina vergine)"
+  info "$ODOO_HOME absent before the installation (virgin machine)"
 fi
 
 # was the system user already there? then the rollback must LEAVE it: the
@@ -151,10 +151,10 @@ fi
 # way round.
 if id "$OS_USER" >/dev/null 2>&1; then
   OS_USER_PREEXISTING=1
-  info "l'utente '$OS_USER' esisteva già prima dell'installazione"
+  info "user '$OS_USER' already existed before the installation"
 else
   OS_USER_PREEXISTING=0
-  info "l'utente '$OS_USER' assente prima dell'installazione"
+  info "user '$OS_USER' absent before the installation"
 fi
 
 # what was in the default site's place before us (A-V3-5).
@@ -177,15 +177,15 @@ else
   VHOST_LINK="/etc/nginx/sites-enabled/odoo${VER_SHORT}"
 fi
 if [ "$HAS_DEFAULT_SITE" = "0" ]; then
-  DEFAULT_SITE_BEFORE="n/d (su rpm il default site non è un file separato)"
+  DEFAULT_SITE_BEFORE="n/a (on this family the default site is not a separate file)"
 elif [ -L "$DEFAULT_SITE" ]; then
   DEFAULT_SITE_BEFORE="symlink:$(readlink "$DEFAULT_SITE")"
 elif [ -f "$DEFAULT_SITE" ]; then
   DEFAULT_SITE_BEFORE="file"
 else
-  DEFAULT_SITE_BEFORE="assente"
+  DEFAULT_SITE_BEFORE="absent"
 fi
-[ "$WITH_NGINX" = "true" ] && info "default site nginx prima dell'installazione: $DEFAULT_SITE_BEFORE"
+[ "$WITH_NGINX" = "true" ] && info "nginx default site before the installation: $DEFAULT_SITE_BEFORE"
 
 # a snapshot of the installed packages BEFORE mutating.
 #
@@ -201,7 +201,7 @@ pkgs_installed_now() {
   fi
 }
 pkgs_installed_now > "$WORK/pkgs-before.txt"
-info "pacchetti installati prima:     $(wc -l < "$WORK/pkgs-before.txt")"
+info "packages installed before:      $(wc -l < "$WORK/pkgs-before.txt")"
 
 # is the firewall ACTIVE? only then does the firewall step do anything: on a
 # runner it is installed but inactive, and the step exits at once (so A-V3-7 was
@@ -250,12 +250,12 @@ fi
 FW_REQUIRED="${FW_REQUIRED:-0}"
 if [ "$WITH_NGINX" = "true" ] && [ "$FW_ACTIVE" = "0" ]; then
   if [ "$FW_REQUIRED" = "1" ]; then
-    echo "::error::$FW_NAME non è attivo, ma questo scenario lo richiede \
-(FW_REQUIRED=1): le verifiche su A-V3-7 verrebbero saltate e il job passerebbe \
-senza aver provato ciò per cui esiste"
+    echo "::error::$FW_NAME is not active, but this scenario requires it \
+(FW_REQUIRED=1): the A-V3-7 checks would be skipped and the job would pass \
+without having tested what it exists for"
     exit 1
   fi
-  info "$FW_NAME non attivo: le verifiche sul firewall verranno saltate"
+  info "$FW_NAME not active: the firewall checks will be skipped"
 fi
 # the output is captured: the run's **journal** is read from it — which steps
 # were reached, which packages added. the manifest does NOT serve this: it says
@@ -264,11 +264,11 @@ set +e
 sudo "$BIN" --config "$ENV_FILE" 2>&1 | tee "$WORK/install.out"
 INSTALL_RC=${PIPESTATUS[0]}
 set -e
-echo "exit code installazione: $INSTALL_RC"
+echo "installation exit code: $INSTALL_RC"
 endgroup
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -ne 0 ]; then
-  fail "l'installazione doveva riuscire (exit $INSTALL_RC)"
+  fail "the installation should have succeeded (exit $INSTALL_RC)"
   # with no installation there is nothing to check, but the rollback is run
   # anyway: it must clean what the failed run left.
 fi
@@ -292,11 +292,11 @@ fi
 # pattern written against what one sees on screen may not match what is in the
 # file (A-R8-1-ter).
 journal_strip_ansi "$WORK/install.out" > "$WORK/install-plain.txt"
-if grep -q "più recente di Python" "$WORK/install-plain.txt"; then
-  info "il preflight ha segnalato un interprete più recente di quelli provati"
+if grep -q "newer than Python" "$WORK/install-plain.txt"; then
+  info "the preflight reported an interpreter newer than the tested ones"
   if grep -q "Building wheel for gevent" "$WORK/install-plain.txt"; then
-    assert "il fallimento di gevent spiega che è il Python" \
-      grep -q "non regge gli header di un CPython più nuovo" "$WORK/install-plain.txt"
+    assert "the gevent failure explains that Python is the cause" \
+      grep -q "does not survive a newer CPython" "$WORK/install-plain.txt"
   fi
 fi
 
@@ -310,15 +310,15 @@ fi
 # fail the jobs where the system interpreter is perfectly fine.
 PYTHON_PLAN="$(journal_python_plan "$WORK/install-plain.txt")"
 if [ -n "$PYTHON_PLAN" ]; then
-  info "l'installer ha scelto l'interprete '$PYTHON_PLAN' per il virtualenv"
+  info "the installer chose interpreter '$PYTHON_PLAN' for the virtualenv"
   if [ "$INSTALL_RC" -eq 0 ]; then
     # the virtualenv carries the base interpreter's binary: proof it was born
     # FROM THAT one and not from the system's. privileged, because the perimeter
     # is 0750 and an unprivileged test would answer "permission denied" — a red
     # for the wrong reason.
-    assert "il virtualenv è nato su $PYTHON_PLAN" \
+    assert "the virtualenv was built on $PYTHON_PLAN" \
       sudo test -x "$INSTALL_DIR/sandbox/bin/$PYTHON_PLAN"
-    assert "l'interprete scelto è installato sul sistema" \
+    assert "the chosen interpreter is installed on the system" \
       pkg_installed "$PYTHON_PLAN"
   fi
 fi
@@ -326,9 +326,9 @@ fi
 # --- phase 2: the installed system works (full mode only) --------------------
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
-  group "Verifica dell'installazione"
+  group "Checking the installation"
 
-  assert "utente di sistema '$OS_USER' creato" id "$OS_USER"
+  assert "system user '$OS_USER' created" id "$OS_USER"
   # privileged, and not out of habit: the perimeter is 0750, so the user running
   # this script may not TRAVERSE it. an unprivileged test there does not answer
   # "absent", it answers "permission denied" — and the assertion turns both into
@@ -338,30 +338,30 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   # environment and not because the question was well put; on another family the
   # bill arrived. a check must be made with the privileges the question needs, or
   # it measures the permissions of whoever runs it.
-  assert "sorgenti in $INSTALL_DIR" sudo test -d "$INSTALL_DIR/odoo"
-  assert "virtualenv creato" sudo test -x "$INSTALL_DIR/sandbox/bin/python3"
-  assert "config generata" sudo test -f "$INSTALL_DIR/odoo${VER_SHORT}.conf"
-  assert "unit systemd installata" test -f "$UNIT_FILE"
-  assert "servizio attivo" systemctl is-active --quiet "$UNIT"
-  assert "servizio abilitato" systemctl is-enabled --quiet "$UNIT"
-  assert "wkhtmltopdf installato" pkg_installed wkhtmltox
+  assert "sources in $INSTALL_DIR" sudo test -d "$INSTALL_DIR/odoo"
+  assert "virtualenv created" sudo test -x "$INSTALL_DIR/sandbox/bin/python3"
+  assert "config generated" sudo test -f "$INSTALL_DIR/odoo${VER_SHORT}.conf"
+  assert "systemd unit installed" test -f "$UNIT_FILE"
+  assert "service active" systemctl is-active --quiet "$UNIT"
+  assert "service enabled" systemctl is-enabled --quiet "$UNIT"
+  assert "wkhtmltopdf installed" pkg_installed wkhtmltox
 
   # the database exists and carries an initialised schema.
   if [ "$(pg_query "select 1 from pg_database where datname='$DB_NAME'")" = "1" ]; then
-    ok "database '$DB_NAME' creato"
+    ok "database '$DB_NAME' created"
   else
-    fail "database '$DB_NAME' assente"
+    fail "database '$DB_NAME' absent"
   fi
   if [ "$(pg_query "select 1 from pg_roles where rolname='$DB_ROLE'")" = "1" ]; then
-    ok "ruolo PostgreSQL '$DB_ROLE' creato"
+    ok "PostgreSQL role '$DB_ROLE' created"
   else
-    fail "ruolo PostgreSQL '$DB_ROLE' assente"
+    fail "PostgreSQL role '$DB_ROLE' absent"
   fi
   if [ "$(sudo -u postgres psql -tAd "$DB_NAME" -c \
         "select 1 from information_schema.tables where table_name='ir_module_module'" 2>/dev/null)" = "1" ]; then
-    ok "schema Odoo inizializzato (ir_module_module presente)"
+    ok "Odoo schema initialised (ir_module_module present)"
   else
-    fail "schema Odoo non inizializzato"
+    fail "Odoo schema not initialised"
   fi
 
   # Odoo really answers on the port. an "active" service is not enough: the
@@ -374,26 +374,26 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
     sleep 2
   done
   case "$http" in
-    200|301|302|303|307) ok "Odoo risponde su :$PORT (HTTP $http)" ;;
-    *) fail "Odoo non risponde su :$PORT (ultimo codice: ${http:-nessuno})"
+    200|301|302|303|307) ok "Odoo answers on :$PORT (HTTP $http)" ;;
+    *) fail "Odoo does not answer on :$PORT (last code: ${http:-none})"
        sudo journalctl -u "$UNIT" -n 60 --no-pager || true ;;
   esac
 
   # A-R5-1: the state survives success and is marked finished. that is what
   # makes a later uninstall possible; if this fails, the rollback below would
   # have nothing to consume.
-  assert "il manifesto di disinstallazione è rimasto sul disco" sudo test -f "$STATE"
+  assert "the uninstall manifest stayed on disk" sudo test -f "$STATE"
   if [ "$(state_json | jq -r '.finished')" = "true" ]; then
-    ok "il manifesto è marcato 'finished'"
+    ok "the manifest is marked 'finished'"
   else
-    fail "il manifesto NON è marcato 'finished': il rollback lo leggerebbe come \
-installazione interrotta"
+    fail "the manifest is NOT marked 'finished': the rollback would read it as an \
+interrupted installation"
   fi
   if [ "$(state_json | jq -r '.config.db_name')" = "$DB_NAME" ]; then
-    ok "il manifesto porta la configurazione reale (db_name=$DB_NAME)"
+    ok "the manifest carries the real configuration (db_name=$DB_NAME)"
   else
-    fail "il manifesto non porta il db_name reale: il rollback non saprebbe cosa \
-rimuovere (regressione A-R4-1)"
+    fail "the manifest does not carry the real db_name: the rollback would not know what \
+to remove (an A-R4-1 regression)"
   fi
 
   endgroup
@@ -407,36 +407,36 @@ fi
 # that is exactly the situation in which defects have survived here.
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]; then
-  group "Verifica Nginx"
+  group "Checking nginx"
 
-  assert "vhost generato in $VHOST" sudo test -f "$VHOST"
+  assert "vhost generated in $VHOST" sudo test -f "$VHOST"
   if [ -n "$VHOST_LINK" ]; then
-    assert "sito abilitato ($VHOST_LINK)" sudo test -L "$VHOST_LINK"
+    assert "site enabled ($VHOST_LINK)" sudo test -L "$VHOST_LINK"
   else
-    info "nessun symlink da verificare: su rpm il vhost vive già in conf.d"
+    info "no symlink to check: on this family the vhost already lives in the active dir"
   fi
-  assert "la configurazione nginx è valida (nginx -t)" sudo nginx -t
-  assert "nginx attivo" systemctl is-active --quiet nginx
+  assert "the nginx configuration is valid (nginx -t)" sudo nginx -t
+  assert "nginx active" systemctl is-active --quiet nginx
 
   # A-V3-12: the vhost's logs carry the version, not a hardcoded one.
   if sudo grep -q "odoo${VER_SHORT}.access.log" "$VHOST"; then
-    ok "i log del vhost seguono la versione installata (A-V3-12)"
+    ok "the vhost logs follow the installed version (A-V3-12)"
   else
-    fail "i log del vhost non portano la versione: due istanze si scriverebbero addosso"
+    fail "the vhost logs carry no version: two instances would write over each other"
     sudo grep -n "access_log\|error_log" "$VHOST" || true
   fi
 
   # A-V3-6: the vhost promises no TLS. a 443 block towards non-existent
   # certificates would fail validation — which above it passes.
   if sudo grep -qE "^\s*listen\s+443|^\s*ssl_certificate" "$VHOST"; then
-    fail "il vhost contiene direttive TLS: non le genera l'installer (A-V3-6)"
+    fail "the vhost contains TLS directives: the installer does not generate them (A-V3-6)"
   else
-    ok "il vhost non promette TLS (è compito di certbot --nginx)"
+    ok "the vhost promises no TLS (that is certbot --nginx's job)"
   fi
 
   # the default site was moved out of the way, which is what frees port 80.
   if [ "$HAS_DEFAULT_SITE" = "1" ]; then
-    refute "il default site è stato disattivato" sudo test -e "$DEFAULT_SITE"
+    refute "the default site was disabled" sudo test -e "$DEFAULT_SITE"
   fi
 
   # the firewall: port 80 must have been opened (A-V3-7).
@@ -447,10 +447,10 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
   # **with no error at all**.
   if [ "$FW_ACTIVE" = "1" ]; then
     if fw_open_ports | grep -qx "80/tcp"; then
-      ok "regola $FW_NAME 80/tcp aperta (A-V3-7: non confusa con 8080/tcp)"
+      ok "$FW_NAME rule 80/tcp opened (A-V3-7: not confused with 8080/tcp)"
     else
-      fail "la porta 80 NON è stata aperta su $FW_NAME: nginx resta irraggiungibile"
-      fw_open_ports | sed 's/^/    porta· /' || true
+      fail "port 80 was NOT opened on $FW_NAME: nginx stays unreachable"
+      fw_open_ports | sed 's/^/    port· /' || true
     fi
   fi
 
@@ -463,8 +463,8 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
     sleep 2
   done
   case "$http80" in
-    200|301|302|303|307) ok "Odoo risponde attraverso Nginx sulla porta 80 (HTTP $http80)" ;;
-    *) fail "la porta 80 non serve Odoo (ultimo codice: ${http80:-nessuno})"
+    200|301|302|303|307) ok "Odoo answers through nginx on port 80 (HTTP $http80)" ;;
+    *) fail "port 80 does not serve Odoo (last code: ${http80:-none})"
        sudo nginx -T 2>/dev/null | head -n 40 || true ;;
   esac
 
@@ -484,7 +484,7 @@ fi
 # instead of leaving them to guess.
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
-  group "Seconda installazione: deve essere rifiutata (A-V3-1)"
+  group "Second installation: it must be refused (A-V3-1)"
 
   sudo cp "$STATE" "$WORK/manifest-before.json"
 
@@ -492,12 +492,12 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   sudo "$BIN" --config "$ENV_FILE" > "$WORK/second-install.log" 2>&1
   SECOND_RC=$?
   set -e
-  echo "exit code seconda installazione: $SECOND_RC"
+  echo "second installation exit code: $SECOND_RC"
 
   if [ "$SECOND_RC" -ne 0 ]; then
-    ok "la seconda installazione è stata rifiutata (exit $SECOND_RC)"
+    ok "the second installation was refused (exit $SECOND_RC)"
   else
-    fail "la seconda installazione è stata ACCETTATA: il manifesto è a rischio (A-V3-1)"
+    fail "the second installation was ACCEPTED: the manifest is at risk (A-V3-1)"
   fi
 
   sudo cp "$STATE" "$WORK/manifest-after.json"
@@ -507,13 +507,13 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   # when nobody had looked at it. a check that cannot run must say "I could not",
   # never "it went badly" — the blindness-versus-absence distinction again.
   if ! command -v cmp >/dev/null 2>&1; then
-    fail "impossibile confrontare il manifesto: 'cmp' non è installato \
-(pacchetto diffutils). Il controllo su A-V3-1 NON è stato eseguito"
+    fail "cannot compare the manifest: 'cmp' is not installed \
+(the diffutils package). the A-V3-1 check did NOT run"
   elif sudo cmp -s "$WORK/manifest-before.json" "$WORK/manifest-after.json"; then
-    ok "il manifesto è rimasto identico byte-per-byte"
+    ok "the manifest stayed identical byte for byte"
   else
-    fail "il manifesto è cambiato dopo un'installazione rifiutata: \
-l'istanza potrebbe non essere più disinstallabile (A-V3-1)"
+    fail "the manifest changed after a refused installation: \
+the instance may no longer be removable (A-V3-1)"
     sudo diff "$WORK/manifest-before.json" "$WORK/manifest-after.json" 2>/dev/null || true
   fi
 
@@ -524,25 +524,25 @@ l'istanza potrebbe non essere più disinstallabile (A-V3-1)"
   # rejected the installation first, because Odoo was listening, and the manifest
   # check was never reached. "free the port" sends the user to stop Odoo, not to
   # uninstall it.
-  if grep -q "installazione completata su questa macchina" "$WORK/second-install.log"; then
-    ok "il rifiuto viene dal manifesto (A-V3-1), non da un effetto collaterale"
+  if grep -q "already registered on this machine" "$WORK/second-install.log"; then
+    ok "the refusal comes from the manifest (A-V3-1), not from a side effect"
   else
-    fail "la seconda installazione è stata respinta, ma NON dal controllo sul manifesto: \
-il rifiuto di A-V3-1 non è stato raggiunto (A-R9-1)"
+    fail "the second installation was rejected, but NOT by the manifest check: \
+A-V3-1's refusal was never reached (A-R9-1)"
     tail -n 20 "$WORK/second-install.log" || true
   fi
 
-  if grep -q -e 'porta .* in uso' "$WORK/second-install.log"; then
-    fail "il rifiuto arriva dal controllo sulla porta: è una CONSEGUENZA \
-dell'installazione esistente, non la causa — l'utente viene mandato a fermare Odoo (A-R9-1)"
+  if grep -q -e 'port .* already in use' "$WORK/second-install.log"; then
+    fail "the refusal comes from the port check: that is a CONSEQUENCE of the existing \
+installation, not the cause — the user is sent to stop Odoo (A-R9-1)"
   else
-    ok "nessuna diagnosi fuorviante sulla porta"
+    ok "no misleading diagnosis about the port"
   fi
 
   if grep -q -e 'rollback' -e '--force' "$WORK/second-install.log"; then
-    ok "il rifiuto indica come procedere (rollback o --force)"
+    ok "the refusal says how to proceed (rollback or --force)"
   else
-    fail "il rifiuto non dice all'utente cosa fare"
+    fail "the refusal does not tell the user what to do"
     tail -n 20 "$WORK/second-install.log" || true
   fi
 
@@ -564,7 +564,7 @@ fi
 # so the manifest is rightly empty here: reading it would give zero packages and
 # every cleanliness check would pass on nothing.
 
-group "Diario dell'esecuzione (dal log)"
+group "The run's journal (from the log)"
 
 # the parsing lives in journal.sh, exercised by its self-test in the fast CI: a
 # pattern that does not match gives no error, it gives zero results — and zero
@@ -574,17 +574,17 @@ journal_strip_ansi "$WORK/install.out" > "$sed_out"
 
 readonly DEP_STEP='install-system-dependencies'
 journal_steps "$sed_out" > "$WORK/steps.txt"
-journal_packages "$sed_out" 'pacchetti aggiunti da noi' "$DEP_STEP" > "$WORK/delta.txt"
-journal_packages "$sed_out" 'pacchetti già presenti, mai toccati' "$DEP_STEP" \
+journal_packages "$sed_out" 'packages added by us' "$DEP_STEP" > "$WORK/delta.txt"
+journal_packages "$sed_out" 'packages already there, never touched' "$DEP_STEP" \
   > "$WORK/preexisting.txt"
 
-info "step completati:                $(wc -l < "$WORK/steps.txt")"
-info "delta (installati da noi):      $(wc -l < "$WORK/delta.txt") pacchetti"
-info "preesistenti (mai toccati):     $(wc -l < "$WORK/preexisting.txt") pacchetti"
+info "completed steps:                $(wc -l < "$WORK/steps.txt")"
+info "delta (installed by us):        $(wc -l < "$WORK/delta.txt") packages"
+info "pre-existing (never touched):   $(wc -l < "$WORK/preexisting.txt") packages"
 
 if [ ! -s "$WORK/delta.txt" ] && [ "$MODE" = "full" ]; then
-  fail "nessun pacchetto nel delta: il diario non è stato letto correttamente, \
-e le verifiche di pulizia passerebbero a vuoto"
+  fail "no package in the delta: the journal was not read correctly, and the \
+cleanliness checks would pass on nothing"
 fi
 
 # in probe mode the installation stops early by construction. without this
@@ -595,9 +595,9 @@ fi
 if [ "$MODE" = "probe" ]; then
   for step in install-system-dependencies install-wkhtmltopdf; do
     if grep -qx "$step" "$WORK/steps.txt"; then
-      ok "la sonda ha superato '$step' su questo OS"
+      ok "the probe got past '$step' on this OS"
     else
-      fail "la sonda non ha raggiunto '$step': la portabilità non è stata verificata"
+      fail "the probe did not reach '$step': portability was not verified"
     fi
   done
 fi
@@ -610,13 +610,13 @@ set +e
 sudo "$BIN" rollback --yes 2>&1 | tee "$WORK/rollback.out"
 ROLLBACK_RC=${PIPESTATUS[0]}
 set -e
-echo "exit code rollback: $ROLLBACK_RC"
+echo "rollback exit code: $ROLLBACK_RC"
 endgroup
 
 if [ "$ROLLBACK_RC" -eq 0 ]; then
-  ok "il rollback è terminato senza errori"
+  ok "the rollback finished without errors"
 else
-  fail "il rollback è uscito con $ROLLBACK_RC"
+  fail "the rollback exited with $ROLLBACK_RC"
 fi
 # two outcomes are both correct, and telling them apart matters.
 #
@@ -625,17 +625,17 @@ fi
 # probe mode, where the installation fails and **undoes itself** during the run,
 # so by the time we get here the system is already clean and the manifest gone.
 # demanding the first would demand that something was still left.
-if grep -q "Nessun residuo" "$WORK/rollback.out"; then
-  ok "il rollback dichiara nessun residuo"
-elif grep -q "Nessuna installazione da annullare" "$WORK/rollback.out"; then
+if grep -q "No leftovers" "$WORK/rollback.out"; then
+  ok "the rollback declares no leftovers"
+elif grep -q "nothing to undo" "$WORK/rollback.out"; then
   if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
-    fail "non c'era nulla da annullare, ma l'installazione era riuscita: il manifesto \
-di disinstallazione è sparito quando invece doveva restare"
+    fail "there was nothing to undo, but the installation had succeeded: the uninstall \
+manifest disappeared when it should have stayed"
   else
-    ok "niente da annullare: il rollback in-process aveva già ripulito tutto"
+    ok "nothing to undo: the in-process rollback had already cleaned everything"
   fi
 else
-  fail "il rollback ha lasciato residui (vedi il report qui sopra)"
+  fail "the rollback left leftovers (see the report above)"
 fi
 
 # --- phase 5: the system is clean again --------------------------------------
@@ -643,21 +643,21 @@ fi
 # the same checks once done by hand on a VM, now automatic. the point is not that
 # the command exited zero: it is that nothing of ours is left on the system.
 
-group "Verifica di pulizia post-rollback"
+group "Cleanliness check after the rollback"
 
 if [ "$OS_USER_PREEXISTING" = "1" ]; then
   # pre-existing: NOT ours to delete. the anti-drop applied to users, and here
   # the assertion runs the other way round.
-  assert "l'utente preesistente '$OS_USER' è sopravvissuto al rollback" id "$OS_USER"
+  assert "the pre-existing user '$OS_USER' survived the rollback" id "$OS_USER"
 else
-  refute "l'utente di sistema '$OS_USER' è stato rimosso" id "$OS_USER"
-  refute "il gruppo '$OS_USER' è stato rimosso" getent group "$OS_USER"
+  refute "the system user '$OS_USER' was removed" id "$OS_USER"
+  refute "the group '$OS_USER' was removed" getent group "$OS_USER"
 fi
-refute "la directory di installazione è sparita" test -d "$INSTALL_DIR"
-refute "l'unit systemd è stata rimossa" test -f "$UNIT_FILE"
-refute "il servizio non è più attivo" systemctl is-active --quiet "$UNIT"
-refute "il manifesto è stato consumato" sudo test -f "$STATE"
-refute "wkhtmltopdf è stato purgato" pkg_installed wkhtmltox
+refute "the install directory is gone" test -d "$INSTALL_DIR"
+refute "the systemd unit was removed" test -f "$UNIT_FILE"
+refute "the service is no longer active" systemctl is-active --quiet "$UNIT"
+refute "the manifest was consumed" sudo test -f "$STATE"
+refute "wkhtmltopdf was purged" pkg_installed wkhtmltox
 
 # the alternative interpreter goes with everything else (M11).
 #
@@ -666,31 +666,31 @@ refute "wkhtmltopdf è stato purgato" pkg_installed wkhtmltox
 # promises to restore — which is why the step that carries it is the one that
 # purges its delta and not the one that leaves what it adds.
 if [ -n "$PYTHON_PLAN" ]; then
-  refute "l'interprete '$PYTHON_PLAN' installato da noi è stato rimosso" \
+  refute "the interpreter '$PYTHON_PLAN' we installed was removed" \
     pkg_installed "$PYTHON_PLAN"
 fi
 
 if pg_reachable; then
   if [ -z "$(pg_query "select 1 from pg_database where datname='$DB_NAME'")" ]; then
-    ok "database '$DB_NAME' droppato"
+    ok "database '$DB_NAME' dropped"
   else
-    fail "database '$DB_NAME' ancora presente"
+    fail "database '$DB_NAME' still present"
   fi
   if [ -z "$(pg_query "select 1 from pg_roles where rolname='$DB_ROLE'")" ]; then
-    ok "ruolo PostgreSQL '$DB_ROLE' rimosso"
+    ok "PostgreSQL role '$DB_ROLE' removed"
   else
-    fail "ruolo PostgreSQL '$DB_ROLE' ancora presente"
+    fail "PostgreSQL role '$DB_ROLE' still present"
   fi
 else
-  info "PostgreSQL non raggiungibile: verifiche su DB/ruolo saltate"
-  info "(atteso in MODE=probe, dove il servizio non è mai partito)"
+  info "PostgreSQL unreachable: the DB and role checks were skipped"
+  info "(expected in MODE=probe, where the service never started)"
 fi
 
 # PostgreSQL stays INSTALLED: without the aggressive flag the rollback only
 # stops and disables, because those are reversible and a purge is not (D3). that
 # it stays is correct behaviour, not a leftover.
 if pkg_installed postgresql; then
-  ok "PostgreSQL resta installato (corretto: purge solo con --aggressive-rollback)"
+  ok "PostgreSQL stays installed (correct: purge only with --aggressive-rollback)"
 fi
 
 # the customer's nginx config comes back as it was (B-V3-7).
@@ -699,9 +699,9 @@ fi
 # configuration**: removing it to free port 80 is lawful, not putting it back is
 # not. until this phase no real run had ever checked it.
 if [ "$WITH_NGINX" = "true" ]; then
-  refute "il vhost è stato rimosso" sudo test -f "$VHOST"
+  refute "the vhost was removed" sudo test -f "$VHOST"
   if [ -n "$VHOST_LINK" ]; then
-    refute "il sito è stato disabilitato" sudo test -e "$VHOST_LINK"
+    refute "the site was disabled" sudo test -e "$VHOST_LINK"
   fi
 
   # on that family the default site is not a separate file: there is no return
@@ -709,24 +709,24 @@ if [ "$WITH_NGINX" = "true" ]; then
   # reason.
   if [ "$HAS_DEFAULT_SITE" = "1" ]; then
   case "$DEFAULT_SITE_BEFORE" in
-    assente)
-      refute "nessun default site inventato dal rollback" sudo test -e "$DEFAULT_SITE"
+    absent)
+      refute "no default site invented by the rollback" sudo test -e "$DEFAULT_SITE"
       ;;
     symlink:*)
-      atteso="${DEFAULT_SITE_BEFORE#symlink:}"
-      if [ -L "$DEFAULT_SITE" ] && [ "$(readlink "$DEFAULT_SITE")" = "$atteso" ]; then
-        ok "il default site è tornato al suo target originale ($atteso)"
+      expected="${DEFAULT_SITE_BEFORE#symlink:}"
+      if [ -L "$DEFAULT_SITE" ] && [ "$(readlink "$DEFAULT_SITE")" = "$expected" ]; then
+        ok "the default site came back to its original target ($expected)"
       else
-        fail "il default site NON è stato ripristinato com'era: atteso symlink → $atteso, \
-trovato $( [ -e "$DEFAULT_SITE" ] && ls -ld "$DEFAULT_SITE" || echo assente )"
+        fail "the default site was NOT restored as it was: expected a symlink to $expected, \
+found $( [ -e "$DEFAULT_SITE" ] && ls -ld "$DEFAULT_SITE" || echo absent )"
       fi
       ;;
     file)
       if [ -f "$DEFAULT_SITE" ] && [ ! -L "$DEFAULT_SITE" ]; then
-        ok "il default site (file regolare) è stato rimesso al suo posto"
+        ok "the default site (a regular file) was put back"
       else
-        fail "un default site che era un FILE non è tornato tale: è la perdita di \
-configurazione che A-V3-5 descrive"
+        fail "a default site that was a FILE did not come back as one: the configuration \
+loss A-V3-5 describes"
       fi
       ;;
   esac
@@ -737,23 +737,23 @@ configurazione che A-V3-5 descrive"
   # firewall.
   if [ "$FW_ACTIVE" = "1" ]; then
     if fw_open_ports | grep -qx "80/tcp"; then
-      fail "la regola 80/tcp aperta da noi è rimasta dopo il rollback ($FW_NAME)"
+      fail "the 80/tcp rule we opened stayed after the rollback ($FW_NAME)"
     else
-      ok "la regola $FW_NAME 80/tcp è stata richiusa"
+      ok "the $FW_NAME 80/tcp rule was closed again"
     fi
     if fw_open_ports | grep -qx "8080/tcp"; then
-      ok "la regola preesistente 8080/tcp è intatta ($FW_NAME)"
+      ok "the pre-existing 8080/tcp rule is intact ($FW_NAME)"
     else
-      fail "il rollback ha rimosso una regola $FW_NAME che non aveva aperto lui"
+      fail "the rollback removed a $FW_NAME rule it had not opened"
     fi
   fi
 
   # nginx survives and stays serviceable: the rollback must not leave the
   # customer's service with a broken config (A1.4).
   if pkg_installed nginx || pkg_installed nginx-core || pkg_installed nginx-full; then
-    ok "nginx resta installato (purge solo con --aggressive-rollback)"
+    ok "nginx stays installed (purge only with --aggressive-rollback)"
   fi
-  assert "la configurazione nginx è valida anche dopo il rollback" sudo nginx -t
+  assert "the nginx configuration is valid after the rollback too" sudo nginx -t
 fi
 
 # the package delta: purged in full.
@@ -761,14 +761,14 @@ delta_left=0
 while read -r pkg; do
   if [ -z "$pkg" ]; then continue; fi
   if pkg_installed "$pkg"; then
-    fail "pacchetto del delta ancora installato: $pkg"
+    fail "a delta package is still installed: $pkg"
     delta_left=$((delta_left + 1))
   fi
 done < "$WORK/delta.txt"
 # an `if`, not a short-circuit: under `set -e` a false test as the last command
 # of an `&&` list would exit the script before the final report.
 if [ "$delta_left" -eq 0 ]; then
-  ok "tutti i pacchetti del delta sono stati purgati"
+  ok "every delta package was purged"
 fi
 
 # the pre-existing ones: never touched. the surgical promise from the other
@@ -777,12 +777,12 @@ preexisting_lost=0
 while read -r pkg; do
   if [ -z "$pkg" ]; then continue; fi
   if ! pkg_installed "$pkg"; then
-    fail "pacchetto PREESISTENTE rimosso dal rollback: $pkg"
+    fail "a PRE-EXISTING package was removed by the rollback: $pkg"
     preexisting_lost=$((preexisting_lost + 1))
   fi
 done < "$WORK/preexisting.txt"
 if [ "$preexisting_lost" -eq 0 ]; then
-  ok "nessun pacchetto preesistente è stato toccato"
+  ok "no pre-existing package was touched"
 fi
 
 # the same promise **without bookkeeping**: the set of installed packages before
@@ -790,10 +790,10 @@ fi
 # cannot pass for the wrong reason — the difference between "the packages we said
 # we added are gone" and "nothing that was there is gone".
 pkgs_installed_now > "$WORK/pkgs-after.txt"
-if perduti="$(comm -23 "$WORK/pkgs-before.txt" "$WORK/pkgs-after.txt")" && [ -z "$perduti" ]; then
-  ok "nessun pacchetto presente prima dell'installazione è stato rimosso"
+if lost="$(comm -23 "$WORK/pkgs-before.txt" "$WORK/pkgs-after.txt")" && [ -z "$lost" ]; then
+  ok "no package present before the installation was removed"
 else
-  fail "il rollback ha rimosso pacchetti che c'erano già: $(echo "$perduti" | tr '\n' ' ')"
+  fail "the rollback removed packages that were already there: $(echo "$lost" | tr '\n' ' ')"
 fi
 
 # on a virgin machine the perimeter directory must NOT exist after the rollback.
@@ -814,12 +814,12 @@ fi
 # pre-existing, NOT removing it would be the correct behaviour — hence the
 # snapshot taken before installing.
 if [ "${OPT_ODOO_PREEXISTING:-0}" = "1" ]; then
-  ok "$ODOO_HOME era preesistente: il rollback non deve rimuoverla (nessuna asserzione)"
+  ok "$ODOO_HOME was pre-existing: the rollback must not remove it (nothing asserted)"
 elif [ -d "$ODOO_HOME" ]; then
   leftovers="$(sudo ls -A "$ODOO_HOME" | tr '\n' ' ' || true)"
-  fail "$ODOO_HOME è sopravvissuta al rollback (contenuto: ${leftovers:-vuota}) — A-V3-2"
+  fail "$ODOO_HOME survived the rollback (contents: ${leftovers:-empty}) — A-V3-2"
 else
-  ok "$ODOO_HOME non esiste più: il perimetro è tornato com'era"
+  ok "$ODOO_HOME no longer exists: the perimeter is back as it was"
 fi
 
 endgroup
@@ -828,17 +828,17 @@ endgroup
 
 echo
 if [ "$FAILURES" -eq 0 ]; then
-  echo "=== INTEGRAZIONE OK ($MODE): installazione e rollback verificati sul sistema reale ==="
+  echo "=== INTEGRATION OK ($MODE): installation and rollback verified on the real system ==="
   exit 0
 fi
-echo "=== INTEGRAZIONE FALLITA ($MODE): $FAILURES verifiche non superate ==="
-echo "Verifiche fallite:"
+echo "=== INTEGRATION FAILED ($MODE): $FAILURES checks did not pass ==="
+echo "Failed checks:"
 for check in "${FAILED_CHECKS[@]}"; do
   echo "  ✖  $check"
   # an error annotation shows at the top of the run: visible without opening
   # anything, which is the point.
   echo "::error::$check"
 done
-echo "Log dell'installer:"
-sudo tail -n 100 /var/log/invok.log 2>/dev/null || echo "(nessun log)"
+echo "The installer's log:"
+sudo tail -n 100 /var/log/invok.log 2>/dev/null || echo "(no log)"
 exit 1

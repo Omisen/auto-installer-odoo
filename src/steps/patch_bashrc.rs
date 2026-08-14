@@ -50,11 +50,11 @@ impl PatchBashrc {
     fn user_and_bashrc(&self, ctx: &Context) -> Result<(String, std::path::PathBuf), StepError> {
         let user = ctx.sudo_user.clone().ok_or_else(|| {
             StepError::Precondition(
-                "SUDO_USER non disponibile: l'installer deve girare via sudo".to_string(),
+                "SUDO_USER is unset: the installer must run through sudo".to_string(),
             )
         })?;
         let home = self.ops.getent_home(&user)?.ok_or_else(|| {
-            StepError::Precondition(format!("impossibile determinare la home per '{user}'"))
+            StepError::Precondition(format!("cannot determine the home of '{user}'"))
         })?;
         Ok((user, std::path::PathBuf::from(home).join(".bashrc")))
     }
@@ -92,18 +92,18 @@ impl Step for PatchBashrc {
         } else {
             PreState::Untracked
         };
-        info!(bashrc_existed = self.snap.bashrc_existed, prestate = ?self.snap.prestate, "snapshot patch-bashrc");
+        info!(bashrc_existed = self.snap.bashrc_existed, prestate = ?self.snap.prestate, "snapshot: patch-bashrc");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.prestate == PreState::Preexisting {
-            info!("run: riga PATH già presente, nessuna modifica");
+            info!("run: the PATH line is already there, nothing changed");
             return Ok(());
         }
         let (user, bashrc) = self.user_and_bashrc(ctx)?;
         if ctx.dry_run {
-            info!("run (dry-run): appenderei la riga PATH al .bashrc di {user}");
+            info!("run (dry run): would append the PATH line to {user}'s .bashrc");
             return Ok(());
         }
 
@@ -112,7 +112,7 @@ impl Step for PatchBashrc {
             let backup = format!("{}.bak.{}", bashrc.display(), unix_timestamp());
             self.ops.copy_file(&bashrc, std::path::Path::new(&backup))?;
             self.snap.backup_path = Some(backup.clone());
-            info!(backup = %backup, "run: backup del .bashrc creato");
+            info!(backup = %backup, "run: a backup of the .bashrc was made");
         }
 
         // append the SINGLE line; never rewrite the whole file.
@@ -120,26 +120,26 @@ impl Step for PatchBashrc {
         self.ops.chown_to_user(&bashrc, &user)?;
 
         self.snap.prestate = PreState::CreatedByUs;
-        info!("run: riga PATH aggiunta al .bashrc di {user}");
+        info!("run: PATH line added to {user}'s .bashrc");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         // acts only on a line we added.
         if self.snap.prestate != PreState::CreatedByUs {
-            info!("undo NO-OP: la riga PATH non è stata aggiunta da noi");
+            info!("undo NO-OP: the PATH line was not added by us");
             return Ok(());
         }
         let (user, bashrc) = self.user_and_bashrc(ctx)?;
         if ctx.dry_run {
-            info!("undo (dry-run): ripristino backup / rimozione riga esatta");
+            info!("undo (dry run): restore the backup, or remove the exact line");
             return Ok(());
         }
 
         // a file that did not exist before us is ours to remove.
         if !self.snap.bashrc_existed {
             if let Err(e) = self.ops.remove_file(&bashrc) {
-                warn!(error = %e, "undo: rimozione .bashrc creato da noi fallita, proseguo");
+                warn!(error = %e, "undo: removing the .bashrc we created failed, proceeding");
             }
             return Ok(());
         }
@@ -149,13 +149,13 @@ impl Step for PatchBashrc {
             let backup_path = std::path::Path::new(backup);
             if self.ops.path_exists(backup_path) {
                 if let Err(e) = self.ops.move_file(backup_path, &bashrc) {
-                    warn!(error = %e, "undo: ripristino backup fallito, provo il fallback match-esatto");
+                    warn!(error = %e, "undo: restoring the backup failed, trying the exact-match fallback");
                 } else {
-                    info!("undo: .bashrc ripristinato dal backup (identico all'originale)");
+                    info!("undo: .bashrc restored from the backup (identical to the original)");
                     return Ok(());
                 }
             } else {
-                warn!(backup = %backup, "undo: backup non trovato, uso il fallback match-esatto");
+                warn!(backup = %backup, "undo: backup not found, using the exact-match fallback");
             }
         }
 
@@ -166,9 +166,9 @@ impl Step for PatchBashrc {
                 self.ops.write_private_file(&bashrc, &cleaned)?;
                 let _ = self.ops.chmod(&bashrc, BASHRC_MODE);
                 let _ = self.ops.chown_to_user(&bashrc, &user);
-                info!("undo: rimossa la sola riga PATH aggiunta da noi");
+                info!("undo: removed only the PATH line we added");
             }
-            Err(e) => warn!(error = %e, "undo: impossibile leggere il .bashrc, non modifico"),
+            Err(e) => warn!(error = %e, "undo: cannot read the .bashrc, leaving it alone"),
         }
         Ok(())
     }

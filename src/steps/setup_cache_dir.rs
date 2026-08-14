@@ -95,7 +95,7 @@ impl Step for SetupCacheDir {
         info!(
             cache = %cache.display(),
             prestate = ?self.snap.prestate,
-            "snapshot setup-cache-dir"
+            "snapshot: setup-cache-dir"
         );
         Ok(())
     }
@@ -106,12 +106,12 @@ impl Step for SetupCacheDir {
         if self.snap.prestate == PreState::Preexisting {
             info!(
                 cache = %cache.display(),
-                "run: la cache esisteva già, non è nostra (né la usiamo, né la rimuoveremo)"
+                "run: the cache was already there, it is not ours (we neither use nor remove it)"
             );
             return Ok(());
         }
         if ctx.dry_run {
-            info!(cache = %cache.display(), "run (dry-run): creerei la cache come utente odoo");
+            info!(cache = %cache.display(), "run (dry run): would create the cache as the odoo user");
             return Ok(());
         }
 
@@ -119,7 +119,7 @@ impl Step for SetupCacheDir {
         // the programs would open another cache somewhere else.
         self.ops.mkdir_p_as_user(&ctx.odoo_user, &cache)?;
         self.snap.prestate = PreState::CreatedByUs;
-        info!(cache = %cache.display(), "run: cache creata (owned {}:{})", ctx.odoo_user, ctx.odoo_user);
+        info!(cache = %cache.display(), "run: cache created (owned {}:{})", ctx.odoo_user, ctx.odoo_user);
         Ok(())
     }
 
@@ -127,7 +127,7 @@ impl Step for SetupCacheDir {
         if self.snap.prestate != PreState::CreatedByUs {
             info!(
                 prestate = ?self.snap.prestate,
-                "undo NO-OP (cache non creata da noi)"
+                "undo NO-OP (cache not created by us)"
             );
             return Ok(());
         }

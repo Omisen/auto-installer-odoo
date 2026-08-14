@@ -132,7 +132,7 @@ fn resuming_with_different_artifacts_is_refused_and_says_which() {
     assert_eq!(
         differenze[0],
         (
-            "nome database",
+            "database name",
             "citest".to_string(),
             "fatturazione".to_string()
         ),

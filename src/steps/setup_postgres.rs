@@ -55,14 +55,14 @@ pub fn cluster_path_conflict(
         return None;
     }
     Some(format!(
-        "il cluster PostgreSQL di questo sistema è configurato in `{}`, mentre l'installer sa \
-         gestirne uno solo in `{}`. La differenza non è cosmetica: `postgresql-setup` \
-         inizializzerebbe il primo, mentre il rollback con --aggressive-rollback rimuoverebbe il \
-         secondo — cioè una directory che non abbiamo creato noi e che su questa macchina può \
-         contenere un cluster preesistente. Mi fermo prima di toccare qualsiasi cosa. \
-         Vie d'uscita: installare su una macchina con il PGDATA di default, oppure rimuovere il \
-         drop-in che sposta PGDATA da `postgresql.service` (`systemctl show -p Environment \
-         postgresql.service` mostra quello attivo).",
+        "this system's PostgreSQL cluster is configured at `{}`, while the installer only \
+         knows how to handle one at `{}`. the difference is not cosmetic: the init would \
+         create the first, while a rollback with --aggressive-rollback would remove the \
+         second — a directory we did not create and which on this machine may hold a \
+         pre-existing cluster. stopping before touching anything.\n\
+         ways out: install on a machine with the default PGDATA, or remove the drop-in that \
+         moves PGDATA from `postgresql.service` (`systemctl show -p Environment \
+         postgresql.service` shows the active one).",
         declared.display(),
         ours.display()
     ))
@@ -170,14 +170,14 @@ impl Step for SetupPostgres {
             enabled = ?self.snap.enabled,
             active = ?self.snap.active,
             cluster = ?self.snap.cluster_initialized,
-            "snapshot setup-postgres"
+            "snapshot: setup-postgres"
         );
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("run (dry-run): installerei/abiliterei/avvierei PostgreSQL secondo necessità");
+            info!("run (dry run): would install, enable and start PostgreSQL as needed");
             return Ok(());
         }
 
@@ -186,7 +186,7 @@ impl Step for SetupPostgres {
             let refs: Vec<&str> = packages.iter().map(String::as_str).collect();
             self.ops.packages().install(&refs)?;
             self.snap.installed = PreState::CreatedByUs;
-            info!("run: PostgreSQL installato");
+            info!("run: PostgreSQL installed");
         }
         // the cluster BEFORE enabling and starting: without it the service does
         // not come up, and the final check would fail with a message about
@@ -208,23 +208,23 @@ impl Step for SetupPostgres {
             }
             self.ops.distro().init_postgres_cluster()?;
             self.snap.cluster_initialized = PreState::CreatedByUs;
-            info!("run: cluster PostgreSQL inizializzato");
+            info!("run: PostgreSQL cluster initialised");
         }
         if self.snap.enabled == PreState::Untracked {
             self.ops.service_enable(PG_SERVICE)?;
             self.snap.enabled = PreState::CreatedByUs;
-            info!("run: servizio postgresql abilitato");
+            info!("run: the postgresql service was enabled");
         }
         if self.snap.active == PreState::Untracked {
             self.ops.service_start(PG_SERVICE)?;
             self.snap.active = PreState::CreatedByUs;
-            info!("run: servizio postgresql avviato");
+            info!("run: the postgresql service was started");
         }
 
         // final check: it must come out running.
         if !self.ops.service_is_active(PG_SERVICE) {
             return Err(StepError::Precondition(
-                "PostgreSQL non risulta attivo dopo lo start (controlla journalctl -u postgresql)"
+                "PostgreSQL is not active after the start (check journalctl -u postgresql)"
                     .to_string(),
             ));
         }
@@ -233,7 +233,7 @@ impl Step for SetupPostgres {
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("undo (dry-run): stop/disable secondo lo snapshot; purge solo se aggressive");
+            info!("undo (dry run): stop and disable according to the snapshot; purge only if aggressive");
             return Ok(());
         }
 
@@ -245,14 +245,14 @@ impl Step for SetupPostgres {
         // stop only what we started (D4); an already-running service stays up.
         if self.snap.active == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_stop(PG_SERVICE) {
-                warn!(error = %e, "undo: stop postgresql fallito, proseguo (best-effort)");
+                warn!(error = %e, "undo: stopping postgresql failed, proceeding (best-effort)");
             }
         }
 
         // disable only what we enabled (D4).
         if self.snap.enabled == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_disable(PG_SERVICE) {
-                warn!(error = %e, "undo: disable postgresql fallito, proseguo (best-effort)");
+                warn!(error = %e, "undo: disabling postgresql failed, proceeding (best-effort)");
             }
         }
 
@@ -261,23 +261,23 @@ impl Step for SetupPostgres {
         if self.snap.installed == PreState::CreatedByUs {
             if purge_safe {
                 warn!(
-                    "--aggressive-rollback: purge PostgreSQL (nessun altro database nel cluster)"
+                    "--aggressive-rollback: purging PostgreSQL (no other database in the cluster)"
                 );
                 let packages = self.packages();
                 let refs: Vec<&str> = packages.iter().map(String::as_str).collect();
                 crate::steps::remove_with_recovery(self.ops.packages(), "setup-postgres", &refs);
                 if let Err(e) = self.ops.packages().remove_orphans() {
-                    warn!(error = %e, "undo: autoremove fallito, proseguo (best-effort)");
+                    warn!(error = %e, "undo: autoremove failed, proceeding (best-effort)");
                 }
             } else if purge_wanted {
                 warn!(
-                    "PostgreSQL ospita altri database (o non verificabile): NON lo rimuovo per \
-                     sicurezza. Applicati solo stop+disable."
+                    "PostgreSQL hosts other databases (or cannot be checked): NOT removing it, \
+                     for safety. only stop and disable were applied."
                 );
             } else {
                 info!(
-                    "undo: PostgreSQL lasciato installato (stop+disable sono reversibili; \
-                     il purge no). Usa --aggressive-rollback per rimuoverlo."
+                    "undo: PostgreSQL left installed (stop and disable are reversible, a purge \
+                     is not). use --aggressive-rollback to remove it."
                 );
             }
         }
@@ -292,20 +292,20 @@ impl Step for SetupPostgres {
                 Some(dir) if purge_safe => {
                     warn!(
                         data_dir = %dir.display(),
-                        "--aggressive-rollback: rimuovo il cluster PostgreSQL che avevamo inizializzato"
+                        "--aggressive-rollback: removing the PostgreSQL cluster we initialised"
                     );
                     if let Err(e) = self.ops.remove_dir_all(&dir) {
                         warn!(
                             data_dir = %dir.display(),
                             error = %e,
-                            "undo: rimozione del cluster fallita, proseguo (best-effort)"
+                            "undo: removing the cluster failed, proceeding (best-effort)"
                         );
                     }
                 }
                 Some(dir) => info!(
                     data_dir = %dir.display(),
-                    "undo: cluster PostgreSQL lasciato al suo posto (serve --aggressive-rollback, \
-                     e solo se non ospita altri database)"
+                    "undo: PostgreSQL cluster left in place (it needs --aggressive-rollback, and \
+                     only if it hosts no other database)"
                 ),
                 None => {}
             }
@@ -343,12 +343,12 @@ impl SetupPostgres {
                 if others.is_empty() {
                     true
                 } else {
-                    warn!(others = ?others, "cluster PostgreSQL con altri database: purge declinato");
+                    warn!(others = ?others, "the PostgreSQL cluster holds other databases: purge declined");
                     false
                 }
             }
             Err(e) => {
-                warn!(error = %e, "impossibile elencare i database: per sicurezza non purgo");
+                warn!(error = %e, "cannot list the databases: declining the purge, for safety");
                 false
             }
         }

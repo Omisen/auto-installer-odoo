@@ -51,8 +51,8 @@ pub fn acquire(path: &Path) -> Result<LockGuard, StepError> {
     match Flock::lock(file, FlockArg::LockExclusiveNonblock) {
         Ok(flock) => Ok(LockGuard { _flock: flock }),
         Err(_) => Err(StepError::Precondition(format!(
-            "un'altra installazione è in corso (lock su {}). Attendi il termine o rimuovi il lock \
-             se sei certo che nessun'altra esecuzione sia attiva.",
+            "another installation is in progress (lock on {}). wait for it to finish, or \
+             remove the lock if you are certain no other run is active.",
             path.display()
         ))),
     }

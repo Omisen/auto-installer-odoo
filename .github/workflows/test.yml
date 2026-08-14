@@ -36,35 +36,35 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v5
 
-      - name: Toolchain Rust (stable + clippy + rustfmt)
+      - name: Rust toolchain (stable + clippy + rustfmt)
         uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy, rustfmt
 
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
 
       # ordered fastest-to-fail first, so feedback comes quickly.
-      - name: Formattazione (cargo fmt --check)
+      - name: Formatting (cargo fmt --check)
         run: cargo fmt --all -- --check
 
-      - name: Lint (clippy, warning = errore)
+      - name: Lint (clippy, warnings are errors)
         run: cargo clippy --all-targets -- -D warnings
 
-      - name: Test (senza root, sistema mockato)
+      - name: Tests (no root, mocked system)
         run: cargo test --locked
 
-      - name: Build release (verifica che il binario compili)
+      - name: Release build (checks the binary compiles)
         run: cargo build --release --locked
 
       # the CI scripts read the installer's log format, and a pattern that does
       # not match is not an error: it is zero results, which in a cleanliness
       # check looks like a passing verification. a second here; a whole round in
       # the real integration.
-      - name: Self-test degli script di CI (lettura del diario)
+      - name: Self-test of the CI scripts (journal reading)
         run: bash scripts/ci/selftest-journal.sh
 
-      - name: Sintassi degli script di CI
+      - name: Syntax of the CI scripts
         run: |
           for f in scripts/ci/*.sh; do
             bash -n "$f" || exit 1

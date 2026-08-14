@@ -60,18 +60,18 @@ impl Step for NginxReload {
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if !ctx.with_nginx {
-            info!("nginx non richiesto, skip nginx-reload");
+            info!("nginx not requested, skipping nginx-reload");
             return Ok(());
         }
         if ctx.dry_run {
-            info!("run (dry-run): nginx -t poi reload/start");
+            info!("run (dry run): nginx -t, then reload or start");
             return Ok(());
         }
 
         // never reload a config that fails `nginx -t`.
         if !self.ops.nginx_test() {
             return Err(StepError::Precondition(
-                "nginx -t ha riportato errori: non ricarico una config non valida".to_string(),
+                "nginx -t reported errors: an invalid config is not reloaded".to_string(),
             ));
         }
 
@@ -81,20 +81,20 @@ impl Step for NginxReload {
             self.ops.service_start(NGINX_SERVICE)?;
             self.snap.active = PreState::CreatedByUs;
         }
-        info!("run: nginx ricaricato/attivo");
+        info!("run: nginx reloaded and active");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("undo (dry-run): stop nginx se avviato da noi, altrimenti reload");
+            info!("undo (dry run): stop nginx if we started it, otherwise reload");
             return Ok(());
         }
         match self.snap.active {
             // stop only what we started (D4).
             PreState::CreatedByUs => {
                 if let Err(e) = self.ops.service_stop(NGINX_SERVICE) {
-                    warn!(error = %e, "undo: stop nginx fallito, proseguo (best-effort)");
+                    warn!(error = %e, "undo: stopping nginx failed, proceeding (best-effort)");
                 }
             }
             // already running before us, so it stays running (D4) — but **no
@@ -107,7 +107,7 @@ impl Step for NginxReload {
             // `NginxInstall::undo`.
             PreState::Preexisting => {
                 info!(
-                    "undo: nginx era già attivo, lo lascio attivo (reload finale in nginx-install)"
+                    "undo: nginx was already active, leaving it so (the final reload is in nginx-install)"
                 );
             }
             // gated off, or nothing done: a no-op.

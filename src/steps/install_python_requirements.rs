@@ -105,10 +105,10 @@ impl InstallPythonRequirements {
         &self,
         venv: &std::path::Path,
         user: &str,
-        nome: &str,
+        name: &str,
         content: &str,
     ) -> Result<std::path::PathBuf, StepError> {
-        let path = crate::system_ops::private_temp_path(&venv.join(nome), nome);
+        let path = crate::system_ops::private_temp_path(&venv.join(name), name);
         self.ops.create_private_file(&path, content)?;
         self.ops.chown_named(&path, user, user)?;
         Ok(path)
@@ -128,7 +128,7 @@ impl Step for InstallPythonRequirements {
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("run (dry-run): pip upgrade + Cython<3 + gevent (no-build-isolation) + requirements");
+            info!("run (dry run): pip upgrade + Cython<3 + gevent (no-build-isolation) + requirements");
             return Ok(());
         }
 
@@ -176,7 +176,7 @@ impl Step for InstallPythonRequirements {
         // the markers survive and pip picks the version (A-R6-3).
         let gevent_lines = gevent_stack_lines(&content);
         if gevent_lines.trim().is_empty() {
-            info!("run: nessuna riga gevent nei requirements, salto il passo dedicato");
+            info!("run: no gevent line in the requirements, skipping the dedicated step");
         } else {
             let tmp_gevent = self.write_requirements_for_user(
                 &venv,
@@ -233,7 +233,7 @@ impl Step for InstallPythonRequirements {
         outcome?;
 
         self.installed = true;
-        info!("run: dipendenze Python installate");
+        info!("run: Python dependencies installed");
         Ok(())
     }
 
@@ -241,8 +241,8 @@ impl Step for InstallPythonRequirements {
         // a deliberate no-op: the packages live in the venv, whose own undo
         // removes them.
         info!(
-            "undo NO-OP: i pacchetti pip vivono nel venv; la rimozione è coperta \
-             dall'undo di CreateVirtualenv"
+            "undo NO-OP: the pip packages live in the venv, and their removal is covered \
+             by CreateVirtualenv's undo"
         );
         Ok(())
     }
@@ -321,21 +321,21 @@ pub fn explain_gevent_failure(
     let Some(python) = python.filter(|v| crate::checks::python_is_newer_than_tested(*v)) else {
         return error;
     };
-    let versione = crate::checks::format_python(python);
-    let provata = crate::checks::format_python(crate::checks::NEWEST_TESTED_PYTHON);
+    let version = crate::checks::format_python(python);
+    let tested = crate::checks::format_python(crate::checks::NEWEST_TESTED_PYTHON);
     let diagnosis = format!(
-        "il build di gevent è fallito, e questo sistema usa Python {versione} — più recente di \
-         Python {provata}, l'ultimo su cui l'installer arriva in fondo.\n\
-         Odoo pinna gevent e greenlet per versione di interprete, e per un Python più recente \
-         dei suoi pin non esiste una wheel già compilata: pip deve costruire dai sorgenti, e il \
-         C generato di quelle versioni non regge gli header di un CPython più nuovo. Non è un \
-         problema di compilatore né di pacchetti di sistema mancanti: è la versione, e nessun \
-         flag di build la aggira.\n\
-         Le righe che questa versione di Odoo dichiara:\n{}\n\
-         Le vie d'uscita sono due, entrambe fuori dalla portata dell'installer: una release con \
-         un Python coperto da quei pin, oppure una versione di Odoo che pinni questo interprete. \
-         Installare un gevent diverso da quello pinnato non è una di queste: sarebbe una \
-         combinazione che nessuno ha provato.",
+        "the gevent build failed, and this system runs Python {version} — newer than \
+         Python {tested}, the latest one the installer is known to get through.\n\
+         Odoo pins gevent and greenlet per interpreter version, and for a Python newer than \
+         its pins there is no prebuilt wheel: pip has to build from source, and the C those \
+         versions generate does not survive a newer CPython's headers. this is not a compiler \
+         problem nor a missing system package: it is the version, and no build flag gets \
+         around it.\n\
+         the lines this Odoo version declares:\n{}\n\
+         there are two ways out, both beyond the installer's reach: a release with a Python \
+         those pins cover, or an Odoo version that pins this interpreter. installing a gevent \
+         other than the pinned one is not one of them — it would be a combination nobody has \
+         tried.",
         gevent_lines
             .lines()
             .map(|l| format!("  {l}"))

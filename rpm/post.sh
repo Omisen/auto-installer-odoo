@@ -16,8 +16,8 @@
 # upgrade, and we want the alias in both.
 
 if [ -e /usr/bin/vok ] && [ ! -L /usr/bin/vok ]; then
-    echo "invok: /usr/bin/vok esiste e non è un collegamento simbolico." >&2
-    echo "invok: alias 'vok' NON creato; usa il comando 'invok'." >&2
+    echo "invok: /usr/bin/vok exists and is not a symlink." >&2
+    echo "invok: the 'vok' alias was NOT created; use the 'invok' command." >&2
 else
     ln -sfn invok /usr/bin/vok
 fi

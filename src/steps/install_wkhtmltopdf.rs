@@ -208,8 +208,8 @@ impl InstallWkhtmltopdf {
         // does not download.
         let os = ctx.os_info.as_ref().ok_or_else(|| {
             StepError::Precondition(
-                "informazioni sull'OS non disponibili: impossibile scegliere il pacchetto \
-                 wkhtmltopdf per questo sistema"
+                "no OS information available: the wkhtmltopdf package for this system \
+                 cannot be chosen"
                     .to_string(),
             )
         })?;
@@ -218,11 +218,11 @@ impl InstallWkhtmltopdf {
         if mapping.fallback {
             warn!(
                 os = %os.id,
-                versione = %os.version,
+                version = %os.version,
                 codename = ?os.codename,
-                pacchetto = %mapping.suffix,
-                "sistema non mappato: uso il pacchetto più recente della stessa famiglia. \
-                 Se wkhtmltopdf non funziona su questa release, è il primo posto dove guardare."
+                package = %mapping.suffix,
+                "unmapped system: using the most recent package of the same family. if \
+                 wkhtmltopdf misbehaves on this release, this is the first place to look."
             );
         }
         let suffix = &mapping.suffix;
@@ -233,22 +233,22 @@ impl InstallWkhtmltopdf {
         // unknown suffix for a family that has pins is a case to map, while a
         // family with **no pins at all** has never been calibrated.
         let expected = self.checksums.get(suffix).ok_or_else(|| {
-            let famiglia_senza_pin = !self
+            let family_without_pins = !self
                 .checksums
                 .keys()
                 .any(|k| known_suffixes_for(os.family).contains(&k.as_str()));
-            if famiglia_senza_pin {
+            if family_without_pins {
                 StepError::Precondition(format!(
-                    "i pin TOFU di wkhtmltopdf per la famiglia '{}' non sono ancora stati \
-                     generati (G3): l'installazione si ferma invece di scaricare un binario \
-                     non verificabile. La procedura per generarli è nel doc di \
+                    "the wkhtmltopdf TOFU pins for family '{}' have not been generated yet \
+                     (G3): the installation stops rather than download an unverifiable \
+                     binary. the procedure to generate them is documented on \
                      `default_checksums`.",
                     os.family
                 ))
             } else {
                 StepError::Precondition(format!(
-                    "checksum wkhtmltopdf non disponibile per '{suffix}' (G3): \
-                     impossibile verificare l'integrità, installazione rifiutata"
+                    "wkhtmltopdf checksum unavailable for '{suffix}' (G3): integrity \
+                     cannot be verified, installation refused"
                 ))
             }
         })?;
@@ -270,7 +270,7 @@ impl InstallWkhtmltopdf {
         let outcome = self.download_verify_install_inner(&url, &tmp, expected);
         if let Err(e) = std::fs::remove_file(&tmp) {
             if e.kind() != std::io::ErrorKind::NotFound {
-                warn!(tmp = %tmp.display(), error = %e, "pulizia file temporaneo fallita");
+                warn!(tmp = %tmp.display(), error = %e, "cleaning up the temporary file failed");
             }
         }
         outcome
@@ -289,11 +289,11 @@ impl InstallWkhtmltopdf {
         if actual != *expected {
             // G3: checksum mismatch means NO installation.
             return Err(StepError::Precondition(format!(
-                "checksum wkhtmltopdf non valido (G3): atteso {expected}, calcolato {actual}. \
-                 Installazione annullata."
+                "invalid wkhtmltopdf checksum (G3): expected {expected}, computed {actual}. \
+                 installation aborted."
             )));
         }
-        info!("checksum wkhtmltopdf verificato");
+        info!("wkhtmltopdf checksum verified");
 
         // installing the local file through the manager resolves the package's
         // system dependencies, which a minimal VM lacks.
@@ -322,23 +322,23 @@ impl Step for InstallWkhtmltopdf {
             Some(version) if version.starts_with(WK_INSTALLED_MARKER) => PreState::Preexisting,
             _ => PreState::Untracked,
         };
-        info!(prestate = ?self.prestate, "snapshot install-wkhtmltopdf");
+        info!(prestate = ?self.prestate, "snapshot: install-wkhtmltopdf");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate == PreState::Preexisting {
-            info!("run: wkhtmltopdf {WK_INSTALLED_MARKER} già presente, skip");
+            info!("run: wkhtmltopdf {WK_INSTALLED_MARKER} already present, skipping");
             return Ok(());
         }
         if ctx.dry_run {
-            info!("run (dry-run): scaricherei, verificherei il checksum e installerei wkhtmltopdf");
+            info!("run (dry run): would download, verify the checksum and install wkhtmltopdf");
             return Ok(());
         }
 
         self.download_verify_install(ctx)?;
         self.prestate = PreState::CreatedByUs;
-        info!("run: wkhtmltopdf installato");
+        info!("run: wkhtmltopdf installed");
         Ok(())
     }
 
@@ -350,11 +350,11 @@ impl Step for InstallWkhtmltopdf {
     /// have adopted meanwhile.
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate != PreState::CreatedByUs {
-            info!(prestate = ?self.prestate, "undo NO-OP (wkhtmltopdf non installato da noi)");
+            info!(prestate = ?self.prestate, "undo NO-OP (wkhtmltopdf not installed by us)");
             return Ok(());
         }
         if ctx.dry_run {
-            info!("undo (dry-run): apt purge {WK_PACKAGE}");
+            info!("undo (dry run): purge {WK_PACKAGE}");
             return Ok(());
         }
         crate::steps::remove_with_recovery(

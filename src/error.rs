@@ -12,7 +12,7 @@ use thiserror::Error;
 #[derive(Debug, Error)]
 pub enum StepError {
     /// an external command (git, apt, psql, systemctl, …) exited non-zero.
-    #[error("comando `{command}` fallito (exit {status}): {stderr}")]
+    #[error("command `{command}` failed (exit {status}): {stderr}")]
     CommandFailed {
         command: String,
         status: String,
@@ -27,9 +27,9 @@ pub enum StepError {
     /// the message is [`crate::system_ops::NETWORK_TIMEOUT_ENV`], and a test
     /// keeps the two in step.
     #[error(
-        "comando `{command}` non terminato entro {secs}s: interrotto (timeout di rete). \
-         Se la connessione è lenta alza il limite con ODOO_NETWORK_TIMEOUT_SECS=<secondi> \
-         (0 = nessun timeout)"
+        "command `{command}` did not finish within {secs}s: aborted (network timeout). \
+         on a slow connection raise the limit with ODOO_NETWORK_TIMEOUT_SECS=<seconds> \
+         (0 = no timeout)"
     )]
     Timeout { command: String, secs: u64 },
 
@@ -37,11 +37,11 @@ pub enum StepError {
     ///
     /// serious: without a reliable snapshot the undo has no source of truth
     /// (`PreState`) and the rollback is not safe.
-    #[error("snapshot fallito per lo step `{step}`: {reason}")]
+    #[error("snapshot failed for step `{step}`: {reason}")]
     SnapshotFailed { step: String, reason: String },
 
     /// I/O error, carrying the path for diagnosis.
-    #[error("errore di I/O su `{path}`: {source}")]
+    #[error("I/O error on `{path}`: {source}")]
     Io {
         path: PathBuf,
         #[source]
@@ -51,7 +51,7 @@ pub enum StepError {
     /// a non-negotiable precondition was violated, such as the hard stop on
     /// initialising a pre-existing database. not recoverable: the installer
     /// stops.
-    #[error("precondizione violata: {0}")]
+    #[error("precondition violated: {0}")]
     Precondition(String),
 
     /// the gevent build failed on an interpreter newer than Odoo's pins
@@ -61,7 +61,7 @@ pub enum StepError {
     /// of `gcc` about `_PyLong_AsByteArray`, and "this Odoo version has no pin
     /// for this Python" appears nowhere. the diagnosis precedes the original
     /// error, which is kept in full — explaining is not hiding the evidence.
-    #[error("{diagnosis}\n\n--- errore originale ---\n{original}")]
+    #[error("{diagnosis}\n\n--- original error ---\n{original}")]
     PythonTooNew { diagnosis: String, original: String },
 }
 

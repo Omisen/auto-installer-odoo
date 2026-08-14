@@ -118,7 +118,7 @@ impl Installer {
             // step is genuinely complete and the rollback starts from a state
             // the engine can describe.
             if self.interrupted.load(Ordering::SeqCst) {
-                warn!("interruzione richiesta: annullo gli step già eseguiti");
+                warn!("interruption requested: undoing the steps already run");
                 self.rollback_with_reporter(steps, &completed, ctx, reporter);
                 return Err(crate::interrupt::interrupted_error());
             }
@@ -139,13 +139,13 @@ impl Installer {
                     error!(
                         step = %name,
                         error = %e,
-                        "resume: snapshot persistito illeggibile, non posso riprendere"
+                        "resume: persisted snapshot unreadable, cannot resume"
                     );
                     reporter.step_failed(&name);
                     self.rollback_with_reporter(steps, &completed, ctx, reporter);
                     return Err(e);
                 }
-                info!(step = %name, "resume: già eseguito, salto snapshot e run");
+                info!(step = %name, "resume: already run, skipping snapshot and run");
                 completed.push(idx);
                 reporter.step_done(&name);
                 continue;
@@ -153,7 +153,7 @@ impl Installer {
 
             info!(step = %name, "snapshot");
             if let Err(e) = steps[idx].snapshot(ctx) {
-                error!(step = %name, error = %e, "snapshot fallito, rollback in corso");
+                error!(step = %name, error = %e, "snapshot failed, rolling back");
                 reporter.step_failed(&name);
                 self.rollback_with_reporter(steps, &completed, ctx, reporter);
                 return Err(e);
@@ -161,7 +161,7 @@ impl Installer {
 
             info!(step = %name, dry_run = ctx.dry_run, "run");
             if let Err(e) = steps[idx].run(ctx) {
-                error!(step = %name, error = %e, "run fallito, rollback in corso");
+                error!(step = %name, error = %e, "run failed, rolling back");
                 reporter.step_failed(&name);
                 self.rollback_with_reporter(steps, &completed, ctx, reporter);
                 return Err(e);
@@ -176,19 +176,19 @@ impl Installer {
 
             if !ctx.dry_run {
                 if let Err(e) = self.state.save(&ctx.state_path) {
-                    error!(step = %name, error = %e, "persistenza stato fallita, rollback in corso");
+                    error!(step = %name, error = %e, "persisting the state failed, rolling back");
                     reporter.step_failed(&name);
                     self.rollback_with_reporter(steps, &completed, ctx, reporter);
                     return Err(e);
                 }
             } else {
-                info!(step = %name, "persistenza saltata (dry-run)");
+                info!(step = %name, "persistence skipped (dry run)");
             }
 
             reporter.step_done(&name);
         }
 
-        info!(steps = completed.len(), "esecuzione completata");
+        info!(steps = completed.len(), "run completed");
         Ok(())
     }
 
@@ -228,7 +228,7 @@ impl Installer {
         }
         warn!(
             steps = completed.len(),
-            "rollback in corso (ordine inverso)"
+            "rollback in progress (reverse order)"
         );
         reporter.rollback_start(completed.len());
         for &idx in completed.iter().rev() {
@@ -243,8 +243,8 @@ impl Installer {
                 Err(e) => warn!(
                     step = %name,
                     error = %e,
-                    "undo fallito, proseguo con la pulizia (best-effort). Lo step resta \
-                     nel manifesto: e' l'unica traccia del residuo"
+                    "undo failed, continuing the cleanup (best-effort). the step stays in \
+                     the manifest: it is the only record of the leftover"
                 ),
             }
             reporter.undo_done(name);
@@ -255,17 +255,17 @@ impl Installer {
         // file describing zero artifacts is a leftover that lies, and would
         // make `invok rollback` believe there is something to consume.
         if !ctx.dry_run {
-            let esito = if self.state.completed.is_empty() {
+            let outcome = if self.state.completed.is_empty() {
                 InstallState::clear(&ctx.state_path)
             } else {
                 self.state.save(&ctx.state_path)
             };
-            if let Err(e) = esito {
+            if let Err(e) = outcome {
                 warn!(
                     path = %ctx.state_path.display(),
                     error = %e,
-                    "impossibile aggiornare il manifesto dopo il rollback: potrebbe elencare \
-                     step gia' annullati"
+                    "cannot update the manifest after the rollback: it may still list steps \
+                     that were already undone"
                 );
             }
         }
@@ -286,14 +286,14 @@ pub fn dry_run_plan(steps: &mut [Box<dyn Step>], ctx: &Context, reporter: &dyn P
         reporter.step_start(&name, idx, total);
 
         if let Err(e) = step.snapshot(ctx) {
-            warn!(step = %name, error = %e, "dry-run: snapshot non disponibile, salto");
+            warn!(step = %name, error = %e, "dry run: snapshot unavailable, skipping");
             reporter.step_failed(&name);
             continue;
         }
         match step.run(ctx) {
             Ok(()) => reporter.step_done(&name),
             Err(e) => {
-                warn!(step = %name, error = %e, "dry-run: run");
+                warn!(step = %name, error = %e, "dry run: run");
                 reporter.step_failed(&name);
             }
         }

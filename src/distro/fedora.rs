@@ -44,8 +44,8 @@ impl Selinux for FedoraSelinux {
     /// the policy of a system it cannot question.
     fn is_enabled(&self, boolean: &str) -> Option<bool> {
         let out = capture_command("getsebool", &[boolean]).ok()?;
-        let stato = out.split("-->").nth(1)?.trim();
-        match stato {
+        let state = out.split("-->").nth(1)?.trim();
+        match state {
             "on" => Some(true),
             "off" => Some(false),
             _ => None,

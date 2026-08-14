@@ -54,22 +54,22 @@ impl Step for CreateDatabase {
             std::sync::atomic::Ordering::SeqCst,
         );
 
-        info!(db = %ctx.db_name, prestate = ?self.prestate, "snapshot create-database");
+        info!(db = %ctx.db_name, prestate = ?self.prestate, "snapshot: create-database");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate == PreState::Preexisting {
-            info!(db = %ctx.db_name, "run: database già presente, skip creazione");
+            info!(db = %ctx.db_name, "run: database already present, skipping creation");
             return Ok(());
         }
         if ctx.dry_run {
-            info!(db = %ctx.db_name, owner = %ctx.db_user, "run (dry-run): createdb --owner");
+            info!(db = %ctx.db_name, owner = %ctx.db_user, "run (dry run): createdb --owner");
             return Ok(());
         }
         self.ops.createdb(&ctx.db_user, &ctx.db_name)?;
         self.prestate = PreState::CreatedByUs;
-        info!(db = %ctx.db_name, owner = %ctx.db_user, "run: database creato");
+        info!(db = %ctx.db_name, owner = %ctx.db_user, "run: database created");
         Ok(())
     }
 
@@ -80,16 +80,16 @@ impl Step for CreateDatabase {
             info!(
                 db = %ctx.db_name,
                 prestate = ?self.prestate,
-                "undo NO-OP: database preesistente, NON rimosso (protezione dati cliente)"
+                "undo NO-OP: pre-existing database, NOT removed (customer data protection)"
             );
             return Ok(());
         }
         if ctx.dry_run {
-            info!(db = %ctx.db_name, "undo (dry-run): dropdb --if-exists --force");
+            info!(db = %ctx.db_name, "undo (dry run): dropdb --if-exists --force");
             return Ok(());
         }
         if let Err(e) = self.ops.dropdb(&ctx.db_name) {
-            warn!(db = %ctx.db_name, error = %e, "undo: dropdb fallito, proseguo (best-effort)");
+            warn!(db = %ctx.db_name, error = %e, "undo: dropdb failed, proceeding (best-effort)");
         }
         Ok(())
     }

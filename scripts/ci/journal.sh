@@ -51,7 +51,7 @@ journal_steps() {
 # under pipefail that would abort the caller. the `|| true` is part of the
 # contract, not laziness.
 journal_packages() {
-  sed -n "s/.*delta pacchetti: $2 step=\"$3\" pacchetti=//p" "$1" \
+  sed -n "s/.*package delta: $2 step=\"$3\" packages=//p" "$1" \
     | tr ' ' '\n' | grep -v '^$' | sort -u || true
 }
 
@@ -64,5 +64,5 @@ journal_packages() {
 # matches nothing and returns silence. the same way this parsing has already
 # broken twice, which is why it lives here next to a faithful sample.
 journal_python_plan() {
-  sed -n 's/.*virtualenv nascerà.*interprete=\([a-z0-9.]*\).*/\1/p' "$1" | head -1
+  sed -n 's/.*the virtualenv will be built.*interpreter=\([a-z0-9.]*\).*/\1/p' "$1" | head -1
 }

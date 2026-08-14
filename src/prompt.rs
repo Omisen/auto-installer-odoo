@@ -45,7 +45,7 @@ fn subdir_validator() -> impl Fn(&str) -> Result<Validation, CustomUserError> + 
             Ok(Validation::Valid)
         } else {
             Ok(Validation::Invalid(
-                "solo lettere/numeri/._- , nessun '/', '.' o '..'".into(),
+                "letters, digits and ._- only; no '/', '.' or '..'".into(),
             ))
         }
     }
@@ -76,18 +76,18 @@ fn is_valid_subdir(value: &str) -> bool {
 /// propagates an `inquire` failure, including the user aborting a prompt.
 pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     println!();
-    println!("── Configurazione installazione Odoo ──");
+    println!("── Odoo installation settings ──");
     println!();
 
     let mut out = RawConfig::default();
 
     if cli.version.is_some() {
-        info!("Versione Odoo da CLI");
+        info!("Odoo version taken from the CLI");
     } else {
         let suggested = env.version.clone().unwrap_or_else(|| "18.0".to_string());
         let start = VERSIONS.iter().position(|v| *v == suggested).unwrap_or(2);
         let choice = Select::new(
-            "Versione Odoo",
+            "Odoo version",
             VERSIONS.iter().map(|s| s.to_string()).collect(),
         )
         .with_starting_cursor(start)
@@ -96,35 +96,35 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     }
 
     if cli.odoo_user.is_some() {
-        info!("Utente Odoo da CLI");
+        info!("Odoo user taken from the CLI");
     } else {
         let suggested = env.odoo_user.clone().unwrap_or_else(|| "odoo".to_string());
         out.odoo_user = Some(
-            Text::new("Utente di sistema Odoo")
+            Text::new("Odoo system user")
                 .with_default(&suggested)
-                .with_validator(identifier_validator("utente Odoo"))
+                .with_validator(identifier_validator("Odoo user"))
                 .prompt()?,
         );
     }
 
     if cli.db_name.is_some() {
-        info!("Database Odoo da CLI");
+        info!("Odoo database taken from the CLI");
     } else {
         let suggested = env.db_name.clone().unwrap_or_else(|| "odoo".to_string());
         out.db_name = Some(
-            Text::new("Nome database")
+            Text::new("Database name")
                 .with_default(&suggested)
-                .with_validator(identifier_validator("nome database"))
+                .with_validator(identifier_validator("database name"))
                 .prompt()?,
         );
     }
 
     if cli.port.is_some() {
-        info!("Porta Odoo da CLI");
+        info!("Odoo port taken from the CLI");
     } else {
         let suggested = env.port.clone().unwrap_or_else(|| "8069".to_string());
         out.port = Some(
-            Text::new("Porta HTTP")
+            Text::new("HTTP port")
                 .with_default(&suggested)
                 .with_validator(port_validator())
                 .prompt()?,
@@ -132,7 +132,7 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     }
 
     if cli.install_dir.is_some() {
-        info!("Install dir da CLI");
+        info!("Install dir taken from the CLI");
     } else {
         let version_for_dir = out
             .version
@@ -142,7 +142,7 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
         let short = version_for_dir.split('.').next().unwrap_or("18");
         let suggested_subdir = format!("odoo{short}");
         let home = config::ODOO_HOME;
-        let subdir = Text::new(&format!("Cartella installazione (sotto {home})"))
+        let subdir = Text::new(&format!("Install directory (under {home})"))
             .with_default(&suggested_subdir)
             .with_validator(subdir_validator())
             .prompt()?;
@@ -150,9 +150,9 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     }
 
     if cli.admin_passwd.is_some() {
-        info!("Password admin Odoo acquisita da CLI");
+        info!("Odoo admin password taken from the CLI");
     } else {
-        let input = Password::new("Password admin Odoo (Invio = valore suggerito)")
+        let input = Password::new("Odoo admin password (Enter = suggested value)")
             .with_display_mode(PasswordDisplayMode::Masked)
             .without_confirmation()
             .prompt()?;
@@ -166,7 +166,7 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
 
     if cli.with_nginx.is_none() {
         let default = env.with_nginx.unwrap_or(false);
-        let yes = Confirm::new("Configurare Nginx come reverse proxy?")
+        let yes = Confirm::new("Configure nginx as a reverse proxy?")
             .with_default(default)
             .prompt()?;
         out.with_nginx = Some(yes);

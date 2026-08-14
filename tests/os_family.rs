@@ -294,9 +294,7 @@ fn resuming_with_a_different_family_is_refused_by_name() {
     match decision {
         StartDecision::RefuseIdentityMismatch(differenze) => {
             assert!(
-                differenze
-                    .iter()
-                    .any(|(campo, _, _)| *campo == "famiglia OS"),
+                differenze.iter().any(|(field, _, _)| *field == "OS family"),
                 "il rifiuto deve nominare il campo che non coincide, trovato: {differenze:?}"
             );
         }
@@ -348,7 +346,7 @@ fn a_family_mismatch_warns_and_does_not_decide() {
         "deve nominare il sistema: {avviso}"
     );
     assert!(
-        avviso.contains("Procedo con 'debian'"),
+        avviso.contains("proceeding with 'debian'"),
         "deve dire che vince il manifesto, non il sistema: {avviso}"
     );
 }

@@ -45,17 +45,17 @@ impl Step for CreateDbRole {
         } else {
             PreState::Untracked
         };
-        info!(role = %ctx.db_user, prestate = ?self.prestate, "snapshot create-db-role");
+        info!(role = %ctx.db_user, prestate = ?self.prestate, "snapshot: create-db-role");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate == PreState::Preexisting {
-            info!(role = %ctx.db_user, "run: ruolo già presente, skip creazione");
+            info!(role = %ctx.db_user, "run: role already present, skipping creation");
             return Ok(());
         }
         if ctx.dry_run {
-            info!(role = %ctx.db_user, "run (dry-run): CREATE ROLE ... WITH LOGIN CREATEDB");
+            info!(role = %ctx.db_user, "run (dry run): CREATE ROLE ... WITH LOGIN CREATEDB");
             return Ok(());
         }
 
@@ -68,22 +68,22 @@ impl Step for CreateDbRole {
         self.ops.pg_create_role(&ctx.db_user, password)?;
 
         self.prestate = PreState::CreatedByUs;
-        info!(role = %ctx.db_user, with_password = password.is_some(), "run: ruolo creato");
+        info!(role = %ctx.db_user, with_password = password.is_some(), "run: role created");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate != PreState::CreatedByUs {
-            info!(role = %ctx.db_user, prestate = ?self.prestate, "undo NO-OP (ruolo non creato da noi)");
+            info!(role = %ctx.db_user, prestate = ?self.prestate, "undo NO-OP (role not created by us)");
             return Ok(());
         }
         if ctx.dry_run {
-            info!(role = %ctx.db_user, "undo (dry-run): DROP ROLE");
+            info!(role = %ctx.db_user, "undo (dry run): DROP ROLE");
             return Ok(());
         }
         // the role's database was already dropped, in the reverse order.
         if let Err(e) = self.ops.pg_drop_role(&ctx.db_user) {
-            warn!(role = %ctx.db_user, error = %e, "undo: DROP ROLE fallito, proseguo (best-effort)");
+            warn!(role = %ctx.db_user, error = %e, "undo: DROP ROLE failed, proceeding (best-effort)");
         }
         Ok(())
     }

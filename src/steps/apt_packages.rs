@@ -76,22 +76,22 @@ fn unavailable_packages_error(
         .map(|spec| format!("[{}]", spec.alternatives().join(" | ")))
         .collect();
     let cause = if index_populated {
-        "I nomi elencati non esistono su questa release: aggiungi il nome corretto come \
-         alternativa nel catalogo della famiglia (A5.1)"
+        "the listed names do not exist on this release: add the right one as an \
+         alternative in the family's catalogue (A5.1)"
             .to_string()
     } else {
         format!(
-            "L'indice dei pacchetti non è interrogabile, quindi NON è detto che i pacchetti \
-             manchino davvero: esegui '{refresh_command}' e riprova. Se l'aggiornamento non \
-             produce un indice valido, il problema è la rete o i repository configurati"
+            "the package index cannot be queried, so those packages are NOT necessarily \
+             missing: run '{refresh_command}' and try again. if the refresh produces no \
+             valid index, the problem is the network or the configured repositories"
         )
     };
     StepError::Precondition(format!(
-        "nessun pacchetto installabile per {} {}. {cause}",
+        "no installable package for {} {}. {cause}",
         if unavailable.len() == 1 {
-            "il gruppo"
+            "group"
         } else {
-            "i gruppi"
+            "groups"
         },
         groups.join(", "),
     ))
@@ -266,27 +266,27 @@ impl AptPackagesStep {
         if ctx.dry_run {
             info!(
                 step = self.name,
-                "run (dry-run): aggiornerei l'indice dei pacchetti"
+                "run (dry run): would refresh the package index"
             );
             return Ok(());
         }
         let Err(e) = self.ops.packages().refresh_index() else {
-            info!(step = self.name, "run: indice dei pacchetti aggiornato");
+            info!(step = self.name, "run: package index refreshed");
             return Ok(());
         };
         if self.ops.packages().index_is_queryable() {
             warn!(
                 step = self.name,
                 error = %e,
-                "run: l'aggiornamento dell'indice ha segnalato errori (repository \
-                 irraggiungibile?), ma l'indice resta interrogabile: proseguo"
+                "run: the index refresh reported errors (unreachable repository?), but the \
+                 index is still queryable: proceeding"
             );
             return Ok(());
         }
         Err(StepError::Precondition(format!(
-            "l'aggiornamento dell'indice ({}) è fallito e l'indice resta vuoto: senza indice \
-             non è possibile stabilire quali pacchetti siano installabili. Verifica rete e \
-             repository configurati. Errore originale: {e}",
+            "the index refresh ({}) failed and the index is still empty: without an index \
+             there is no way to tell which packages are installable. check the network and \
+             the configured repositories. original error: {e}",
             self.ops.packages().refresh_command()
         )))
     }
@@ -306,11 +306,11 @@ impl AptPackagesStep {
     /// repairs a manager a downstream step may have broken (A-RT-2).
     fn purge_delta(&self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.delta.is_empty() {
-            info!(step = self.name, "undo: delta vuoto, niente da purgare");
+            info!(step = self.name, "undo: empty delta, nothing to purge");
             return Ok(());
         }
         if ctx.dry_run {
-            info!(step = self.name, delta = ?self.snap.delta, "undo (dry-run): purgerei il delta");
+            info!(step = self.name, delta = ?self.snap.delta, "undo (dry run): would purge the delta");
             return Ok(());
         }
         let refs: Vec<&str> = self.snap.delta.iter().map(String::as_str).collect();
@@ -356,11 +356,11 @@ impl Step for AptPackagesStep {
                 Some(ResolvedPackage::Virtual(name)) => {
                     warn!(
                         step = self.name,
-                        pacchetto = %name,
-                        gruppo = ?spec.alternatives(),
-                        "snapshot: nessun candidato reale nel gruppo, uso un nome VIRTUALE. \
-                         È installabile, ma il purge dell'undo potrebbe non reclamarlo: \
-                         considera di aggiungere il nome reale come alternativa"
+                        package = %name,
+                        group = ?spec.alternatives(),
+                        "snapshot: no real candidate in the group, using a VIRTUAL name. it is \
+                         installable, but the undo's purge may not reclaim it: consider adding \
+                         the real name as an alternative"
                     );
                     resolved.push(name.clone());
                     delta.push(name);
@@ -368,8 +368,8 @@ impl Step for AptPackagesStep {
                 None if spec.is_required() => unavailable.push(spec.clone()),
                 None => warn!(
                     step = self.name,
-                    gruppo = ?spec.alternatives(),
-                    "snapshot: nessuna alternativa disponibile per un gruppo OPZIONALE, proseguo senza"
+                    group = ?spec.alternatives(),
+                    "snapshot: no alternative available for an OPTIONAL group, proceeding without it"
                 ),
             }
         }
@@ -396,10 +396,10 @@ impl Step for AptPackagesStep {
                 if spec.is_required() {
                     warn!(
                         step = self.name,
-                        gruppo = ?spec.alternatives(),
-                        "snapshot: indice dei pacchetti non interrogabile, non posso verificare \
-                         questo gruppo. Uso il nome preferito e lascio decidere al gestore nel run \
-                         (dopo l'aggiornamento dell'indice)"
+                        group = ?spec.alternatives(),
+                        "snapshot: the package index cannot be queried, so this group cannot be \
+                         checked. using the preferred name and letting the manager decide in the \
+                         run, after the index refresh"
                     );
                     let preferred = spec.preferred().to_string();
                     resolved.push(preferred.clone());
@@ -410,9 +410,9 @@ impl Step for AptPackagesStep {
                     // the opposite of optional.
                     warn!(
                         step = self.name,
-                        gruppo = ?spec.alternatives(),
-                        "snapshot: indice dei pacchetti non interrogabile e gruppo OPZIONALE, \
-                         proseguo senza"
+                        group = ?spec.alternatives(),
+                        "snapshot: the package index cannot be queried and the group is OPTIONAL, \
+                         proceeding without it"
                     );
                 }
             }
@@ -433,8 +433,8 @@ impl Step for AptPackagesStep {
             step = self.name,
             already = already_installed.len(),
             delta = delta.len(),
-            risolti = resolved.len(),
-            "snapshot delta pacchetti"
+            resolved_count = resolved.len(),
+            "snapshot: package delta"
         );
         // the NAMES, not just the count: the log is the run's **journal**, the
         // manifest is its **state**. confusing the two cost A-R8-1. after a
@@ -442,13 +442,13 @@ impl Step for AptPackagesStep {
         // did we add" stays a legitimate question.
         info!(
             step = self.name,
-            pacchetti = %delta.join(" "),
-            "delta pacchetti: pacchetti aggiunti da noi"
+            packages = %delta.join(" "),
+            "package delta: packages added by us"
         );
         info!(
             step = self.name,
-            pacchetti = %already_installed.join(" "),
-            "delta pacchetti: pacchetti già presenti, mai toccati"
+            packages = %already_installed.join(" "),
+            "package delta: packages already there, never touched"
         );
         self.resolved = resolved;
         self.snap = AptDeltaSnapshot {
@@ -470,14 +470,14 @@ impl Step for AptPackagesStep {
         if self.snap.delta.is_empty() {
             info!(
                 step = self.name,
-                "run: tutti i pacchetti già presenti, niente da installare"
+                "run: every package already present, nothing to install"
             );
             return Ok(());
         }
         if ctx.dry_run {
             info!(
                 step = self.name,
-                "run (dry-run): installerei l'intera lista (il gestore aggiunge solo i mancanti)"
+                "run (dry run): would install the whole list (the manager adds only what is missing)"
             );
             return Ok(());
         }
@@ -487,7 +487,7 @@ impl Step for AptPackagesStep {
         info!(
             step = self.name,
             installed = self.snap.delta.len(),
-            "run: pacchetti installati"
+            "run: packages installed"
         );
         Ok(())
     }
@@ -501,8 +501,8 @@ impl Step for AptPackagesStep {
                 } else {
                     info!(
                         step = self.name,
-                        "undo NO-OP: le utility comuni (git/curl/wget/gettext) restano installate. \
-                         Usa --aggressive-rollback per purgare anche queste."
+                        "undo NO-OP: the common utilities (git/curl/wget/gettext) stay installed. \
+                         use --aggressive-rollback to purge those too."
                     );
                     Ok(())
                 }

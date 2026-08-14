@@ -84,11 +84,11 @@ impl WriteControlScript {
     fn user_and_home(&self, ctx: &Context) -> Result<(String, std::path::PathBuf), StepError> {
         let user = ctx.sudo_user.clone().ok_or_else(|| {
             StepError::Precondition(
-                "SUDO_USER non disponibile: l'installer deve girare via sudo".to_string(),
+                "SUDO_USER is unset: the installer must run through sudo".to_string(),
             )
         })?;
         let home = self.ops.getent_home(&user)?.ok_or_else(|| {
-            StepError::Precondition(format!("impossibile determinare la home per '{user}'"))
+            StepError::Precondition(format!("cannot determine the home of '{user}'"))
         })?;
         Ok((user, std::path::PathBuf::from(home)))
     }
@@ -137,7 +137,7 @@ impl Step for WriteControlScript {
         };
         self.snap.scripts_dir_existed = self.ops.path_exists(&scripts_dir);
         self.snap.localbin_dir_existed = self.ops.path_exists(&localbin);
-        info!(script = ?self.snap.script, symlink = ?self.snap.symlink, "snapshot write-control-script");
+        info!(script = ?self.snap.script, symlink = ?self.snap.symlink, "snapshot: write-control-script");
         Ok(())
     }
 
@@ -146,7 +146,7 @@ impl Step for WriteControlScript {
         let (scripts_dir, script, localbin, symlink) = paths(&home);
 
         if ctx.dry_run {
-            info!("run (dry-run): scriverei odoo.sh + symlink per l'utente {user}");
+            info!("run (dry run): would write odoo.sh and the symlink for user {user}");
             return Ok(());
         }
 
@@ -167,7 +167,7 @@ impl Step for WriteControlScript {
             let backup = format!("{}.bak.{}", script.display(), unix_timestamp());
             self.ops.copy_file(&script, std::path::Path::new(&backup))?;
             self.snap.script_backup = Some(backup.clone());
-            warn!(backup = %backup, "run: control-script esistente, backup creato");
+            warn!(backup = %backup, "run: the control script existed, a backup was made");
         }
         let service = format!("odoo{}", ctx.odoo_version_short);
         let content = control_script_content(&service, &ctx.odoo_user);
@@ -189,7 +189,7 @@ impl Step for WriteControlScript {
         self.ops.chown_to_user(&scripts_dir, &user)?;
         self.ops.chown_to_user(&localbin, &user)?;
 
-        info!(script = %script.display(), "run: control-script installato per {user}");
+        info!(script = %script.display(), "run: control script installed for {user}");
         Ok(())
     }
 
@@ -198,21 +198,21 @@ impl Step for WriteControlScript {
         let (scripts_dir, script, localbin, symlink) = paths(&home);
 
         if ctx.dry_run {
-            info!("undo (dry-run): rimuoverei script + symlink (e dir se create da noi)");
+            info!("undo (dry run): would remove the script and the symlink (and the dirs if we made them)");
             return Ok(());
         }
 
         // remove only what we created.
         if self.snap.symlink == PreState::CreatedByUs {
             if let Err(e) = self.ops.remove_symlink(&symlink) {
-                warn!(error = %e, "undo: rimozione symlink fallita, proseguo (best-effort)");
+                warn!(error = %e, "undo: removing the symlink failed, proceeding (best-effort)");
             }
         }
         match (&self.snap.script, &self.snap.script_backup) {
             // ours: removed.
             (PreState::CreatedByUs, _) => {
                 if let Err(e) = self.ops.remove_file(&script) {
-                    warn!(error = %e, "undo: rimozione script fallita, proseguo (best-effort)");
+                    warn!(error = %e, "undo: removing the script failed, proceeding (best-effort)");
                 }
             }
             // it was there and we rewrote it: the original comes back.
@@ -220,12 +220,12 @@ impl Step for WriteControlScript {
                 let backup_path = std::path::Path::new(backup);
                 if self.ops.path_exists(backup_path) {
                     if let Err(e) = self.ops.move_file(backup_path, &script) {
-                        warn!(error = %e, "undo: ripristino del control-script fallito, proseguo (best-effort)");
+                        warn!(error = %e, "undo: restoring the control script failed, proceeding (best-effort)");
                     } else {
-                        info!("undo: control-script preesistente ripristinato dal backup");
+                        info!("undo: the pre-existing control script was restored from the backup");
                     }
                 } else {
-                    warn!(backup = %backup, "undo: backup del control-script non trovato");
+                    warn!(backup = %backup, "undo: the control script's backup was not found");
                 }
             }
             _ => {}
@@ -257,10 +257,10 @@ fn remove_if_empty(ops: &dyn SystemOps, dir: &std::path::Path) {
     match ops.dir_is_empty(dir) {
         Ok(true) => {
             if let Err(e) = ops.rmdir(dir) {
-                warn!(dir = %dir.display(), error = %e, "undo: rmdir fallito, proseguo (best-effort)");
+                warn!(dir = %dir.display(), error = %e, "undo: rmdir failed, proceeding (best-effort)");
             }
         }
-        Ok(false) => info!(dir = %dir.display(), "undo: directory non vuota, la lascio"),
-        Err(e) => warn!(dir = %dir.display(), error = %e, "undo: verifica directory fallita"),
+        Ok(false) => info!(dir = %dir.display(), "undo: the directory is not empty, leaving it"),
+        Err(e) => warn!(dir = %dir.display(), error = %e, "undo: inspecting the directory failed"),
     }
 }

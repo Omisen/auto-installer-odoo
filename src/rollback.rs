@@ -198,14 +198,14 @@ pub fn rollback_from_state(
 ) -> RollbackReport {
     let mut report = RollbackReport::default();
     if state.completed.is_empty() {
-        info!("rollback: nessuno step da annullare");
+        info!("rollback: no step to undo");
         return report;
     }
 
     warn!(
         steps = state.completed.len(),
         dry_run = ctx.dry_run,
-        "rollback da stato persistito (ordine inverso)"
+        "rollback from the persisted state (reverse order)"
     );
     reporter.rollback_start(state.completed.len());
 
@@ -216,7 +216,7 @@ pub fn rollback_from_state(
         let Some(mut step) = steps::step_by_name(&name, make_ops) else {
             warn!(
                 step = %name,
-                "rollback: step sconosciuto a questo binario, non annullabile (proseguo)"
+                "rollback: step unknown to this binary, cannot be undone (proceeding)"
             );
             report.outcomes.push(StepOutcome {
                 name: name.clone(),
@@ -233,7 +233,7 @@ pub fn rollback_from_state(
             warn!(
                 step = %name,
                 error = %e,
-                "rollback: snapshot persistito illeggibile, undo saltato per sicurezza (proseguo)"
+                "rollback: persisted snapshot unreadable, undo skipped for safety (proceeding)"
             );
             report.outcomes.push(StepOutcome {
                 name: name.clone(),
@@ -243,14 +243,14 @@ pub fn rollback_from_state(
             continue;
         }
 
-        info!(step = %name, "undo (da stato persistito)");
+        info!(step = %name, "undo (from the persisted state)");
         let outcome = match step.undo(ctx) {
             Ok(()) => UndoOutcome::Undone,
             Err(e) => {
                 warn!(
                     step = %name,
                     error = %e,
-                    "undo fallito, proseguo con la pulizia (best-effort)"
+                    "undo failed, continuing the cleanup (best-effort)"
                 );
                 UndoOutcome::Failed(e.to_string())
             }
@@ -269,8 +269,9 @@ pub fn rollback_from_state(
         if ops.path_exists(&ctx.odoo_home) {
             warn!(
                 home = %ctx.odoo_home.display(),
-                "rollback concluso ma la home esiste ancora: contiene qualcosa che non \
-                 abbiamo creato noi, e non la rimuoviamo (mai un rm -rf su roba altrui)"
+                "the rollback finished but the home still exists: it holds something we did \
+                 not create, and we do not remove it (never an rm -rf on other people's \
+                 things)"
             );
             report.home_left_behind = Some(ctx.odoo_home.clone());
         }

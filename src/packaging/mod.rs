@@ -140,7 +140,7 @@ impl PackageSpec {
         self.alternatives
             .first()
             .map(String::as_str)
-            .unwrap_or("<gruppo vuoto>")
+            .unwrap_or("<empty group>")
     }
 }
 

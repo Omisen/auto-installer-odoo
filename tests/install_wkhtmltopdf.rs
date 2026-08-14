@@ -221,7 +221,7 @@ fn production_pins_reject_a_deb_that_is_not_the_pinned_one() {
             .expect_err("un .deb che non corrisponde al pin non si installa")
             .to_string();
         assert!(
-            err.contains("checksum wkhtmltopdf non valido"),
+            err.contains("invalid wkhtmltopdf checksum"),
             "deve fallire sul confronto, non prima ({codename}): {err}"
         );
         assert!(
@@ -501,7 +501,7 @@ fn a_family_without_pins_refuses_to_install_anything() {
     let err = step.run(&c).expect_err("senza pin non si installa");
     let msg = err.to_string();
     assert!(
-        msg.contains("pin TOFU") && msg.contains("fedora"),
+        msg.contains("TOFU pins") && msg.contains("fedora"),
         "il messaggio deve dire che la famiglia non è tarata, non che manca un \
          suffisso: sono due azioni diverse. Trovato: {msg}"
     );

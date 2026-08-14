@@ -68,17 +68,17 @@ impl Step for NginxInstall {
         } else {
             PreState::Untracked
         };
-        info!(installed = ?self.snap.installed, enabled = ?self.snap.enabled, "snapshot nginx-install");
+        info!(installed = ?self.snap.installed, enabled = ?self.snap.enabled, "snapshot: nginx-install");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if !ctx.with_nginx {
-            info!("nginx non richiesto, skip nginx-install");
+            info!("nginx not requested, skipping nginx-install");
             return Ok(());
         }
         if ctx.dry_run {
-            info!("run (dry-run): installerei/abiliterei nginx");
+            info!("run (dry run): would install and enable nginx");
             return Ok(());
         }
         if self.snap.installed == PreState::Untracked {
@@ -94,16 +94,16 @@ impl Step for NginxInstall {
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("undo (dry-run): stop/disable nginx; purge solo se aggressive");
+            info!("undo (dry run): stop and disable nginx; purge only if aggressive");
             return Ok(());
         }
         // stop and disable only what we enabled (D4, D3).
         if self.snap.enabled == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_stop(NGINX_SERVICE) {
-                warn!(error = %e, "undo: stop nginx fallito, proseguo (best-effort)");
+                warn!(error = %e, "undo: stopping nginx failed, proceeding (best-effort)");
             }
             if let Err(e) = self.ops.service_disable(NGINX_SERVICE) {
-                warn!(error = %e, "undo: disable nginx fallito, proseguo (best-effort)");
+                warn!(error = %e, "undo: disabling nginx failed, proceeding (best-effort)");
             }
         }
         // purge only under `--aggressive-rollback` (D3).
@@ -115,10 +115,10 @@ impl Step for NginxInstall {
                     &[self.package().as_str()],
                 );
                 if let Err(e) = self.ops.packages().remove_orphans() {
-                    warn!(error = %e, "undo: autoremove fallito, proseguo (best-effort)");
+                    warn!(error = %e, "undo: autoremove failed, proceeding (best-effort)");
                 }
             } else {
-                info!("undo: nginx lasciato installato (stop+disable reversibili; usa --aggressive-rollback per purgare)");
+                info!("undo: nginx left installed (stop and disable are reversible; use --aggressive-rollback to purge)");
             }
         }
 
@@ -133,13 +133,13 @@ impl Step for NginxInstall {
         if self.ops.service_is_active(NGINX_SERVICE) {
             if !self.ops.nginx_test() {
                 warn!(
-                    "undo: config nginx non valida dopo il ripristino, non ricarico \
-                     (controlla `nginx -t`)"
+                    "undo: the nginx config is invalid after the restore, not reloading \
+                     (check `nginx -t`)"
                 );
             } else if let Err(e) = self.ops.service_reload(NGINX_SERVICE) {
-                warn!(error = %e, "undo: reload finale nginx fallito, proseguo (best-effort)");
+                warn!(error = %e, "undo: the final nginx reload failed, proceeding (best-effort)");
             } else {
-                info!("undo: nginx ricaricato con la config ripristinata");
+                info!("undo: nginx reloaded with the restored config");
             }
         }
         Ok(())

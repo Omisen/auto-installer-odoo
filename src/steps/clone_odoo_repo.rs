@@ -120,8 +120,8 @@ impl Step for CloneOdooRepo {
                     // a different branch may hold work in progress: do NOT
                     // regenerate.
                     return Err(StepError::Precondition(format!(
-                        "repository esistente su branch '{branch}', atteso '{}'. \
-                         Rimuovi manualmente {} se vuoi ri-clonare",
+                        "existing repository on branch '{branch}', expected '{}'. \
+                         remove {} by hand if you want to re-clone",
                         ctx.odoo_version,
                         repo_dir.display()
                     )));
@@ -136,23 +136,23 @@ impl Step for CloneOdooRepo {
                 // checkout. regenerated, but said out loud.
                 warn!(
                     dir = %repo_dir.display(),
-                    "directory sorgenti esistente ma non valida: verrà rigenerata"
+                    "the sources directory exists but is not valid: it will be regenerated"
                 );
                 self.snap.prestate = PreState::Untracked;
                 self.had_invalid_dir = true;
             }
         }
-        info!(prestate = ?self.snap.prestate, mode = %self.snap.source_mode, "snapshot clone-odoo-repo");
+        info!(prestate = ?self.snap.prestate, mode = %self.snap.source_mode, "snapshot: clone-odoo-repo");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.prestate == PreState::Preexisting {
-            info!(mode = %self.snap.source_mode, "run: sorgenti già presenti, skip clone");
+            info!(mode = %self.snap.source_mode, "run: sources already present, skipping the clone");
             return Ok(());
         }
         if ctx.dry_run {
-            info!("run (dry-run): creerei le directory e clonerei i sorgenti Odoo");
+            info!("run (dry run): would create the directories and clone the Odoo sources");
             return Ok(());
         }
 
@@ -179,11 +179,11 @@ impl Step for CloneOdooRepo {
                 Ok(()) => {
                     self.snap.source_mode = "git".to_string();
                     cloned = true;
-                    info!(attempt, "run: clone completato");
+                    info!(attempt, "run: clone completed");
                     break;
                 }
                 Err(e) => {
-                    warn!(attempt, retries = self.retries, error = %e, "run: clone fallito");
+                    warn!(attempt, retries = self.retries, error = %e, "run: clone failed");
                     // clean partial artifacts before retrying.
                     let _ = self.ops.remove_dir_all(&repo_dir);
                     if attempt < self.retries {
@@ -197,7 +197,7 @@ impl Step for CloneOdooRepo {
         if !cloned {
             warn!(
                 retries = self.retries,
-                "run: clone fallito, attivo fallback tarball"
+                "run: clone failed, falling back to the tarball"
             );
             let tar_url = format!(
                 "https://codeload.github.com/odoo/odoo/tar.gz/refs/heads/{}",
@@ -205,7 +205,7 @@ impl Step for CloneOdooRepo {
             );
             self.ops.tarball_install(user, &tar_url, &repo_dir)?;
             self.snap.source_mode = "tarball".to_string();
-            info!("run: sorgenti installate via tarball fallback");
+            info!("run: sources installed through the tarball fallback");
         }
 
         self.snap.prestate = PreState::CreatedByUs;
@@ -214,22 +214,22 @@ impl Step for CloneOdooRepo {
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.prestate != PreState::CreatedByUs {
-            info!(prestate = ?self.snap.prestate, "undo NO-OP (sorgenti non create da noi)");
+            info!(prestate = ?self.snap.prestate, "undo NO-OP (sources not created by us)");
             return Ok(());
         }
         if ctx.dry_run {
-            info!("undo (dry-run): rm -rf dei sorgenti + rimozione contenitore se vuoto");
+            info!("undo (dry run): rm -rf of the sources, plus the container if it is empty");
             return Ok(());
         }
 
         let repo_dir = Self::repo_dir(ctx);
         // our perimeter, so the recursive removal is legitimate.
         if let Err(e) = self.ops.remove_dir_all(&repo_dir) {
-            warn!(error = %e, "undo: rm -rf sorgenti fallito, proseguo (best-effort)");
+            warn!(error = %e, "undo: rm -rf of the sources failed, proceeding (best-effort)");
         }
         // the modules directory, created by us.
         if let Err(e) = self.ops.remove_dir_all(&ctx.install_dir.join(REPOS_SUBDIR)) {
-            warn!(error = %e, "undo: rm -rf repos fallito, proseguo (best-effort)");
+            warn!(error = %e, "undo: rm -rf of the repos failed, proceeding (best-effort)");
         }
 
         // the container goes ONLY if empty: the venv and config undos have
@@ -238,15 +238,15 @@ impl Step for CloneOdooRepo {
         match self.ops.dir_is_empty(&ctx.install_dir) {
             Ok(true) => {
                 if let Err(e) = self.ops.rmdir(&ctx.install_dir) {
-                    warn!(error = %e, "undo: rimozione contenitore fallita, proseguo");
+                    warn!(error = %e, "undo: removing the container failed, proceeding");
                 } else {
-                    info!(dir = %ctx.install_dir.display(), "undo: contenitore install_dir rimosso (era vuoto)");
+                    info!(dir = %ctx.install_dir.display(), "undo: install_dir container removed (it was empty)");
                 }
             }
             Ok(false) => {
-                info!(dir = %ctx.install_dir.display(), "undo: contenitore non vuoto, lo lascio");
+                info!(dir = %ctx.install_dir.display(), "undo: the container is not empty, leaving it");
             }
-            Err(e) => warn!(error = %e, "undo: impossibile verificare il contenitore, non rimuovo"),
+            Err(e) => warn!(error = %e, "undo: cannot inspect the container, not removing it"),
         }
         Ok(())
     }

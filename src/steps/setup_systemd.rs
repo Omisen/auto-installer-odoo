@@ -117,14 +117,14 @@ impl Step for SetupSystemd {
             unit_file = ?self.snap.unit_file,
             enabled = ?self.snap.enabled,
             active = ?self.snap.active,
-            "snapshot setup-systemd"
+            "snapshot: setup-systemd"
         );
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("run (dry-run): renderizzerei l'unit, installerei, enable + start");
+            info!("run (dry run): would render the unit, install it, then enable and start");
             return Ok(());
         }
 
@@ -169,17 +169,19 @@ impl Step for SetupSystemd {
         self.settle();
         if !self.ops.service_is_active(&unit) {
             return Err(StepError::Precondition(format!(
-                "il servizio '{unit}' non risulta attivo dopo lo start. \
-                 Controlla: journalctl -u {unit} -n 50 --no-pager"
+                "service '{unit}' is not active after the start. \
+                 check: journalctl -u {unit} -n 50 --no-pager"
             )));
         }
-        info!(unit = %unit, "run: servizio systemd installato e attivo");
+        info!(unit = %unit, "run: systemd service installed and active");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("undo (dry-run): stop → disable → rm → daemon-reload secondo lo snapshot");
+            info!(
+                "undo (dry run): stop, disable, remove and daemon-reload according to the snapshot"
+            );
             return Ok(());
         }
 
@@ -191,24 +193,24 @@ impl Step for SetupSystemd {
         // stop only what we started (D4).
         if self.snap.active == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_stop(&unit) {
-                warn!(error = %e, "undo: stop servizio fallito, proseguo (best-effort)");
+                warn!(error = %e, "undo: stopping the service failed, proceeding (best-effort)");
             }
         }
         // disable only what we enabled (D4).
         if self.snap.enabled == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_disable(&unit) {
-                warn!(error = %e, "undo: disable servizio fallito, proseguo (best-effort)");
+                warn!(error = %e, "undo: disabling the service failed, proceeding (best-effort)");
             }
         }
         // remove the unit file only if we created it.
         if self.snap.unit_file == PreState::CreatedByUs {
             if let Err(e) = self.ops.remove_file(&unit_path) {
-                warn!(error = %e, "undo: rimozione unit file fallita, proseguo (best-effort)");
+                warn!(error = %e, "undo: removing the unit file failed, proceeding (best-effort)");
             }
         }
         // the final reload makes systemd forget the removed unit.
         if let Err(e) = self.ops.daemon_reload() {
-            warn!(error = %e, "undo: daemon-reload fallito, proseguo (best-effort)");
+            warn!(error = %e, "undo: daemon-reload failed, proceeding (best-effort)");
         }
         Ok(())
     }
@@ -248,7 +250,7 @@ pub fn render_unit(ctx: &Context) -> String {
 pub fn validate_unit(content: &str) -> Result<(), StepError> {
     if content.contains("{{") {
         return Err(StepError::Precondition(
-            "unit systemd: placeholder {{...}} non sostituiti".to_string(),
+            "systemd unit: unsubstituted {{...}} placeholders".to_string(),
         ));
     }
     Ok(())

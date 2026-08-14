@@ -100,13 +100,13 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - name: musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
-      - name: Installa cargo-deb
+      - name: Install cargo-deb
         run: cargo install cargo-deb --locked
-      - name: Build release (musl, statico)
+      - name: Release build (musl, static)
         run: cargo build --release --target x86_64-unknown-linux-musl --locked
-      - name: Genera il .deb (senza ricompilare)
+      - name: Build the .deb (without recompiling)
         run: cargo deb --no-build --target x86_64-unknown-linux-musl
       - name: Checksum SHA-256
         run: |
@@ -123,16 +123,16 @@ jobs:
       # about to be published, the only point in the chain where this check can
       # say no for the right reason. and it says so BEFORE the upload, because a
       # release published with a wrong README is fixed only by another release.
-      - name: Il README nomina questo file
+      - name: The README names this file
         run: |
-          nome="$(basename "$DEB")"
-          if ! grep -qF "$nome" README.md; then
-            echo "::error::il README non nomina '$nome': i comandi di installazione darebbero 404"
+          name="$(basename "$DEB")"
+          if ! grep -qF "$name" README.md; then
+            echo "::error::the README does not name '$name': the install commands would 404"
             grep -n 'amd64\.deb' README.md || true
             exit 1
           fi
-          echo "✔ il README nomina $nome"
-      - name: Carica .deb + checksum sulla Release
+          echo "✔ the README names $name"
+      - name: Upload the .deb and its checksum to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" "$DEB" "$DEB.sha256" --clobber
@@ -153,13 +153,13 @@ jobs:
           targets: x86_64-unknown-linux-musl
       - name: musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
-      - name: Installa cargo-generate-rpm
+      - name: Install cargo-generate-rpm
         run: cargo install cargo-generate-rpm --locked
-      - name: Build release (musl, statico)
+      - name: Release build (musl, static)
         run: cargo build --release --target x86_64-unknown-linux-musl --locked
-      - name: Genera il .rpm (senza ricompilare)
+      - name: Build the .rpm (without recompiling)
         run: cargo generate-rpm --target x86_64-unknown-linux-musl
       - name: Checksum SHA-256
         run: |
@@ -170,16 +170,16 @@ jobs:
       # here the README happened to be right by luck and not by verification —
       # the revision was there because somebody had copied it from the previous
       # release. luck and checking look alike until something changes.
-      - name: Il README nomina questo file
+      - name: The README names this file
         run: |
-          nome="$(basename "$RPM")"
-          if ! grep -qF "$nome" README.md; then
-            echo "::error::il README non nomina '$nome': i comandi di installazione darebbero 404"
+          name="$(basename "$RPM")"
+          if ! grep -qF "$name" README.md; then
+            echo "::error::the README does not name '$name': the install commands would 404"
             grep -n 'x86_64\.rpm' README.md || true
             exit 1
           fi
-          echo "✔ il README nomina $nome"
-      - name: Carica .rpm + checksum sulla Release
+          echo "✔ the README names $name"
+      - name: Upload the .rpm and its checksum to the release
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" "$RPM" "$RPM.sha256" --clobber
@@ -217,7 +217,7 @@ jobs:
         with:
           ref: ${{ github.event.release.tag_name }}
       - uses: dtolnay/rust-toolchain@stable
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
       # the same philosophy as the tag-versus-version checks on the packages: the
       # number is not conjectured, it is read from both sources and compared.
@@ -229,22 +229,22 @@ jobs:
       # interpolation inside the script: a value interpolated into a `run` body
       # is text that becomes shell, the class of defect this project has paid for
       # elsewhere.
-      - name: La versione del manifesto è quella del tag
-        id: manifesto
+      - name: The manifest's version is the tag's
+        id: manifest
         env:
           TAG: ${{ github.event.release.tag_name }}
         run: |
-          atteso="${TAG#v}"
-          metadati="$(cargo metadata --no-deps --format-version 1)"
-          nome="$(printf '%s' "$metadati" | jq -r '.packages[0].name')"
-          reale="$(printf '%s' "$metadati" | jq -r '.packages[0].version')"
-          if [ "$atteso" != "$reale" ]; then
-            echo "::error::il tag dice '$atteso', Cargo.toml dice '$reale': su crates.io la versione non si corregge"
+          expected="${TAG#v}"
+          metadata="$(cargo metadata --no-deps --format-version 1)"
+          name="$(printf '%s' "$metadata" | jq -r '.packages[0].name')"
+          actual="$(printf '%s' "$metadata" | jq -r '.packages[0].version')"
+          if [ "$expected" != "$actual" ]; then
+            echo "::error::the tag says '$expected', Cargo.toml says '$actual': a version on crates.io cannot be corrected"
             exit 1
           fi
-          echo "✔ tag e manifesto concordano: $nome $reale"
-          echo "nome=$nome" >> "$GITHUB_OUTPUT"
-          echo "versione=$reale" >> "$GITHUB_OUTPUT"
+          echo "✔ tag and manifest agree: $name $actual"
+          echo "name=$name" >> "$GITHUB_OUTPUT"
+          echo "version=$actual" >> "$GITHUB_OUTPUT"
 
       # is this version ALREADY on the registry?
       #
@@ -262,33 +262,33 @@ jobs:
       # since it refuses duplicates anyway. this guard can only turn a useless
       # red into an honest green — never authorise a publication that would not
       # otherwise happen.
-      - name: È già su crates.io?
-        id: registro
+      - name: Already on crates.io?
+        id: registry
         env:
-          NOME: ${{ steps.manifesto.outputs.nome }}
-          VERSIONE: ${{ steps.manifesto.outputs.versione }}
+          NAME: ${{ steps.manifest.outputs.name }}
+          VERSION: ${{ steps.manifest.outputs.version }}
         run: |
-          codice="$(curl -sS -o /dev/null -w '%{http_code}' \
+          code="$(curl -sS -o /dev/null -w '%{http_code}' \
             -H "User-Agent: invok-release (https://github.com/Omisen/invok)" \
-            "https://crates.io/api/v1/crates/$NOME/$VERSIONE" || echo 000)"
-          case "$codice" in
+            "https://crates.io/api/v1/crates/$NAME/$VERSION" || echo 000)"
+          case "$code" in
             200)
-              echo "salta=si" >> "$GITHUB_OUTPUT"
-              echo "::notice::$NOME $VERSIONE è già su crates.io: niente da pubblicare."
+              echo "skip=yes" >> "$GITHUB_OUTPUT"
+              echo "::notice::$NAME $VERSION is already on crates.io: nothing to publish."
               ;;
             404)
-              echo "✔ $NOME $VERSIONE non è ancora sul registro: si procede."
+              echo "✔ $NAME $VERSION is not on the registry yet: proceeding."
               ;;
             *)
-              echo "::warning::crates.io ha risposto $codice, che non so interpretare: decide cargo."
+              echo "::warning::crates.io answered $code, which cannot be interpreted here: cargo decides."
               ;;
           esac
 
       - name: cargo publish --dry-run
-        if: steps.registro.outputs.salta != 'si'
+        if: steps.registry.outputs.skip != 'yes'
         run: cargo publish --dry-run --locked
       - name: cargo publish
-        if: steps.registro.outputs.salta != 'si'
+        if: steps.registry.outputs.skip != 'yes'
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish --locked

@@ -113,17 +113,17 @@ impl Step for NoopStep {
         if self.fail_on_snapshot {
             return Err(StepError::SnapshotFailed {
                 step: self.name.clone(),
-                reason: "fallimento snapshot simulato".to_string(),
+                reason: "simulated snapshot failure".to_string(),
             });
         }
         // a real step would detect the state here; this one is preconfigured.
-        info!(step = %self.name, prestate = ?self.prestate, "snapshot registrato");
+        info!(step = %self.name, prestate = ?self.prestate, "snapshot recorded");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!(step = %self.name, "run (dry-run, nessuna mutazione)");
+            info!(step = %self.name, "run (dry run, nothing changed)");
             return Ok(());
         }
         if let Some(f) = &self.on_run {
@@ -133,10 +133,10 @@ impl Step for NoopStep {
             return Err(StepError::CommandFailed {
                 command: format!("noop:{}", self.name),
                 status: "1".to_string(),
-                stderr: "fallimento run simulato".to_string(),
+                stderr: "simulated run failure".to_string(),
             });
         }
-        info!(step = %self.name, "run eseguito");
+        info!(step = %self.name, "run executed");
         Ok(())
     }
 
@@ -149,7 +149,7 @@ impl Step for NoopStep {
             info!(
                 step = %self.name,
                 prestate = ?self.prestate,
-                "undo NO-OP (non CreatedByUs)"
+                "undo NO-OP (not CreatedByUs)"
             );
             return Ok(());
         }
@@ -162,19 +162,19 @@ impl Step for NoopStep {
         }
 
         if ctx.dry_run {
-            info!(step = %self.name, "undo (dry-run, nessuna mutazione)");
+            info!(step = %self.name, "undo (dry run, nothing changed)");
             return Ok(());
         }
 
         if self.fail_on_undo {
-            warn!(step = %self.name, "undo: fallimento simulato");
+            warn!(step = %self.name, "undo: simulated failure");
             return Err(StepError::Precondition(format!(
-                "fallimento undo simulato per {}",
+                "simulated undo failure for {}",
                 self.name
             )));
         }
 
-        info!(step = %self.name, "undo eseguito");
+        info!(step = %self.name, "undo executed");
         Ok(())
     }
 

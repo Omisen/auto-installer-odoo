@@ -93,6 +93,6 @@ pub fn decode_snapshot<T: DeserializeOwned>(
 ) -> Result<T, StepError> {
     serde_json::from_value(snapshot.clone()).map_err(|e| StepError::SnapshotFailed {
         step: step.to_string(),
-        reason: format!("snapshot persistito non deserializzabile: {e}"),
+        reason: format!("the persisted snapshot cannot be deserialised: {e}"),
     })
 }

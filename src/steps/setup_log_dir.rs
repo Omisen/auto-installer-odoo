@@ -42,12 +42,12 @@ impl Step for SetupLogDir {
     fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError> {
         let Some(logfile) = &ctx.odoo_logfile else {
             self.prestate = PreState::Untracked;
-            info!("snapshot: ODOO_LOGFILE disabilitato, step no-op");
+            info!("snapshot: ODOO_LOGFILE is disabled, the step is a no-op");
             return Ok(());
         };
         let Some(dir) = logfile.parent() else {
             self.prestate = PreState::Untracked;
-            warn!(logfile = %logfile.display(), "snapshot: logfile senza directory genitrice, step no-op");
+            warn!(logfile = %logfile.display(), "snapshot: the logfile has no parent directory, the step is a no-op");
             return Ok(());
         };
 
@@ -56,13 +56,13 @@ impl Step for SetupLogDir {
         } else {
             PreState::Untracked
         };
-        info!(dir = %dir.display(), prestate = ?self.prestate, "snapshot setup-log-dir");
+        info!(dir = %dir.display(), prestate = ?self.prestate, "snapshot: setup-log-dir");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         let Some(logfile) = &ctx.odoo_logfile else {
-            info!("run: ODOO_LOGFILE disabilitato, nessuna azione");
+            info!("run: ODOO_LOGFILE is disabled, nothing to do");
             return Ok(());
         };
         let Some(dir) = logfile.parent() else {
@@ -72,12 +72,12 @@ impl Step for SetupLogDir {
 
         // already there and not ours: left untouched.
         if self.prestate == PreState::Preexisting {
-            info!(dir = %dir.display(), "run: log dir già presente, skip");
+            info!(dir = %dir.display(), "run: the log dir is already there, skipping");
             return Ok(());
         }
 
         if ctx.dry_run {
-            info!(dir = %dir.display(), "run (dry-run): creerei la log dir + chown {user}:{user} 0750");
+            info!(dir = %dir.display(), "run (dry run): would create the log dir and chown {user}:{user} 0750");
             return Ok(());
         }
 
@@ -86,13 +86,13 @@ impl Step for SetupLogDir {
         self.ops.chmod(dir, LOG_DIR_MODE)?;
 
         self.prestate = PreState::CreatedByUs;
-        info!(dir = %dir.display(), "run: log dir creata, owned {user}:{user} 0750");
+        info!(dir = %dir.display(), "run: log dir created, owned {user}:{user} 0750");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate != PreState::CreatedByUs {
-            info!(prestate = ?self.prestate, "undo NO-OP (log dir non creata da noi)");
+            info!(prestate = ?self.prestate, "undo NO-OP (log dir not created by us)");
             return Ok(());
         }
 
@@ -103,23 +103,23 @@ impl Step for SetupLogDir {
         };
 
         if ctx.dry_run {
-            info!(dir = %dir.display(), "undo (dry-run): rimuoverei la log dir se vuota");
+            info!(dir = %dir.display(), "undo (dry run): would remove the log dir if it is empty");
             return Ok(());
         }
 
         // only if empty: never delete logs already written.
         match self.ops.dir_is_empty(dir) {
             Ok(true) => match self.ops.rmdir(dir) {
-                Ok(()) => info!(dir = %dir.display(), "undo: log dir rimossa"),
+                Ok(()) => info!(dir = %dir.display(), "undo: log dir removed"),
                 Err(e) => {
-                    warn!(dir = %dir.display(), error = %e, "undo: rmdir fallito, proseguo (best-effort)")
+                    warn!(dir = %dir.display(), error = %e, "undo: rmdir failed, proceeding (best-effort)")
                 }
             },
             Ok(false) => {
-                warn!(dir = %dir.display(), "undo: log dir non vuota, non la rimuovo (best-effort)")
+                warn!(dir = %dir.display(), "undo: the log dir is not empty, leaving it (best-effort)")
             }
             Err(e) => {
-                warn!(dir = %dir.display(), error = %e, "undo: impossibile verificare la log dir, non rimuovo")
+                warn!(dir = %dir.display(), error = %e, "undo: cannot inspect the log dir, not removing it")
             }
         }
         Ok(())

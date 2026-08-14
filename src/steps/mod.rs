@@ -34,34 +34,31 @@ pub fn remove_with_recovery(pm: &dyn PackageManager, step: &str, pkgs: &[&str]) 
 
     // pre-emptive recovery: apt does not operate on a broken dpkg.
     if let Err(e) = pm.try_repair() {
-        warn!(step, error = %e, "undo: riparazione preventiva fallita, tento comunque la rimozione");
+        warn!(step, error = %e, "undo: the preventive repair failed, attempting the removal anyway");
     }
 
     let Err(first) = pm.remove(pkgs) else {
         return;
     };
-    warn!(step, error = %first, "undo: rimozione fallita, tento il recovery del gestore e riprovo");
+    warn!(step, error = %first, "undo: removal failed, recovering the manager and retrying");
 
     // covers unpacked-but-unconfigured packages, where the first repair alone
     // is not enough.
     if let Err(e) = pm.try_deep_repair() {
-        warn!(step, error = %e, "undo: riparazione profonda fallita");
+        warn!(step, error = %e, "undo: the deep repair failed");
     }
     if let Err(e) = pm.try_repair() {
-        warn!(step, error = %e, "undo: riparazione di recovery fallita");
+        warn!(step, error = %e, "undo: the recovery repair failed");
     }
 
     match pm.remove(pkgs) {
-        Ok(()) => info!(
-            step,
-            "undo: rimozione riuscita dopo il recovery del gestore"
-        ),
+        Ok(()) => info!(step, "undo: removal succeeded after recovering the manager"),
         Err(second) => warn!(
             step,
             error = %second,
-            residui = ?pkgs,
-            "undo: rimozione fallita anche dopo il recovery del gestore, proseguo (best-effort). \
-             Questi pacchetti restano installati: rimuovili a mano dopo aver sistemato il gestore \
+            leftovers = ?pkgs,
+            "undo: removal failed even after recovering the manager, proceeding (best-effort). \
+             these packages stay installed: remove them by hand once the manager is repaired \
              (`sudo apt-get install -f`)"
         ),
     }
@@ -114,21 +111,21 @@ pub fn remove_created_root(
             step,
             target = %target.display(),
             home = %home.display(),
-            "undo: path fuori dal perimetro della home, non rimuovo nulla"
+            "undo: the path is outside the home's perimeter, nothing is removed"
         );
         return;
     }
     if dry_run {
-        info!(step, target = %target.display(), "undo (dry-run): rm -rf");
+        info!(step, target = %target.display(), "undo (dry run): rm -rf");
         return;
     }
     match ops.remove_dir_all(target) {
-        Ok(()) => info!(step, target = %target.display(), "undo: rimosso"),
+        Ok(()) => info!(step, target = %target.display(), "undo: removed"),
         Err(e) => warn!(
             step,
             target = %target.display(),
             error = %e,
-            "undo: rm -rf fallito, proseguo (best-effort)"
+            "undo: rm -rf failed, proceeding (best-effort)"
         ),
     }
 }

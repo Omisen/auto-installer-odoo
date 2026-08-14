@@ -41,7 +41,7 @@ impl ProgressReporter for LogReporter {
         warn!("✖ {name}");
     }
     fn rollback_start(&self, total: usize) {
-        warn!("rollback in corso ({total} step da annullare)…");
+        warn!("rollback in progress ({total} steps to undo)…");
     }
     fn undo_start(&self, name: &str) {
         info!("undo: {name}");
@@ -90,11 +90,11 @@ impl ProgressReporter for IndicatifReporter {
         self.bar.inc(1);
     }
     fn step_failed(&self, name: &str) {
-        self.bar.set_message(format!("fallito: {name}"));
+        self.bar.set_message(format!("failed: {name}"));
     }
     fn rollback_start(&self, _total: usize) {
         self.ensure_ticking();
-        self.bar.set_message("rollback in corso…".to_string());
+        self.bar.set_message("rollback in progress…".to_string());
     }
     fn undo_start(&self, name: &str) {
         self.ensure_ticking();

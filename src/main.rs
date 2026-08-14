@@ -45,7 +45,7 @@ fn run_install(cli: &Cli) -> Result<()> {
     let env_raw = match &cli.config {
         Some(path) => {
             let raw = config::parse_env_file(path).map_err(|e| anyhow!(e))?;
-            tracing::info!(config = %path.display(), "configurazione .env caricata");
+            tracing::info!(config = %path.display(), ".env configuration loaded");
             raw
         }
         None => RawConfig::default(),
@@ -55,7 +55,9 @@ fn run_install(cli: &Cli) -> Result<()> {
     let prompted = if interactive {
         prompt::collect(&cli_raw, &env_raw)?
     } else {
-        tracing::info!("input interattivo non disponibile: uso CLI, .env e default finali");
+        tracing::info!(
+            "no interactive input available: using the CLI, the .env and the final defaults"
+        );
         RawConfig::default()
     };
 
@@ -67,10 +69,10 @@ fn run_install(cli: &Cli) -> Result<()> {
         config::check_admin_password(resolved.admin_passwd.expose(), interactive)?
     {
         tracing::warn!(
-            "La password admin Odoo è impostata al valore debole 'admin': usala solo per demo o ambienti temporanei."
+            "the Odoo admin password is set to the weak value 'admin': use it only for demos or throwaway environments."
         );
-        if !prompt::confirm("Confermi di voler continuare con admin_passwd='admin'?")? {
-            bail!("Installazione interrotta: imposta una password admin diversa da 'admin'.");
+        if !prompt::confirm("Confirm you want to continue with admin_passwd='admin'?")? {
+            bail!("installation stopped: set an admin password other than 'admin'.");
         }
     }
 
@@ -98,8 +100,8 @@ fn run_install(cli: &Cli) -> Result<()> {
     // any of them knowing which distribution they run on.
     let make_ops = invok::system_ops::backend_factory(ctx.os_family).ok_or_else(|| {
         anyhow!(
-            "questa versione dell'installer non ha un backend per la famiglia '{}': \
-             non posso installare né rimuovere pacchetti su questo sistema",
+            "this version of the installer has no backend for family '{}': it can neither \
+             install nor remove packages on this system",
             ctx.os_family
         )
     })?;
@@ -113,20 +115,20 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     // --- dry-run: print the plan, mutate nothing, persist nothing -----------
     if ctx.dry_run {
-        println!("=== PIANO (dry-run) — nessuna modifica al sistema ===");
+        println!("=== PLAN (dry run) — nothing on the system is changed ===");
         // the plan **interrogates** the system, and some snapshots go through
         // `sudo`. unprivileged, those steps are skipped, so the plan is true
         // but incomplete — better said upfront than found in a stray warning
         // (A-V3-11).
         if !checks::running_as_root() {
             println!(
-                "Nota: senza sudo alcuni step non possono ispezionare il sistema (PostgreSQL, \n\
-                 pacchetti installati) e verranno elencati come «snapshot non disponibile».\n\
-                 Per il piano completo: sudo invok --dry-run …\n"
+                "note: without sudo some steps cannot inspect the system (PostgreSQL, \n\
+                 installed packages) and will be listed as \"snapshot unavailable\".\n\
+                 for the complete plan: sudo invok --dry-run …\n"
             );
         }
         dry_run_plan(&mut steps, &ctx, &LogReporter);
-        println!("=== fine piano (dry-run) ===");
+        println!("=== end of plan (dry run) ===");
         return Ok(());
     }
 
@@ -160,12 +162,12 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     // final interactive confirmation before mutating anything.
     let question = match &start {
-        Start::Fresh => "Procedere con l'installazione?",
-        Start::Resume(_) => "Riprendere l'installazione interrotta?",
-        Start::Replace => "Reinstallare da capo, mettendo da parte il manifesto esistente?",
+        Start::Fresh => "Proceed with the installation?",
+        Start::Resume(_) => "Resume the interrupted installation?",
+        Start::Replace => "Reinstall from scratch, setting the existing manifest aside?",
     };
     if interactive && !prompt::confirm(question)? {
-        bail!("Installazione annullata dall'utente.");
+        bail!("installation cancelled by the user.");
     }
 
     print_interrupt_notice(&ctx.state_path);
@@ -198,13 +200,13 @@ fn run_install(cli: &Cli) -> Result<()> {
         Start::Replace => {
             let saved = archive_manifest(&ctx.state_path)?;
             tracing::warn!(
-                archiviato = %saved.display(),
-                "--force: manifesto precedente messo da parte, non cancellato"
+                archived = %saved.display(),
+                "--force: the previous manifest was set aside, not deleted"
             );
             println!(
-                "--force: manifesto precedente archiviato in {}.\n\
-                 Se quell'installazione aveva creato artefatti, resta l'unica traccia di \
-                 cosa rimuovere: conservalo (`invok rollback --state <file>`).",
+                "--force: the previous manifest was archived in {}.\n\
+                 if that installation had created artifacts, this is the only record of \
+                 what to remove: keep it (`invok rollback --state <file>`).",
                 saved.display()
             );
             Installer::new()
@@ -226,13 +228,13 @@ fn run_install(cli: &Cli) -> Result<()> {
         tracing::warn!(
             path = %ctx.state_path.display(),
             error = %e,
-            "impossibile marcare lo stato come concluso: l'installazione è comunque \
-             riuscita, ma `invok rollback` potrebbe non poterla disinstallare"
+            "cannot mark the state as finished: the installation succeeded anyway, but \
+             `invok rollback` may not be able to uninstall it"
         );
     }
 
     print_install_summary(&ctx);
-    tracing::info!("preparazione completata");
+    tracing::info!("preparation complete");
     Ok(())
 }
 
@@ -264,18 +266,18 @@ enum Start {
 /// a refusal, carrying the message to show.
 fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
     let state = InstallState::load(&ctx.state_path).map_err(|e| anyhow!(e))?;
-    let richiesta = InstallConfig::from_context(ctx);
+    let requested = InstallConfig::from_context(ctx);
 
-    match state::start_decision(&state, &richiesta, force) {
+    match state::start_decision(&state, &requested, force) {
         StartDecision::Fresh => Ok(Start::Fresh),
         StartDecision::Replace => Ok(Start::Replace),
 
         StartDecision::Resume => {
             println!(
-                "Installazione interrotta trovata in {}: {} step già completati, si riprende.\n\
-                 Gli step già eseguiti non vengono rifatti e la proprietà degli artefatti \n\
-                 registrata allora viene conservata.\n\
-                 (Per ricominciare da capo: `sudo invok rollback`, oppure `--force`.)",
+                "interrupted installation found in {}: {} steps already completed, resuming.\n\
+                 the steps already run are not repeated, and the ownership of the artifacts \n\
+                 recorded back then is preserved.\n\
+                 (to start over: `sudo invok rollback`, or `--force`.)",
                 ctx.state_path.display(),
                 state.completed.len()
             );
@@ -283,62 +285,62 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
         }
 
         StartDecision::RefuseFinished => {
-            let istanza = state
+            let instance = state
                 .config
                 .as_ref()
                 .map(|c| {
                     format!(
-                        "Odoo {}, utente '{}', database '{}', in {}",
+                        "Odoo {}, user '{}', database '{}', in {}",
                         c.odoo_version,
                         c.odoo_user,
                         c.db_name,
                         c.install_dir.display()
                     )
                 })
-                .unwrap_or_else(|| "configurazione non registrata".to_string());
+                .unwrap_or_else(|| "configuration not recorded".to_string());
             bail!(
-                "Risulta già un'installazione completata su questa macchina.\n\
-                 \n  Manifesto : {}\n  Istanza   : {}\n  Step      : {} registrati\n\
+                "a completed installation is already registered on this machine.\n\
+                 \n  Manifest : {}\n  Instance : {}\n  Steps    : {} recorded\n\
                  \n\
-                 Per rimuoverla:                        sudo invok rollback\n\
-                 Per reinstallare sopra (manifesto messo da parte):  --force\n\
+                 to remove it:                              sudo invok rollback\n\
+                 to reinstall over it (manifest set aside): --force\n\
                  \n\
-                 Proseguire senza una scelta esplicita sovrascriverebbe il manifesto con \
-                 artefatti tutti marcati come preesistenti, e questa istanza non sarebbe \
-                 più disinstallabile automaticamente.",
+                 proceeding without an explicit choice would overwrite the manifest with \
+                 every artifact marked pre-existing, and this instance would no longer be \
+                 removable automatically.",
                 ctx.state_path.display(),
-                istanza,
+                instance,
                 state.completed.len()
             )
         }
 
-        StartDecision::RefuseIdentityMismatch(differenze) => {
-            let elenco: Vec<String> = differenze
+        StartDecision::RefuseIdentityMismatch(differences) => {
+            let listing: Vec<String> = differences
                 .iter()
-                .map(|(campo, prima, ora)| format!("  {campo}: '{prima}' -> '{ora}'"))
+                .map(|(field, before, now)| format!("  {field}: '{before}' -> '{now}'"))
                 .collect();
             bail!(
-                "C'è un'installazione interrotta ({} step) in {}, ma i parametri richiesti \
-                 nominano artefatti diversi:\n{}\n\
+                "there is an interrupted installation ({} steps) in {}, but the requested \
+                 parameters name different artifacts:\n{}\n\
                  \n\
-                 Riprendere così produrrebbe un manifesto a metà fra due istanze, e il \
-                 rollback agirebbe in parte sugli artefatti sbagliati.\n\
+                 resuming like this would produce a manifest halfway between two instances, \
+                 and the rollback would act partly on the wrong artifacts.\n\
                  \n\
-                 Rilancia con gli stessi parametri per riprendere, oppure \
-                 `sudo invok rollback` per ripulire prima.",
+                 re-run with the same parameters to resume, or \
+                 `sudo invok rollback` to clean up first.",
                 state.completed.len(),
                 ctx.state_path.display(),
-                elenco.join("\n")
+                listing.join("\n")
             )
         }
 
         StartDecision::RefuseUnknownIdentity => bail!(
-            "C'è un'installazione interrotta ({} step) in {}, ma il manifesto non registra \
-             la configurazione (formato precedente alla R4): non posso verificare che \
-             descriva gli stessi artefatti, quindi non la riprendo.\n\
+            "there is an interrupted installation ({} steps) in {}, but the manifest does not \
+             record the configuration (a format older than R4): it cannot be verified that it \
+             describes the same artifacts, so it is not resumed.\n\
              \n\
-             Usa `sudo invok rollback --state {}` per ripulire, oppure `--force` \
-             per ricominciare mettendo da parte il manifesto.",
+             use `sudo invok rollback --state {}` to clean up, or `--force` \
+             to start over with the manifest set aside.",
             state.completed.len(),
             ctx.state_path.display(),
             ctx.state_path.display()
@@ -364,7 +366,7 @@ fn archive_manifest(path: &Path) -> Result<PathBuf> {
     name.push(format!(".superseded-{stamp}"));
     let target = path.with_file_name(name);
     std::fs::rename(path, &target)
-        .map_err(|e| anyhow!("impossibile archiviare {}: {e}", path.display()))?;
+        .map_err(|e| anyhow!("cannot archive {}: {e}", path.display()))?;
     Ok(target)
 }
 
@@ -395,7 +397,7 @@ fn run_environment_checks(
     if port_is_ours {
         tracing::info!(
             port = ctx.port,
-            "porta occupata dal servizio della stessa installazione: controllo saltato (resume)"
+            "the port is held by this installation's own service: check skipped (resume)"
         );
     } else {
         // if nginx is already serving, port 80 is its own: not a conflict but
@@ -412,27 +414,27 @@ fn run_environment_checks(
 /// prints the resolved configuration. never prints the password.
 fn print_configuration(ctx: &Context) {
     let admin_line = if ctx.admin_passwd.expose() == "admin" {
-        "default 'admin' (consentito solo con conferma esplicita; sconsigliato)".to_string()
+        "the 'admin' default (allowed only with an explicit confirmation; discouraged)".to_string()
     } else {
-        "personalizzata".to_string()
+        "custom".to_string()
     };
 
     println!();
     println!("================================================================");
-    println!("Configurazione finale installazione:");
-    println!("  Versione Odoo : {}", ctx.odoo_version);
-    println!("  Utente Odoo   : {}", ctx.odoo_user);
-    println!("  Database      : {}", ctx.db_name);
-    println!("  DB user       : {}", ctx.db_user);
-    println!("  Porta HTTP    : {}", ctx.port);
-    println!("  Install dir   : {}", ctx.install_dir.display());
+    println!("Final installation settings:");
+    println!("  Odoo version : {}", ctx.odoo_version);
+    println!("  Odoo user    : {}", ctx.odoo_user);
+    println!("  Database     : {}", ctx.db_name);
+    println!("  DB user      : {}", ctx.db_user);
+    println!("  HTTP port    : {}", ctx.port);
+    println!("  Install dir  : {}", ctx.install_dir.display());
     println!(
-        "  Nginx         : {}",
-        if ctx.with_nginx { "attivo" } else { "no" }
+        "  Nginx        : {}",
+        if ctx.with_nginx { "enabled" } else { "no" }
     );
-    println!("  Admin passwd  : {admin_line}");
+    println!("  Admin passwd : {admin_line}");
     if ctx.dry_run {
-        println!("  Modalità      : dry-run (nessuna mutazione)");
+        println!("  Mode         : dry run (nothing is changed)");
     }
     println!("================================================================");
     println!();
@@ -446,36 +448,36 @@ fn print_install_summary(ctx: &Context) {
     let unit = format!("odoo{}", ctx.odoo_version_short);
     println!();
     println!("================================================================");
-    println!("Installazione completata.");
+    println!("Installation complete.");
     println!();
     println!(
         "  Odoo {}          http://localhost:{}",
         ctx.odoo_version, ctx.port
     );
-    println!("  Servizio         {unit} (systemd)");
-    println!("  Utente di sistema {}", ctx.odoo_user);
-    println!("  Database         {} (ruolo {})", ctx.db_name, ctx.db_user);
-    println!("  Sorgenti         {}", ctx.install_dir.display());
+    println!("  Service          {unit} (systemd)");
+    println!("  System user      {}", ctx.odoo_user);
+    println!("  Database         {} (role {})", ctx.db_name, ctx.db_user);
+    println!("  Sources          {}", ctx.install_dir.display());
     println!(
         "  Config           {}/odoo{}.conf",
         ctx.install_dir.display(),
         ctx.odoo_version_short
     );
     if let Some(logfile) = &ctx.odoo_logfile {
-        println!("  Log Odoo         {}", logfile.display());
+        println!("  Odoo log         {}", logfile.display());
     } else {
-        println!("  Log Odoo         journal (journalctl -u {unit})");
+        println!("  Odoo log         journal (journalctl -u {unit})");
     }
     if ctx.with_nginx {
-        println!("  Nginx            reverse proxy attivo su :80");
+        println!("  Nginx            reverse proxy serving on :80");
     }
     println!();
-    println!("  Gestione         odoo start|stop|restart|status   (riapri la shell)");
-    println!("  Disinstallazione sudo invok rollback");
+    println!("  Management       odoo start|stop|restart|status   (reopen the shell)");
+    println!("  Uninstall        sudo invok rollback");
     println!();
     println!(
-        "Lo stato in {} è il manifesto di disinstallazione: dice cosa\n\
-         è stato creato e cosa era già presente. Non rimuoverlo, serve al rollback.",
+        "the state in {} is the uninstall manifest: it says what was\n\
+         created and what was already there. do not remove it, the rollback needs it.",
         ctx.state_path.display()
     );
     println!("================================================================");
@@ -489,18 +491,18 @@ fn print_install_summary(ctx: &Context) {
 /// not after.
 fn print_interrupt_notice(state_path: &Path) {
     println!(
-        "Nota: puoi interrompere con Ctrl-C. L'installer **annulla da sé** quello che ha \n\
-         già fatto e il sistema torna come prima.\n\
+        "note: you can interrupt with Ctrl-C. the installer **undoes its own work** and \n\
+         the system comes back as it was.\n\
      \n\
-         L'interruzione ha effetto fra uno step e il successivo: lo step in corso viene \n\
-         portato a termine, perché fermare a metà un `apt` o l'inizializzazione di un \n\
-         database lascerebbe qualcosa di peggio di ciò che si voleva evitare.\n\
+         the interruption takes effect between one step and the next: the step in progress \n\
+         is carried to completion, because stopping an `apt` or a database initialisation \n\
+         halfway would leave something worse than what was being avoided.\n\
      \n\
-         Un secondo Ctrl-C esce **subito**: in quel caso il sistema resta a metà e si \n\
-         ripulisce con\n\
+         a second Ctrl-C exits **at once**: the system then stays half-done and is cleaned \n\
+         up with\n\
      \n    sudo invok rollback\n\n\
-         Lo stato necessario è registrato in {} dopo ogni step — vale anche se la \n\
-         macchina si spegne.\n",
+         the state needed for that is recorded in {} after every step — it holds even if \n\
+         the machine loses power.\n",
         state_path.display()
     );
 }
@@ -523,7 +525,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // or after a completed rollback, not an error.
     if state.completed.is_empty() {
         println!(
-            "Nessuna installazione da annullare: {} non esiste o non registra alcuno step.",
+            "nothing to undo: {} does not exist or records no step.",
             state_path.display()
         );
         return Ok(());
@@ -534,19 +536,19 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // database we never created. better to stop and list what is there.
     let Some(config) = state.config.clone() else {
         eprintln!(
-            "Il file di stato {} è stato scritto da una versione precedente dell'installer e \n\
-             non contiene la configurazione dell'installazione (utente, database, directory).\n\
-             Senza quei dati un rollback automatico dovrebbe indovinarli, e indovinare qui \n\
-             significa rischiare di rimuovere risorse che non abbiamo creato noi.\n\n\
-             Step registrati da quell'installazione, in ordine di esecuzione:",
+            "the state file {} was written by an older version of the installer and does \n\
+             not carry the installation's configuration (user, database, directory).\n\
+             without those an automatic rollback would have to guess, and guessing here \n\
+             means risking the removal of resources we never created.\n\n\
+             steps recorded by that installation, in order of execution:",
             state_path.display()
         );
         for record in &state.completed {
             eprintln!("  - {}", record.name);
         }
         bail!(
-            "rollback automatico non disponibile per questo file di stato: ripulisci a mano \
-             gli artefatti elencati, poi rimuovi {}",
+            "no automatic rollback is available for this state file: clean up the listed \
+             artifacts by hand, then remove {}",
             state_path.display()
         );
     };
@@ -554,11 +556,11 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // written by a different installer? (A-V3-16) not a refusal, but the
     // context the "unknown step" warning lacked — and said BEFORE starting, so
     // the reader can stop and use the right version.
-    if let Some(nota) = state::version_mismatch_note(
+    if let Some(note) = state::version_mismatch_note(
         config.installer_version.as_deref(),
         invok::INSTALLER_VERSION,
     ) {
-        tracing::warn!("{nota}");
+        tracing::warn!("{note}");
     }
 
     // does the manifest describe an installation of THIS installer? (A-V3-8)
@@ -578,12 +580,12 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // decide, because a pre-2.3 manifest falls back to `Debian` and `--state`
     // accepts another machine's manifest. logging it is not decorative: a
     // default nobody sees is a default nobody can contradict.
-    tracing::info!(famiglia = %config.os_family, "rollback: famiglia letta dal manifesto");
+    tracing::info!(family = %config.os_family, "rollback: family read from the manifest");
     let detected = checks::os_id_from(Path::new(checks::OS_RELEASE_PATH))
         .and_then(|id| invok::distro::OsFamily::from_os_id(&id));
-    if let Some(avviso) = invok::distro::family_mismatch(config.os_family, detected) {
-        tracing::warn!("{avviso}");
-        eprintln!("Attenzione: {avviso}");
+    if let Some(warning) = invok::distro::family_mismatch(config.os_family, detected) {
+        tracing::warn!("{warning}");
+        eprintln!("Warning: {warning}");
     }
 
     // backends chosen by the **manifest's** family, not this machine's. with
@@ -591,9 +593,8 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // removes nothing and reports success.
     let make_ops = invok::system_ops::backend_factory(config.os_family).ok_or_else(|| {
         anyhow!(
-            "il manifesto descrive un'installazione su '{}', ma questa versione dell'installer \
-             non ha un backend per quella famiglia: non posso annullarla. Usa un binario che la \
-             supporti.",
+            "the manifest describes an installation on '{}', but this version of the installer \
+             has no backend for that family and cannot undo it. use a binary that supports it.",
             config.os_family
         )
     })?;
@@ -612,13 +613,13 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     match rollback::confirmation_gate(args.dry_run, args.yes, interactive) {
         ConfirmationGate::Proceed => {}
         ConfirmationGate::Ask => {
-            if !prompt::confirm("Procedere con la rimozione elencata sopra?")? {
-                bail!("Rollback annullato dall'utente. Nessuna modifica effettuata.");
+            if !prompt::confirm("Proceed with the removal listed above?")? {
+                bail!("rollback cancelled by the user. nothing was changed.");
             }
         }
         ConfirmationGate::RefuseNonInteractive => bail!(
-            "il rollback rimuove risorse dal sistema e richiede una conferma. \
-             Senza terminale interattivo usa --yes per confermare esplicitamente."
+            "the rollback removes resources from the system and needs a confirmation. \
+             without an interactive terminal, use --yes to confirm explicitly."
         ),
     }
 
@@ -648,7 +649,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     print_rollback_report(&report, args.dry_run);
 
     if args.dry_run {
-        println!("dry-run: nessuna modifica applicata, il file di stato resta al suo posto.");
+        println!("dry run: nothing was changed, the state file stays where it is.");
         return Ok(());
     }
 
@@ -656,18 +657,18 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     // left keeps the file, so a second run can retry.
     if report.is_clean() {
         match InstallState::clear(&state_path) {
-            Ok(()) => println!("Stato consumato: {} rimosso.", state_path.display()),
+            Ok(()) => println!("State consumed: {} removed.", state_path.display()),
             Err(e) => tracing::warn!(
                 path = %state_path.display(),
                 error = %e,
-                "rimozione del file di stato fallita: rimuovilo a mano"
+                "removing the state file failed: remove it by hand"
             ),
         }
     } else {
         println!(
-            "Il file di stato {} NON è stato rimosso: descrive ancora ciò che non è stato \n\
-             ripulito. Sistemato il problema, puoi rieseguire `invok rollback` \n\
-             (gli undo sono idempotenti).",
+            "the state file {} was NOT removed: it still describes what was not cleaned \n\
+             up. once the problem is fixed you can run `invok rollback` again \n\
+             (the undos are idempotent).",
             state_path.display()
         );
     }
@@ -687,47 +688,47 @@ fn print_rollback_summary(
     println!("================================================================");
     match rollback::install_status(state, canonical_steps) {
         InstallStatus::Complete { steps } => {
-            println!("Installazione COMPLETA ({steps} step): verrà disinstallata.")
+            println!("COMPLETE installation ({steps} steps): it will be uninstalled.")
         }
         InstallStatus::Interrupted { done, total } => println!(
-            "Installazione INTERROTTA a metà ({done} step su {total} completati):\n\
-             verranno ripuliti i residui lasciati da quella esecuzione."
+            "INTERRUPTED installation ({done} of {total} steps completed):\n\
+             the leftovers of that run will be cleaned up."
         ),
     }
-    println!("Stato di partenza: {}", state_path.display());
+    println!("Starting state: {}", state_path.display());
     println!();
-    println!("Artefatti dell'installazione:");
-    println!("  Versione Odoo : {}", config.odoo_version);
-    println!("  Utente Odoo   : {}", config.odoo_user);
-    println!("  Database      : {}", config.db_name);
-    println!("  DB user       : {}", config.db_user);
-    println!("  Install dir   : {}", config.install_dir.display());
+    println!("Artifacts of the installation:");
+    println!("  Odoo version : {}", config.odoo_version);
+    println!("  Odoo user    : {}", config.odoo_user);
+    println!("  Database     : {}", config.db_name);
+    println!("  DB user      : {}", config.db_user);
+    println!("  Install dir  : {}", config.install_dir.display());
     println!(
-        "  Nginx         : {}",
+        "  Nginx        : {}",
         if config.with_nginx {
-            "configurato"
+            "configured"
         } else {
             "no"
         }
     );
     println!();
-    println!("Step da annullare, in ordine inverso di esecuzione:");
+    println!("Steps to undo, in reverse order of execution:");
     for (i, name) in rollback::undo_plan(state).iter().enumerate() {
         println!("  {:>2}. {name}", i + 1);
     }
     println!();
     println!(
-        "Verrà rimosso SOLO ciò che l'installer ha creato: risorse preesistenti\n\
-         (database, pacchetti, config, utenti già presenti) restano intatte."
+        "ONLY what the installer created will be removed: pre-existing resources\n\
+         (databases, packages, configs, users already there) stay untouched."
     );
     if !args.aggressive_rollback {
         println!(
-            "PostgreSQL, Nginx e le utility comuni (git/curl/wget) restano installati:\n\
-             usa --aggressive-rollback per purgare anche quelli."
+            "PostgreSQL, nginx and the common utilities (git/curl/wget) stay installed:\n\
+             use --aggressive-rollback to purge those too."
         );
     }
     if args.dry_run {
-        println!("Modalità      : dry-run (nessuna mutazione)");
+        println!("Mode          : dry run (nothing is changed)");
     }
     println!("================================================================");
     println!();
@@ -735,12 +736,12 @@ fn print_rollback_summary(
 
 /// end-of-rollback report: what was undone and, above all, what was not.
 fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
-    let verbo = if dry_run { "annullerebbe" } else { "annullati" };
+    let verb = if dry_run { "would undo" } else { "undone" };
     println!();
     println!("================================================================");
     println!(
-        "Rollback: {} {} step su {}.",
-        verbo,
+        "Rollback: {} {} of {} steps.",
+        verb,
         report.undone(),
         report.outcomes.len()
     );
@@ -751,20 +752,17 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
             // the promise, not the mechanism (A-MD-2): every undo can have
             // succeeded with the home still there, because `PrepareOptRoot`
             // correctly gives up on a non-empty directory and returns `Ok`.
-            None => println!("Nessun residuo: il sistema è tornato allo stato precedente."),
+            None => println!("No leftovers: the system is back to its previous state."),
             Some(home) => {
-                println!(
-                    "Tutti gli undo sono riusciti, ma {} esiste ancora.",
-                    home.display()
-                );
+                println!("Every undo succeeded, but {} still exists.", home.display());
                 println!();
-                println!("Non l'abbiamo rimossa perché **non è vuota**: contiene qualcosa che");
-                println!("non abbiamo creato noi, e su roba altrui non facciamo mai `rm -rf`.");
-                println!("Guarda cosa c'è dentro e decidi tu:");
+                println!("It was not removed because it is **not empty**: it holds something");
+                println!("we did not create, and we never `rm -rf` other people's things.");
+                println!("Look at what is inside and decide for yourself:");
                 println!();
                 println!("    sudo ls -la {}", home.display());
                 println!();
-                println!("Tutto ciò che l'installer aveva creato è stato rimosso.");
+                println!("Everything the installer had created has been removed.");
             }
         }
         println!("================================================================");
@@ -774,21 +772,21 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
 
     println!();
     println!(
-        "ATTENZIONE — {} step non ripuliti del tutto.",
+        "WARNING — {} steps were not fully cleaned up.",
         residue.len()
     );
-    println!("Il rollback è best-effort: prosegue anche quando un undo fallisce, ma");
-    println!("ciò che quell'undo non ha rimosso è ancora sul sistema. Da verificare");
-    println!("e rimuovere a mano:");
+    println!("The rollback is best-effort: it carries on when an undo fails, but");
+    println!("what that undo did not remove is still on the system. To check and");
+    println!("remove by hand:");
     for item in residue {
         match &item.outcome {
-            UndoOutcome::Failed(e) => println!("  - {}: undo fallito ({e})", item.name),
+            UndoOutcome::Failed(e) => println!("  - {}: undo failed ({e})", item.name),
             UndoOutcome::Unknown => println!(
-                "  - {}: step sconosciuto a questa versione dell'installer",
+                "  - {}: step unknown to this version of the installer",
                 item.name
             ),
             UndoOutcome::NotRehydrated(e) => println!(
-                "  - {}: snapshot illeggibile, undo saltato per sicurezza ({e})",
+                "  - {}: snapshot unreadable, undo skipped for safety ({e})",
                 item.name
             ),
             UndoOutcome::Undone => {}
@@ -796,7 +794,7 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
     }
     println!();
     println!(
-        "Il dettaglio completo è nel log ({}).",
+        "The full detail is in the log ({}).",
         invok::logging::DEFAULT_LOG_PATH
     );
     println!("================================================================");

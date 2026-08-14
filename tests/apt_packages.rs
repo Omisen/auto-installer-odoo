@@ -455,7 +455,7 @@ fn an_unusable_apt_index_is_diagnosed_as_such_not_as_a_missing_package() {
         "con l'indice inservibile il messaggio deve indicare 'apt-get update': {message}"
     );
     assert!(
-        !message.contains("non esistono su questa release"),
+        !message.contains("do not exist on this release"),
         "e NON deve dichiarare assenti pacchetti che non ha potuto verificare: {message}"
     );
 }
@@ -638,7 +638,7 @@ fn an_update_that_leaves_no_index_at_all_is_a_hard_error() {
         .expect_err("senza indice l'installazione non può procedere")
         .to_string();
     assert!(
-        message.contains("apt-get update") && message.contains("indice"),
+        message.contains("apt-get update") && message.contains("index"),
         "il messaggio deve spiegare cosa manca: {message}"
     );
     assert!(

@@ -95,15 +95,15 @@ impl CreateOdooUser {
         }
 
         Err(StepError::Precondition(format!(
-            "l'utente di sistema '{user}' esiste già, ma la sua home {home} appartiene a root \
-             e non è stata creata da questa installazione.\n\
+            "system user '{user}' already exists, but its home {home} belongs to root and \
+             was not created by this installation.\n\
              \n\
-             Così com'è, l'utente '{user}' non può scrivere nella propria home e \
-             l'installazione fallirebbe più avanti con un errore poco chiaro.\n\
+             as it stands, '{user}' cannot write in its own home and the installation would \
+             fail later with an unclear error.\n\
              \n\
-             Sistemala a mano scegliendo tu cosa è giusto per questa macchina:\n\
-               sudo chown -R {user}:{user} {home}     (se quella directory è destinata a Odoo)\n\
-             oppure rimuovila, se è un residuo, e rilancia l'installer.",
+             fix it by hand, choosing what is right for this machine:\n\
+               sudo chown -R {user}:{user} {home}     (if that directory is meant for Odoo)\n\
+             or remove it, if it is a leftover, and run the installer again.",
             user = ctx.odoo_user,
             home = ctx.odoo_home.display()
         )))
@@ -160,7 +160,7 @@ impl Step for CreateOdooUser {
             user = %user,
             prestate = ?self.snap.user_prestate,
             home_owner = ?self.snap.home_original_owner,
-            "snapshot create-odoo-user"
+            "snapshot: create-odoo-user"
         );
 
         self.refuse_unusable_home(ctx)?;
@@ -174,7 +174,7 @@ impl Step for CreateOdooUser {
         // pre-existing user: not ours. no `useradd`, and deliberately no
         // aggressive chown on a situation that is not ours either.
         if self.snap.user_prestate == PreState::Preexisting {
-            info!(user = %user, "run: utente già presente, skip creazione (nessun chown aggressivo)");
+            info!(user = %user, "run: user already present, skipping creation (no aggressive chown)");
             return Ok(());
         }
 
@@ -182,7 +182,7 @@ impl Step for CreateOdooUser {
             info!(
                 user = %user,
                 home = %home.display(),
-                "run (dry-run): creerei l'utente (useradd --system --create-home --user-group --shell /bin/false) e chown {user}:{user} 0750"
+                "run (dry run): would create the user (useradd --system --create-home --user-group --shell /bin/false) and chown {user}:{user} 0750"
             );
             return Ok(());
         }
@@ -201,27 +201,27 @@ impl Step for CreateOdooUser {
         self.ops.chmod(home, HOME_MODE)?;
 
         self.snap.user_prestate = PreState::CreatedByUs;
-        info!(user = %user, home = %home.display(), "run: utente creato, home owned {user}:{user} 0750");
+        info!(user = %user, home = %home.display(), "run: user created, home owned {user}:{user} 0750");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         // acts only on users we created. never touch a pre-existing one.
         if self.snap.user_prestate != PreState::CreatedByUs {
-            info!(prestate = ?self.snap.user_prestate, "undo NO-OP (utente non creato da noi)");
+            info!(prestate = ?self.snap.user_prestate, "undo NO-OP (user not created by us)");
             return Ok(());
         }
 
         let user = &ctx.odoo_user;
 
         if ctx.dry_run {
-            info!(user = %user, "undo (dry-run): userdel (senza -r) + groupdel + ripristino owner home");
+            info!(user = %user, "undo (dry run): userdel (without -r) + groupdel + restore of the home owner");
             return Ok(());
         }
 
         // `userdel` WITHOUT `-r`: the home is `PrepareOptRoot`'s to remove.
         if let Err(e) = self.ops.delete_user(user) {
-            warn!(user = %user, error = %e, "undo: userdel fallito, proseguo (best-effort)");
+            warn!(user = %user, error = %e, "undo: userdel failed, proceeding (best-effort)");
         }
 
         // the dedicated group, if it outlived the user. on some families
@@ -231,11 +231,11 @@ impl Step for CreateOdooUser {
             if group_already_gone(&e) {
                 info!(
                     group = %user,
-                    "undo: il gruppo non esiste più — l'ha già rimosso `userdel` insieme \
-                     all'utente. È il risultato voluto"
+                    "undo: the group is gone — `userdel` removed it with the user. that is \
+                     the intended outcome"
                 );
             } else {
-                warn!(group = %user, error = %e, "undo: groupdel fallito, proseguo (best-effort)");
+                warn!(group = %user, error = %e, "undo: groupdel failed, proceeding (best-effort)");
             }
         }
 
@@ -245,9 +245,9 @@ impl Step for CreateOdooUser {
         if let Some(original) = self.snap.home_original_owner {
             if self.ops.path_exists(&ctx.odoo_home) {
                 if let Err(e) = self.ops.chown_numeric(&ctx.odoo_home, original) {
-                    warn!(error = %e, "undo: ripristino owner home fallito, proseguo (best-effort)");
+                    warn!(error = %e, "undo: restoring the home owner failed, proceeding (best-effort)");
                 } else {
-                    info!(owner = ?original, "undo: owner originale della home ripristinato");
+                    info!(owner = ?original, "undo: the home's original owner was restored");
                 }
             }
         }

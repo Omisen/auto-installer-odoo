@@ -70,7 +70,7 @@ jobs:
       - name: Toolchain Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
@@ -88,17 +88,17 @@ jobs:
       #
       # it must NOT mask the fix: the stale-index case is covered by mock tests,
       # which do not depend on how the runner is tuned.
-      - name: Indice apt aggiornato (ambiente di test esplicito)
+      - name: Package index refreshed (explicit test environment)
         run: sudo apt-get update
 
-      - name: Stato iniziale della macchina
+      - name: Initial state of the machine
         run: |
           . /etc/os-release && echo "OS: $PRETTY_NAME"
-          echo "PostgreSQL preinstallato: $(dpkg -s postgresql >/dev/null 2>&1 && echo sì || echo no)"
-          echo "Servizio postgresql: $(systemctl is-active postgresql || true)"
-          echo "Porta 8069: $(ss -lnt 'sport = :8069' | tail -n +2 | wc -l) listener"
+          echo "PostgreSQL preinstalled: $(dpkg -s postgresql >/dev/null 2>&1 && echo yes || echo no)"
+          echo "postgresql service: $(systemctl is-active postgresql || true)"
+          echo "Port 8069: $(ss -lnt 'sport = :8069' | tail -n +2 | wc -l) listener(s)"
 
-      - name: Installazione reale + rollback verificato
+      - name: Real installation and verified rollback
         env:
           MODE: full
         run: bash scripts/ci/integration-test.sh
@@ -107,11 +107,11 @@ jobs:
       # depends on a directory the installer has yet to create, so it appears on
       # a **first** installation too — the case A-R5-2 left without a
       # post-mortem.
-      - name: Log dell'installer, se presente
+      - name: The installer's log, if any
         if: always()
         run: sudo cp /var/log/invok.log "installer-${{ matrix.os }}.log" || true
 
-      - name: Carica il log
+      - name: Upload the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -126,7 +126,7 @@ jobs:
   # testing the artifact we actually ship.
   # ---------------------------------------------------------------------------
   build-musl:
-    name: build statico (musl)
+    name: static build (musl)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -137,7 +137,7 @@ jobs:
       - name: musl toolchain
         run: sudo apt-get update && sudo apt-get install -y musl-tools
       - uses: Swatinem/rust-cache@v2
-      - name: Build release (musl, statico)
+      - name: Release build (musl, static)
         run: cargo build --release --target x86_64-unknown-linux-musl --locked
       - uses: actions/upload-artifact@v4
         with:
@@ -167,7 +167,7 @@ jobs:
   # clean.
   # ---------------------------------------------------------------------------
   container:
-    name: sonda portabilità (${{ matrix.image }})
+    name: portability probe (${{ matrix.image }})
     needs: build-musl
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -190,14 +190,14 @@ jobs:
       # the index refresh here dates from day one (nothing installs without it),
       # and it is why these jobs passed while the hosted ones failed: A5.1-bis
       # showed only where nobody refreshed the index before the installer.
-      - name: Prerequisiti del container
+      - name: Container prerequisites
         run: |
           set -eux
           apt-get update
           apt-get install -y --no-install-recommends \
             sudo git ca-certificates curl jq systemd procps
 
-      - name: Utente non-root con sudo (come su una macchina vera)
+      - name: A non-root user with sudo, as on a real machine
         run: |
           set -eux
           useradd -m -s /bin/bash tester
@@ -212,7 +212,7 @@ jobs:
           name: invok-musl
           path: bin
 
-      - name: Prepara il binario e i permessi
+      - name: Prepare the binary and the permissions
         run: |
           set -eux
           chmod +x bin/invok
@@ -221,17 +221,17 @@ jobs:
           # user and must be able to read the config and the scripts.
           chown -R tester:tester "$GITHUB_WORKSPACE"
 
-      - name: Sonda di portabilità (installazione reale + pulizia)
+      - name: Portability probe (real installation and cleanup)
         run: |
           su tester -c "cd '$GITHUB_WORKSPACE' && MODE=probe BIN=./bin/invok bash scripts/ci/integration-test.sh"
 
-      - name: Log dell'installer, se presente
+      - name: The installer's log, if any
         if: always()
         run: |
           tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
           cp /var/log/invok.log "installer-$tag.log" 2>/dev/null || true
 
-      - name: Carica il log
+      - name: Upload the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -316,7 +316,7 @@ jobs:
           name: invok-musl
           path: bin
 
-      - name: Immagine con systemd e i prerequisiti del test
+      - name: An image with systemd and the test's prerequisites
         run: |
           set -eux
           # a QUOTED heredoc: unquoted, bash would interpret the continuation
@@ -443,7 +443,7 @@ jobs:
           cat Dockerfile.ci
           docker build -t invok-fedora:ci -f Dockerfile.ci .
 
-      - name: Avvia il container con systemd come PID 1
+      - name: Start the container with systemd as PID 1
         run: |
           set -eux
           chmod +x bin/invok
@@ -459,23 +459,23 @@ jobs:
           # container some units do not start (and we do not need them), but the
           # service manager works — all the installer asks.
           for _ in $(seq 1 30); do
-            stato="$(docker exec fedora-test systemctl is-system-running 2>/dev/null || true)"
-            case "$stato" in running|degraded) break ;; esac
+            state="$(docker exec fedora-test systemctl is-system-running 2>/dev/null || true)"
+            case "$state" in running|degraded) break ;; esac
             sleep 2
           done
 
-          stato="$(docker exec fedora-test systemctl is-system-running 2>/dev/null || true)"
-          echo "systemd: ${stato:-non disponibile}"
-          case "$stato" in
+          state="$(docker exec fedora-test systemctl is-system-running 2>/dev/null || true)"
+          echo "systemd: ${state:-unavailable}"
+          case "$state" in
             running|degraded) ;;
             *)
-              echo "::error::systemd non è arrivato a regime nel container: senza PID 1 questo job proverebbe meno di quanto promette"
+              echo "::error::systemd did not settle in the container: without PID 1 this job would test less than it promises"
               docker logs fedora-test | tail -50
               exit 1
               ;;
           esac
 
-      - name: Utente non-root con sudo (come su una macchina vera)
+      - name: A non-root user with sudo, as on a real machine
         run: |
           set -eux
           docker exec fedora-test useradd -m -s /bin/bash tester
@@ -494,24 +494,24 @@ jobs:
       # was two steps away from the cause.
       #
       # when this fails, what is needed to understand it is printed.
-      - name: sudo funziona? (prerequisito, non l'oggetto del test)
+      - name: Does sudo work? (a prerequisite, not the test's subject)
         run: |
           if docker exec -u tester fedora-test sudo -n true; then
             echo "sudo: ok"
             exit 0
           fi
-          echo "::error::sudo non funziona per l'utente di test: l'installer non partirebbe nemmeno"
+          echo "::error::sudo does not work for the test user: the installer would not even start"
           docker exec fedora-test bash -c '
             echo "--- getent passwd tester ---"; getent passwd tester
-            echo "--- shadow (solo presenza) ---"; grep -c "^tester:" /etc/shadow
+            echo "--- shadow (presence only) ---"; grep -c "^tester:" /etc/shadow
             echo "--- sudoers.d ---"; ls -l /etc/sudoers.d/; cat /etc/sudoers.d/tester
             echo "--- pam.d/sudo ---"; cat /etc/pam.d/sudo
-            echo "--- system-auth (il sospetto n.1: symlink authselect) ---"
+            echo "--- system-auth (prime suspect: the profile symlink) ---"
             ls -l /etc/pam.d/system-auth 2>&1
             readlink -f /etc/pam.d/system-auth 2>&1
             cat /etc/pam.d/system-auth 2>&1 | head -20
             echo "--- faillock ---"; ls -ld /run/faillock 2>&1
-            echo "--- sudo setuid? (se manca, pam_unix non puo\x27 leggere shadow) ---"
+            echo "--- sudo setuid? (without it the module cannot read shadow) ---"
             ls -l /usr/bin/sudo 2>&1
             echo "--- nsswitch shadow/passwd ---"; grep -E "^(passwd|shadow):" /etc/nsswitch.conf 2>&1
             echo "--- sudo verbose ---"; su tester -c "sudo -n true" 2>&1 | tail -20
@@ -540,21 +540,21 @@ jobs:
       # querying a non-existent unit still exits zero (it prints the defaults), so
       # a failure here means **the bus** and not the unit — exactly what we want
       # to measure.
-      - name: Il bus di sistema risponde a un utente non privilegiato?
+      - name: Does the system bus answer an unprivileged user?
         run: |
           if docker exec -u tester fedora-test systemctl show -p Environment dbus.service >/dev/null 2>&1; then
-            echo "bus di sistema: ok"
+            echo "system bus: ok"
             exit 0
           fi
-          echo "::error::il bus di sistema D-Bus non risponde a un utente non privilegiato: postgresql-setup --initdb morirebbe con «no db datadir (PGDATA) found», che è la causa sbagliata"
+          echo "::error::the D-Bus system bus does not answer an unprivileged user: the cluster init would die with 'no db datadir (PGDATA) found', which is the wrong cause"
           docker exec fedora-test bash -c '
-            echo "--- socket del bus ---"; ls -l /run/dbus/ 2>&1
-            echo "--- unit del bus ---"
+            echo "--- the bus socket ---"; ls -l /run/dbus/ 2>&1
+            echo "--- the bus unit ---"
             systemctl is-enabled dbus.socket dbus-broker.service 2>&1
             systemctl is-active  dbus.socket dbus-broker.service 2>&1
             echo "--- status ---"; systemctl status dbus-broker.service --no-pager -l 2>&1 | head -30
             echo "--- journal ---"; journalctl -u dbus-broker.service -n 30 --no-pager 2>&1
-            echo "--- da root funziona? (se sì, è il bus e non systemd) ---"
+            echo "--- does it work as root? (if so it is the bus, not systemd) ---"
             systemctl show -p Environment dbus.service 2>&1
           ' || true
           exit 1
@@ -569,7 +569,7 @@ jobs:
       # the boundary reads the PERMANENT set, so the trap is set permanently and
       # reloaded: a runtime-only rule would vanish and the test would not ask
       # what production asks.
-      - name: Firewalld attivo, con 8080/tcp già aperta (trappola per A-V3-7)
+      - name: Firewall active, with 8080/tcp already open (the A-V3-7 trap)
         if: matrix.firewalld == 'yes'
         run: |
           set -eux
@@ -584,7 +584,7 @@ jobs:
           # scenario that silently skipped those checks would promise coverage it
           # does not have — exactly the defect R7 found in the CI.
           if ! docker exec fedora-test firewall-cmd --state; then
-            echo "::error::firewalld non è partito nel container: lo scenario nginx non eserciterebbe Firewalld, che è la sola ragione per cui esiste"
+            echo "::error::the firewall did not start in the container: the nginx scenario would not exercise it, which is the only reason it exists"
             docker exec fedora-test systemctl status firewalld --no-pager -l || true
             docker exec fedora-test journalctl -u firewalld -n 50 --no-pager || true
             exit 1
@@ -594,7 +594,7 @@ jobs:
           docker exec fedora-test firewall-cmd --reload
           docker exec fedora-test firewall-cmd --permanent --list-ports
 
-      - name: Installazione + rollback reali
+      - name: Real installation and rollback
         run: |
           docker exec -u tester -w /work fedora-test \
             env MODE=full BIN=./bin/invok \
@@ -602,13 +602,13 @@ jobs:
                 FW_REQUIRED='${{ matrix.fw_required }}' \
             bash scripts/ci/integration-test.sh
 
-      - name: Log dell'installer, se presente
+      - name: The installer's log, if any
         if: always()
         run: |
           tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
           docker cp "fedora-test:/var/log/invok.log" "installer-$tag.log" 2>/dev/null || true
 
-      - name: Carica il log
+      - name: Upload the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -616,7 +616,7 @@ jobs:
           path: installer-*.log
           if-no-files-found: ignore
 
-      - name: Ferma il container
+      - name: Stop the container
         if: always()
         run: docker rm -f fedora-test || true
 
@@ -637,7 +637,7 @@ jobs:
   # cost forty minutes to repeat the same assertions.
   # ---------------------------------------------------------------------------
   nginx:
-    name: install + rollback con Nginx (default site ${{ matrix.default_site }})
+    name: install + rollback with nginx (default site ${{ matrix.default_site }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     strategy:
@@ -659,20 +659,20 @@ jobs:
       - name: Toolchain Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
         run: cargo build --release --locked
 
-      - name: Indice apt aggiornato (ambiente di test esplicito)
+      - name: Package index refreshed (explicit test environment)
         run: sudo apt-get update
 
       # the default site must **really** be there: it is the third-party artifact
       # the rollback must restore (A-V3-5), and without it half the assertions
       # would have nothing to observe. nginx is preinstalled on the runners but
       # its configuration varies, so it is put into a known state.
-      - name: Nginx attivo con il default site (${{ matrix.default_site }})
+      - name: nginx active with the default site (${{ matrix.default_site }})
         run: |
           sudo apt-get install -y nginx
           sudo rm -f /etc/nginx/sites-enabled/default
@@ -687,7 +687,7 @@ jobs:
             # destroyed and the undo returned a symlink to the distro default.
             # the marker proves **that** file comes back.
             sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
-            printf '\n# marcatore-del-cliente-%s\n' "$GITHUB_RUN_ID" | sudo tee -a /etc/nginx/sites-enabled/default >/dev/null
+            printf '\n# customer-marker-%s\n' "$GITHUB_RUN_ID" | sudo tee -a /etc/nginx/sites-enabled/default >/dev/null
             sudo sha256sum /etc/nginx/sites-enabled/default | sudo tee /tmp/default-site.sha256
           fi
 
@@ -702,7 +702,7 @@ jobs:
       # comparison the port we want looked present because it is contained in
       # that one, so it never entered the delta and was never opened. the symptom
       # would have been "Odoo does not answer", not an error.
-      - name: ufw attivo, con la trappola 8080/tcp (A-V3-7)
+      - name: Firewall active, with the 8080/tcp trap (A-V3-7)
         run: |
           sudo apt-get install -y ufw
           # rules first, then enable: forcing it on sets default-deny inbound,
@@ -712,7 +712,7 @@ jobs:
           sudo ufw --force enable
           sudo ufw status verbose
 
-      - name: Installazione reale + rollback verificato (con Nginx)
+      - name: Real installation and verified rollback (with nginx)
         env:
           MODE: full
           ENV_FILE: configs/ci-nginx.env
@@ -725,24 +725,24 @@ jobs:
 
       # the customer's file must have come back **identical**, not "usually
       # right": the difference between restoring and replacing.
-      - name: Il default site regolare è tornato byte-per-byte
+      - name: The regular default site came back byte for byte
         if: matrix.default_site == 'regular-file'
         run: |
           sudo test -f /etc/nginx/sites-enabled/default \
-            || { echo "::error::il file del cliente non è tornato"; exit 1; }
+            || { echo "::error::the customer's file did not come back"; exit 1; }
           sudo test ! -L /etc/nginx/sites-enabled/default \
-            || { echo "::error::era un FILE, è tornato un symlink (A-V3-5)"; exit 1; }
+            || { echo "::error::it was a FILE and came back a symlink (A-V3-5)"; exit 1; }
           sudo sha256sum -c /tmp/default-site.sha256 \
-            || { echo "::error::il contenuto è cambiato: configurazione del cliente persa"; exit 1; }
-          sudo grep -q "marcatore-del-cliente" /etc/nginx/sites-enabled/default \
-            || { echo "::error::il marcatore è sparito: non è il file originale"; exit 1; }
-          echo "✔ il file del cliente è tornato identico"
+            || { echo "::error::the contents changed: the customer's configuration was lost"; exit 1; }
+          sudo grep -q "customer-marker" /etc/nginx/sites-enabled/default \
+            || { echo "::error::the marker is gone: this is not the original file"; exit 1; }
+          echo "✔ the customer's file came back identical"
 
-      - name: Log dell'installer, se presente
+      - name: The installer's log, if any
         if: always()
         run: sudo cp /var/log/invok.log "installer-nginx-${{ matrix.default_site }}.log" || true
 
-      - name: Carica il log
+      - name: Upload the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -766,7 +766,7 @@ jobs:
   #      user**, who is not ours.
   # ---------------------------------------------------------------------------
   preexisting-user:
-    name: utente odoo preesistente (ubuntu-24.04)
+    name: pre-existing odoo user (ubuntu-24.04)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -776,26 +776,26 @@ jobs:
       - name: Toolchain Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
         run: cargo build --release --locked
 
-      - name: Indice apt aggiornato (ambiente di test esplicito)
+      - name: Package index refreshed (explicit test environment)
         run: sudo apt-get update
 
-      - name: Utente 'odoo' già presente, senza home
+      - name: User 'odoo' already present, with no home
         run: |
           sudo useradd --system --home-dir /opt/odoo --shell /bin/false odoo
           id odoo
-          test ! -d /opt/odoo && echo "/opt/odoo non esiste: corretto per lo scenario 2"
+          test ! -d /opt/odoo && echo "/opt/odoo does not exist: correct for scenario 2"
 
       # scenario 1: the home is there, root-owned, and not ours. we do not chown
       # it, and the installation must stop BEFORE mutating, saying why. without
       # this precondition the error arrived three steps later as a permission
       # denial.
-      - name: Scenario 1 — home root-owned preesistente → rifiuto esplicito
+      - name: Scenario 1 — pre-existing root-owned home, an explicit refusal
         run: |
           sudo mkdir -p /opt/odoo
           set +e
@@ -804,10 +804,10 @@ jobs:
           set -e
           echo "exit code: $rc"; cat refuse.log
 
-          [ "$rc" -ne 0 ] || { echo "::error::l'installazione doveva essere rifiutata"; exit 1; }
-          grep -q "/opt/odoo" refuse.log || { echo "::error::il messaggio non nomina la home"; exit 1; }
-          grep -qi "root" refuse.log     || { echo "::error::il messaggio non dice di chi è la home"; exit 1; }
-          grep -q "chown"  refuse.log    || { echo "::error::il messaggio non dice cosa fare"; exit 1; }
+          [ "$rc" -ne 0 ] || { echo "::error::the installation should have been refused"; exit 1; }
+          grep -q "/opt/odoo" refuse.log || { echo "::error::the message does not name the home"; exit 1; }
+          grep -qi "root" refuse.log     || { echo "::error::the message does not say whose the home is"; exit 1; }
+          grep -q "chown"  refuse.log    || { echo "::error::the message does not say what to do"; exit 1; }
 
           # a precondition, not an undo: no artifact was created.
           #
@@ -816,18 +816,18 @@ jobs:
           # without mutating, the directory being pre-existing — and the engine
           # persisted that record. the file existing is correct; what counts is
           # that it describes nothing we created.
-          [ -z "$(sudo ls -A /opt/odoo)" ] || { echo "::error::ha mutato /opt/odoo prima di rifiutare"; exit 1; }
-          test ! -d /opt/odoo/odoo18 || { echo "::error::ha creato la install dir"; exit 1; }
+          [ -z "$(sudo ls -A /opt/odoo)" ] || { echo "::error::it mutated /opt/odoo before refusing"; exit 1; }
+          test ! -d /opt/odoo/odoo18 || { echo "::error::it created the install dir"; exit 1; }
           test ! -f /etc/systemd/system/odoo18.service || { echo "::error::ha installato l'unit"; exit 1; }
           if sudo test -f /var/lib/invok/state.json; then
             if sudo grep -q '"CreatedByUs"' /var/lib/invok/state.json; then
-              echo "::error::il manifesto registra artefatti creati da noi: la precondizione non ha fermato nulla"
+              echo "::error::the manifest records artifacts we created: the precondition stopped nothing"
               sudo cat /var/lib/invok/state.json
               exit 1
             fi
-            echo "  manifesto presente ma senza artefatti nostri: corretto"
+            echo "  manifest present but with no artifacts of ours: correct"
           fi
-          echo "✔ rifiutata prima di mutare, con un messaggio che dice cosa fare"
+          echo "✔ refused before mutating, with a message that says what to do"
 
           # the partial manifest is consumed with the intended command instead of
           # deleted by hand: otherwise scenario 2 would find it and start as a
@@ -836,12 +836,12 @@ jobs:
           sudo ./target/release/invok rollback --yes || true
           sudo rmdir /opt/odoo
           sudo test ! -e /var/lib/invok/state.json \
-            || { echo "::error::il manifesto parziale non è stato consumato"; exit 1; }
+            || { echo "::error::the partial manifest was not consumed"; exit 1; }
 
       # scenario 2: we create the home, and it must be handed over at once to
       # the already-existing user, or a later step dies creating a directory as
       # them.
-      - name: Scenario 2 — installazione, consegna della home, rollback
+      - name: Scenario 2 — installation, home handover, rollback
         env:
           MODE: full
         run: bash scripts/ci/integration-test.sh
@@ -849,17 +849,17 @@ jobs:
       # A-V3-4's specific check lives here and not in the script: the script
       # checks the final state, this checks that the pre-existing user survived a
       # rollback that removed everything else.
-      - name: L'utente preesistente è sopravvissuto
+      - name: The pre-existing user survived
         run: |
-          id odoo || { echo "::error::il rollback ha rimosso un utente che non aveva creato"; exit 1; }
-          test ! -d /opt/odoo || { echo "::error::/opt/odoo doveva sparire: l'avevamo creata noi"; exit 1; }
-          echo "✔ utente preesistente intatto, home creata da noi rimossa"
+          id odoo || { echo "::error::the rollback removed a user it had not created"; exit 1; }
+          test ! -d /opt/odoo || { echo "::error::/opt/odoo should have gone: we created it"; exit 1; }
+          echo "✔ the pre-existing user is intact, the home we created was removed"
 
-      - name: Log dell'installer, se presente
+      - name: The installer's log, if any
         if: always()
         run: sudo cp /var/log/invok.log installer-preexisting-user.log || true
 
-      - name: Carica il log
+      - name: Upload the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -881,7 +881,7 @@ jobs:
   # different point every round.
   # ---------------------------------------------------------------------------
   interrupt:
-    name: Ctrl-C a metà installazione (ubuntu-24.04)
+    name: Ctrl-C halfway through an installation (ubuntu-24.04)
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
@@ -891,31 +891,31 @@ jobs:
       - name: Toolchain Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Cache di cargo
+      - name: cargo cache
         uses: Swatinem/rust-cache@v2
 
       - name: Build release
         run: cargo build --release --locked
 
-      - name: Indice apt aggiornato (ambiente di test esplicito)
+      - name: Package index refreshed (explicit test environment)
         run: sudo apt-get update
 
-      - name: Installazione, interrotta appena il database esiste
+      - name: Installation, interrupted as soon as the database exists
         run: |
           set -x
           sudo ./target/release/invok --config configs/ci.env > install.log 2>&1 &
           shell_pid=$!
 
           # it waits for a REAL artifact in the manifest, not for a duration.
-          manifesto=/var/lib/invok/state.json
+          manifest=/var/lib/invok/state.json
           for _ in $(seq 1 240); do
-            if sudo test -f "$manifesto" && \
-               sudo grep -q '"create-database"' "$manifesto"; then
-              echo "database creato: interrompo"
+            if sudo test -f "$manifest" && \
+               sudo grep -q '"create-database"' "$manifest"; then
+              echo "database created: interrupting"
               break
             fi
             if ! kill -0 "$shell_pid" 2>/dev/null; then
-              echo "::error::l'installazione è terminata prima di poterla interrompere"
+              echo "::error::the installation finished before it could be interrupted"
               cat install.log; exit 1
             fi
             sleep 2
@@ -933,7 +933,7 @@ jobs:
           # terminal the problem does not arise: Ctrl-C is delivered to the process
           # group once, and sudo without a pty does not forward it.
           sudo pkill -INT -x invok \
-            || { echo "::error::nessun processo invok da interrompere"; ps -ef | grep -i odoo; exit 1; }
+            || { echo "::error::no invok process to interrupt"; ps -ef | grep -i odoo; exit 1; }
 
           # it is given time to undo: the rollback drops the database, purges
           # packages, removes files. not instantaneous, and rightly so. we wait
@@ -943,7 +943,7 @@ jobs:
             sleep 2
           done
           if pgrep -x invok >/dev/null 2>&1; then
-            echo "::error::l'installer non è terminato dopo l'interruzione"
+            echo "::error::the installer did not exit after the interruption"
             sudo pkill -KILL -x invok || true
             cat install.log; exit 1
           fi
@@ -951,55 +951,55 @@ jobs:
           # product's problem but it would leave the job waiting.
           wait "$shell_pid" 2>/dev/null || true
 
-          echo "--- ultime righe del log ---"; tail -n 40 install.log
+          echo "--- the log's last lines ---"; tail -n 40 install.log
 
       # the real proof: the signal did not kill the process and the installer
       # undid its own work. had the rollback not started, the artifacts would all
       # still be here.
-      - name: Il sistema è tornato pulito da solo
+      - name: The system cleaned itself up
         run: |
           # the whole log BEFORE judging: an assertion that fails without showing
           # the evidence forces the next reader to guess.
           echo "::group::install.log"; cat install.log; echo "::endgroup::"
 
-          if ! grep -qi "interrot" install.log; then
-            echo "::error::nessuna traccia dell'interruzione nel log (vedi sopra): il processo è stato ucciso prima di annullare, o non ha mai ricevuto il segnale"
+          if ! grep -qi "interrupt" install.log; then
+            echo "::error::no trace of the interruption in the log (see above): the process was killed before undoing, or never received the signal"
             exit 1
           fi
 
-          fallito=0
+          failed=0
           check() { # description, then a command that must FAIL
             if eval "$2" >/dev/null 2>&1; then
-              echo "::error::$1"; fallito=1
+              echo "::error::$1"; failed=1
             else
               echo "  ✔ $1"
             fi
           }
-          check "l'utente odoo non è rimasto"        "id odoo"
-          check "/opt/odoo non è rimasta"            "test -d /opt/odoo"
-          check "l'unit systemd non è rimasta"       "test -f /etc/systemd/system/odoo18.service"
+          check "the odoo user is gone"              "id odoo"
+          check "/opt/odoo is gone"                  "test -d /opt/odoo"
+          check "the systemd unit is gone"           "test -f /etc/systemd/system/odoo18.service"
 
           # the database is checked ONLY if PostgreSQL answers. if the rollback
           # stopped it again — because we had started it — a failing query does
           # not prove the database is gone: it proves we cannot know. saying so
           # beats a tick that looked at nothing.
           if sudo -u postgres psql -tAc 'select 1' >/dev/null 2>&1; then
-            check "il database citest non è rimasto" \
+            check "the citest database is gone" \
               "sudo -u postgres psql -tAc \"select 1 from pg_database where datname='citest'\" | grep -q 1"
-            check "il ruolo odoo non è rimasto" \
+            check "the odoo role is gone" \
               "sudo -u postgres psql -tAc \"select 1 from pg_roles where rolname='odoo'\" | grep -q 1"
           else
-            echo "  · PostgreSQL non raggiungibile (rifermato dal rollback): verifiche su DB/ruolo non eseguite"
+            echo "  · PostgreSQL unreachable (stopped again by the rollback): the DB and role checks did not run"
           fi
 
-          [ "$fallito" -eq 0 ] || exit 1
-          echo "✔ un Ctrl-C reale ha prodotto un sistema pulito, senza intervento manuale"
+          [ "$failed" -eq 0 ] || exit 1
+          echo "✔ a real Ctrl-C produced a clean system, with no manual intervention"
 
-      - name: Log dell'installer, se presente
+      - name: The installer's log, if any
         if: always()
         run: sudo cp /var/log/invok.log installer-interrupt.log || true
 
-      - name: Carica il log
+      - name: Upload the log
         if: always()
         uses: actions/upload-artifact@v4
         with:

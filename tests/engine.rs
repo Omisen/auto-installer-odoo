@@ -212,7 +212,7 @@ fn an_interrupt_rolls_back_what_was_already_done() {
         .execute(&mut steps, &ctx)
         .expect_err("un'interruzione deve fermare l'esecuzione");
     assert!(
-        err.to_string().contains("interrotta"),
+        err.to_string().contains("interrupted"),
         "il messaggio deve dire cosa è successo: {err}"
     );
 

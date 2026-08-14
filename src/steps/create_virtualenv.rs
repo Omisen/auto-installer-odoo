@@ -47,13 +47,13 @@ impl CreateVirtualenv {
 pub fn missing_ensurepip_hint(family: OsFamily) -> &'static str {
     match family {
         OsFamily::Debian => {
-            "su Debian/Ubuntu arriva col pacchetto python3-venv (o la sua variante \
-             versionata, es. python3.12-venv)"
+            "on Debian/Ubuntu it comes with the python3-venv package (or its versioned \
+             variant, such as python3.12-venv)"
         }
         OsFamily::Fedora => {
-            "su Fedora non esiste un pacchetto python3-venv: ensurepip sta in \
-             python3-libs, che dovrebbe essere già presente. Se manca, l'installazione \
-             di Python è incompleta o è stato usato un python3 non di sistema"
+            "on Fedora there is no python3-venv package: ensurepip lives in python3-libs, \
+             which should already be there. if it is missing, the Python installation is \
+             incomplete or a non-system python3 was used"
         }
     }
 }
@@ -76,13 +76,13 @@ impl Step for CreateVirtualenv {
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate == PreState::Preexisting {
-            info!("run: virtualenv già presente, skip");
+            info!("run: virtualenv already present, skipping");
             return Ok(());
         }
         if ctx.dry_run {
             info!(
                 python = %ctx.python.command,
-                "run (dry-run): <python> -m venv <install_dir>/sandbox"
+                "run (dry run): <python> -m venv <install_dir>/sandbox"
             );
             return Ok(());
         }
@@ -99,9 +99,9 @@ impl Step for CreateVirtualenv {
         let python = &ctx.python.command;
         if !self.ops.python_venv_available(python) {
             return Err(StepError::Precondition(format!(
-                "impossibile creare un virtualenv con `{python}`: manca il modulo 'ensurepip'. {}. \
-                 Lo step install-system-dependencies dovrebbe averlo reso disponibile: \
-                 controlla il suo esito nel log",
+                "cannot create a virtualenv with `{python}`: the 'ensurepip' module is missing. \
+                 {}. the install-system-dependencies step should have made it available: check \
+                 its outcome in the log",
                 missing_ensurepip_hint(ctx.os_family)
             )));
         }
@@ -109,23 +109,23 @@ impl Step for CreateVirtualenv {
         let venv = Self::venv_dir(ctx);
         self.ops.create_venv(&ctx.odoo_user, python, &venv)?;
         self.prestate = PreState::CreatedByUs;
-        info!(venv = %venv.display(), python = %python, "run: virtualenv creato");
+        info!(venv = %venv.display(), python = %python, "run: virtualenv created");
         Ok(())
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate != PreState::CreatedByUs {
-            info!(prestate = ?self.prestate, "undo NO-OP (venv non creato da noi)");
+            info!(prestate = ?self.prestate, "undo NO-OP (venv not created by us)");
             return Ok(());
         }
         if ctx.dry_run {
-            info!("undo (dry-run): rm -rf del virtualenv");
+            info!("undo (dry run): rm -rf of the virtualenv");
             return Ok(());
         }
         // removing the venv removes every pip package inside it.
         let venv = Self::venv_dir(ctx);
         if let Err(e) = self.ops.remove_dir_all(&venv) {
-            warn!(error = %e, "undo: rm -rf virtualenv fallito, proseguo (best-effort)");
+            warn!(error = %e, "undo: rm -rf of the virtualenv failed, proceeding (best-effort)");
         }
         Ok(())
     }

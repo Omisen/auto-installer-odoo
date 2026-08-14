@@ -32,38 +32,38 @@ const DEFAULT_ADMIN_PASSWD: &str = "admin";
 /// a configuration resolution or validation error.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
-    #[error("versione Odoo non valida: '{0}'. Valori ammessi: 16|17|18|19 oppure 16.0..19.0")]
+    #[error("invalid Odoo version: '{0}'. accepted values: 16|17|18|19 or 16.0..19.0")]
     InvalidVersion(String),
 
     #[error(
-        "{field} non valido: '{value}'. Usa solo lettere, numeri, punto, trattino o underscore, \
-         e comincia con una lettera, una cifra o un underscore (un nome che inizia con '-' \
-         verrebbe scambiato per un'opzione dai comandi di sistema)"
+        "invalid {field}: '{value}'. use letters, digits, dot, dash or underscore only, and \
+         start with a letter, a digit or an underscore (a name starting with '-' would be \
+         taken for an option by the system commands)"
     )]
     InvalidIdentifier { field: &'static str, value: String },
 
-    #[error("porta Odoo non valida: '{0}'. Inserisci un numero tra 1 e 65535")]
+    #[error("invalid Odoo port: '{0}'. enter a number between 1 and 65535")]
     InvalidPort(String),
 
-    #[error("install dir non valida: '{0}'. Inserisci un percorso assoluto")]
+    #[error("invalid install dir: '{0}'. enter an absolute path")]
     InstallDirNotAbsolute(PathBuf),
 
-    #[error("install dir non valida: '{0}'. Deve essere sotto '{1}'")]
+    #[error("invalid install dir: '{0}'. it must live under '{1}'")]
     InstallDirOutOfScope(PathBuf, String),
 
-    #[error("la password admin Odoo non può essere vuota")]
+    #[error("the Odoo admin password cannot be empty")]
     EmptyPassword,
 
     #[error(
-        "admin_passwd='admin' richiede una conferma esplicita interattiva. \
-         Imposta una password diversa oppure riesegui in modalità interattiva"
+        "admin_passwd='admin' requires an explicit interactive confirmation. \
+         set a different password, or run again in interactive mode"
     )]
     InsecureAdminNonInteractive,
 
-    #[error("config file non trovato: {0}")]
+    #[error("config file not found: {0}")]
     ConfigFileNotFound(PathBuf),
 
-    #[error("errore di lettura del config file '{path}': {source}")]
+    #[error("cannot read the config file '{path}': {source}")]
     ConfigFileRead {
         path: PathBuf,
         #[source]
@@ -160,7 +160,7 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
         let line = line.strip_prefix("export ").map(str::trim).unwrap_or(line);
 
         let Some((key, value)) = line.split_once('=') else {
-            warn!(line = lineno + 1, "riga .env ignorata (manca '=')");
+            warn!(line = lineno + 1, "skipped .env line (no '=')");
             continue;
         };
 
@@ -184,8 +184,8 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
             "NGINX_OPEN_HTTPS_PORT" | "NGINX_ENABLE_SSL" => {
                 raw.open_https_port = Some(parse_bool(&value))
             }
-            "ODOO_HOME" => warn!("ODOO_HOME è una costante fissa, chiave .env ignorata"),
-            other => warn!(key = other, "chiave .env sconosciuta ignorata"),
+            "ODOO_HOME" => warn!("ODOO_HOME is a fixed constant, .env key ignored"),
+            other => warn!(key = other, "unknown .env key ignored"),
         }
     }
 
@@ -388,11 +388,11 @@ impl ResolvedConfig {
 
         let odoo_user_raw = pick(&cli.odoo_user, &prompted.odoo_user, &env.odoo_user)
             .unwrap_or_else(|| DEFAULT_ODOO_USER.to_string());
-        let odoo_user = validate_identifier(&odoo_user_raw, "utente Odoo")?;
+        let odoo_user = validate_identifier(&odoo_user_raw, "Odoo user")?;
 
         let db_name_raw = pick(&cli.db_name, &prompted.db_name, &env.db_name)
             .unwrap_or_else(|| DEFAULT_DB_NAME.to_string());
-        let db_name = validate_identifier(&db_name_raw, "nome database")?;
+        let db_name = validate_identifier(&db_name_raw, "database name")?;
 
         let port_raw =
             pick(&cli.port, &prompted.port, &env.port).unwrap_or_else(|| DEFAULT_PORT.to_string());
@@ -468,7 +468,7 @@ fn resolve_db_user(
             if !explicit_from_cli && value == DEFAULT_ODOO_USER {
                 Ok(odoo_user.to_string())
             } else {
-                validate_identifier(value, "utente database")
+                validate_identifier(value, "database user")
             }
         }
     }

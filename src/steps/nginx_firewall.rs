@@ -47,13 +47,13 @@ impl NginxFirewall {
         let firewall = distro.firewall();
         // the name comes from the tool, not a constant: naming the wrong one
         // sends the reader looking for something their machine does not have.
-        let nome = firewall.name();
+        let name = firewall.name();
         if !firewall.available() {
-            warn!("{nome} non trovato: apertura firewall saltata (apri manualmente 80/443)");
+            warn!("{name} not found: skipping the firewall opening (open 80/443 by hand)");
             return false;
         }
         if !firewall.is_active() {
-            warn!("{nome} presente ma non attivo: apertura firewall saltata");
+            warn!("{name} present but not active: skipping the firewall opening");
             return false;
         }
         true
@@ -76,17 +76,17 @@ impl Step for NginxFirewall {
                 self.snap.delta.push(rule.to_string());
             }
         }
-        info!(delta = ?self.snap.delta, "snapshot nginx-firewall");
+        info!(delta = ?self.snap.delta, "snapshot: nginx-firewall");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if !ctx.with_nginx {
-            info!("nginx non richiesto, skip nginx-firewall");
+            info!("nginx not requested, skipping nginx-firewall");
             return Ok(());
         }
         if ctx.dry_run {
-            info!(delta = ?self.snap.delta, "run (dry-run): aprirei le regole del delta");
+            info!(delta = ?self.snap.delta, "run (dry run): would open the delta's rules");
             return Ok(());
         }
         for rule in &self.snap.delta {
@@ -97,13 +97,13 @@ impl Step for NginxFirewall {
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
-            info!("undo (dry-run): rimuoverei solo le regole del delta");
+            info!("undo (dry run): would remove the delta's rules only");
             return Ok(());
         }
         // remove ONLY the delta: never a pre-existing rule of the customer's.
         for rule in &self.snap.delta {
             if let Err(e) = self.ops.distro().firewall().delete(rule) {
-                warn!(rule = %rule, error = %e, "undo: rimozione regola ufw fallita, proseguo (best-effort)");
+                warn!(rule = %rule, error = %e, "undo: removing the firewall rule failed, proceeding (best-effort)");
             }
         }
         Ok(())

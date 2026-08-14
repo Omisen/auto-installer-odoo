@@ -1,58 +1,58 @@
 # Security Policy
 
-## Versioni supportate
+## Supported versions
 
-Questo progetto viene mantenuto su base rolling. Le correzioni di sicurezza vengono applicate al ramo predefinito del repository.
+This project is maintained on a rolling basis. Security fixes are applied to the repository's default branch.
 
-| Versione | Supportata |
+| Version | Supported |
 | --- | --- |
-| Branch predefinito corrente | Si |
-| Snapshot o fork non allineati | No |
-| Versioni modificate localmente | No |
+| Current default branch | Yes |
+| Snapshots or forks that have diverged | No |
+| Locally modified versions | No |
 
-## Ambito
+## Scope
 
-Segnalazioni di sicurezza pertinenti per questo repository includono, ad esempio:
+Security reports relevant to this repository include, for example:
 
-- gestione non sicura di credenziali o segreti nei file `.env`, template o log;
-- permessi errati su file di configurazione, service file o directory create dall'installer;
-- injection tramite input CLI o variabili di configurazione;
-- configurazioni generate che espongono Odoo, PostgreSQL o Nginx in modo non previsto;
-- uso non sicuro di `sudo`, systemd, shell expansion o file temporanei.
+- unsafe handling of credentials or secrets in `.env` files, templates or logs;
+- wrong permissions on configuration files, service files or directories the installer creates;
+- injection through CLI input or configuration variables;
+- generated configurations that expose Odoo, PostgreSQL or Nginx in unintended ways;
+- unsafe use of `sudo`, systemd, shell expansion or temporary files.
 
-## Come segnalare una vulnerabilita
+## How to report a vulnerability
 
-Non aprire issue pubbliche con dettagli sensibili, proof of concept o credenziali reali.
+Do not open public issues containing sensitive details, proofs of concept or real credentials.
 
-Se il repository ha il tab Security abilitato, usa `Report a vulnerability` su GitHub per inviare una segnalazione privata.
+If the repository has the Security tab enabled, use `Report a vulnerability` on GitHub to send a private report.
 
-Se la reportistica privata non e disponibile, contatta il maintainer con un canale non pubblico e condividi solo le informazioni strettamente necessarie per la riproduzione.
+If private reporting is unavailable, contact the maintainer over a non-public channel and share only the information strictly needed to reproduce the issue.
 
-## Cosa includere nella segnalazione
+## What to include in a report
 
-Per velocizzare l'analisi, includi:
+To speed up the analysis, include:
 
-- descrizione del problema e impatto atteso;
-- passaggi minimi per riprodurlo;
-- versione del sistema operativo e versione di Odoo installata;
-- file o modulo coinvolto, se noto;
-- eventuali mitigazioni temporanee gia verificate.
+- a description of the problem and its expected impact;
+- the minimum steps to reproduce it;
+- the operating system version and the installed Odoo version;
+- the file or module involved, if known;
+- any temporary mitigations you have already verified.
 
-## Processo di gestione
+## Handling process
 
-L'obiettivo e:
+The goal is to:
 
-1. confermare la ricezione della segnalazione;
-2. riprodurre e classificare il problema;
-3. preparare una correzione o mitigazione;
-4. coordinare la disclosure una volta disponibile il fix.
+1. acknowledge receipt of the report;
+2. reproduce and classify the problem;
+3. prepare a fix or a mitigation;
+4. coordinate disclosure once the fix is available.
 
-I tempi effettivi dipendono dalla complessita del problema e dalla disponibilita del maintainer.
+Actual timelines depend on the complexity of the problem and on the maintainer's availability.
 
-## Buone pratiche per chi usa l'installer
+## Good practice for whoever uses the installer
 
-- usa password forti e non lasciare i default in ambienti di produzione;
-- proteggi i file `.env` e i file generati contenenti segreti; il file `.env` viene **parsato in modo dichiarativo** (`KEY=VALUE`, nessuna esecuzione di codice), quindi non è un vettore di code-execution;
-- esegui l'installer solo su host fidati e aggiornati;
-- limita l'esposizione di porte e servizi con firewall e reverse proxy correttamente configurati;
-- verifica sempre i permessi finali di configurazioni, log e unit systemd.
+- use strong passwords and do not leave the defaults in production environments;
+- protect the `.env` files and the generated files containing secrets; the `.env` file is **parsed declaratively** (`KEY=VALUE`, no code execution), so it is not a code-execution vector;
+- run the installer only on trusted, up-to-date hosts;
+- limit the exposure of ports and services with a correctly configured firewall and reverse proxy;
+- always check the final permissions of the configurations, the logs and the systemd unit.

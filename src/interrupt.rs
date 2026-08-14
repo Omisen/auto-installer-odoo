@@ -66,14 +66,14 @@ pub fn install() -> Arc<AtomicBool> {
         if let Err(e) =
             signal_hook::flag::register_conditional_shutdown(signal, EXIT_SIGINT, Arc::clone(&flag))
         {
-            warn!(signal, error = %e, "impossibile registrare l'uscita al secondo segnale");
+            warn!(signal, error = %e, "cannot register the exit on a second signal");
         }
         if let Err(e) = signal_hook::flag::register(signal, Arc::clone(&flag)) {
             warn!(
                 signal,
                 error = %e,
-                "impossibile gestire questo segnale: un'interruzione ucciderà il processo \
-                 senza annullare nulla (usa `invok rollback` per ripulire)"
+                "cannot handle this signal: an interruption will kill the process without \
+                 undoing anything (use `invok rollback` to clean up)"
             );
         }
     }
@@ -89,10 +89,11 @@ pub fn install() -> Arc<AtomicBool> {
 /// pressed Ctrl-C wants to know.
 pub fn interrupted_error() -> StepError {
     StepError::Precondition(
-        "installazione interrotta su richiesta (Ctrl-C o segnale di terminazione).\n\
-         Gli step già eseguiti vengono annullati: al termine il sistema sarà come prima.\n\
-         Un secondo Ctrl-C esce subito — in quel caso il sistema resta a metà e si \
-         ripulisce con `sudo invok rollback`."
+        "installation interrupted on request (Ctrl-C or a termination signal).\n\
+         the steps already run are being undone: when that finishes the system will be as \
+         it was.\n\
+         a second Ctrl-C exits at once — the system then stays half-done and is cleaned up \
+         with `sudo invok rollback`."
             .to_string(),
     )
 }

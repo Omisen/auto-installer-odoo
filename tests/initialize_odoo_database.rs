@@ -49,7 +49,7 @@ fn hard_stop_on_preexisting_db_never_inits() {
     // or the user is stuck without understanding why.
     let msg = result.expect_err("errore").to_string();
     assert!(
-        msg.contains("residuo"),
+        msg.contains("leftover"),
         "il messaggio deve offrire la diagnosi 'residuo di run precedente': {msg}"
     );
     assert!(

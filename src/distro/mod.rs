@@ -292,9 +292,9 @@ pub fn family_mismatch(recorded: OsFamily, detected: Option<OsFamily>) -> Option
         return None;
     }
     Some(format!(
-        "il manifesto è stato scritto da un'installazione su '{recorded}', ma questo sistema \
-         è '{detected}'. Procedo con '{recorded}', che è ciò che il manifesto registra: gli \
-         artefatti da rimuovere sono i suoi, non quelli che questa macchina suggerirebbe. \
-         Se i comandi di rimozione falliscono, il report elencherà cosa è rimasto."
+        "the manifest was written by an installation on '{recorded}', but this system is \
+         '{detected}'. proceeding with '{recorded}', which is what the manifest records: the \
+         artifacts to remove are its own, not the ones this machine would suggest. if the \
+         removal commands fail, the report will list what is left."
     ))
 }

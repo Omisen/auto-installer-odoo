@@ -38,50 +38,54 @@ pub struct OsInfo {
 /// a precondition error. checks have no `undo`, because they do not mutate.
 #[derive(Debug, thiserror::Error)]
 pub enum CheckError {
-    #[error("questo installer deve essere eseguito come root (EUID atteso 0, trovato {euid}). Riprova con: sudo ...")]
+    #[error(
+        "this installer must be run as root (expected EUID 0, found {euid}). retry with: sudo ..."
+    )]
     NotRoot { euid: u32 },
 
     #[error(
-        "esegui via sudo da un utente normale (SUDO_USER assente). \
-         Non usare 'sudo -i', 'su -' o login diretto come root"
+        "run it through sudo from a normal user (SUDO_USER is unset). \
+         do not use 'sudo -i', 'su -' or a direct root login"
     )]
     NoSudoUser,
 
-    #[error("file OS release non trovato: {0}. Sistema operativo non riconoscibile")]
+    #[error("OS release file not found: {0}. the operating system cannot be identified")]
     OsReleaseNotFound(PathBuf),
 
-    #[error("impossibile determinare l'OS da {path}: {reason}")]
+    #[error("cannot determine the OS from {path}: {reason}")]
     OsReleaseParse { path: PathBuf, reason: String },
 
     #[error(
-        "sistema operativo '{id}' non supportato. \
-         Supportati: Ubuntu >= 22.04, Debian >= 11, Fedora >= 40"
+        "unsupported operating system '{id}'. \
+         supported: Ubuntu >= 22.04, Debian >= 11, Fedora >= 40"
     )]
     UnsupportedOs { id: String },
 
     #[error(
-        "{id} {version} non supportato. \
-         Versione minima: Ubuntu 22.04, Debian 11, Fedora 40"
+        "unsupported operating system: {id} {version}. \
+         minimum version: Ubuntu 22.04, Debian 11, Fedora 40"
     )]
     UnsupportedVersion { id: String, version: String },
 
-    #[error("spazio insufficiente su {target}: disponibili {available_gb} GB, richiesti {required_gb} GB")]
+    #[error(
+        "not enough space on {target}: {available_gb} GB available, {required_gb} GB required"
+    )]
     InsufficientDisk {
         target: PathBuf,
         available_gb: u64,
         required_gb: u64,
     },
 
-    #[error("impossibile misurare lo spazio disco su {path}: {reason}")]
+    #[error("cannot measure the disk space on {path}: {reason}")]
     DiskProbe { path: PathBuf, reason: String },
 
-    #[error("porta {port} già in uso: liberala prima di procedere")]
+    #[error("port {port} already in use: free it before proceeding")]
     PortInUse { port: u16 },
 
     #[error(
-        "comando di sistema obbligatorio mancante: {command}. \
-         Serve un sistema con systemd e il gestore di pacchetti della sua famiglia \
-         (apt-get su Debian/Ubuntu, dnf su Fedora)"
+        "a mandatory system command is missing: {command}. \
+         this needs a system with systemd and its family's package manager \
+         (apt-get on Debian/Ubuntu, dnf on Fedora)"
     )]
     MissingCommand { command: String },
 }
@@ -113,7 +117,7 @@ pub fn running_as_root() -> bool {
 pub fn check_root() -> Result<(), CheckError> {
     let euid = nix::unistd::geteuid().as_raw();
     ensure_root_euid(euid)?;
-    info!("✔ esecuzione come root confermata");
+    info!("✔ running as root confirmed");
     Ok(())
 }
 
@@ -133,7 +137,7 @@ pub fn ensure_sudo_user(value: Option<&str>) -> Result<(), CheckError> {
 pub fn check_sudo_user() -> Result<(), CheckError> {
     let value = std::env::var("SUDO_USER").ok();
     ensure_sudo_user(value.as_deref())?;
-    info!(sudo_user = ?value, "✔ esecuzione via sudo confermata");
+    info!(sudo_user = ?value, "✔ running through sudo confirmed");
     Ok(())
 }
 
@@ -203,12 +207,12 @@ pub fn check_os_from(path: &Path) -> Result<OsInfo, CheckError> {
         .map(|s| s.to_ascii_lowercase())
         .ok_or_else(|| CheckError::OsReleaseParse {
             path: path.to_path_buf(),
-            reason: "chiave ID assente".to_string(),
+            reason: "the ID key is missing".to_string(),
         })?;
     let version =
         os_release_value(&content, "VERSION_ID").ok_or_else(|| CheckError::OsReleaseParse {
             path: path.to_path_buf(),
-            reason: "chiave VERSION_ID assente".to_string(),
+            reason: "the VERSION_ID key is missing".to_string(),
         })?;
     let codename = os_release_value(&content, "VERSION_CODENAME");
 
@@ -306,8 +310,8 @@ pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
 /// say it, so there is no case where one function says "yes" and the other has
 /// nothing to name.
 fn release_to_flag(id: &str, version: &str) -> Option<(&'static str, (u32, u32))> {
-    let (nome, provata) = tested_release(id)?;
-    (parse_version(version) > provata).then_some((nome, provata))
+    let (name, tested) = tested_release(id)?;
+    (parse_version(version) > tested).then_some((name, tested))
 }
 
 /// the warning text, or `None` when there is nothing to report.
@@ -321,13 +325,13 @@ fn release_to_flag(id: &str, version: &str) -> Option<(&'static str, (u32, u32))
 /// than logging it: when a check's value is in its wording, asserting its
 /// outcome asserts nothing (A-R9-1).
 pub fn untested_release_warning(id: &str, version: &str) -> Option<String> {
-    let (nome, provata) = release_to_flag(id, version)?;
+    let (name, tested) = release_to_flag(id, version)?;
     Some(format!(
-        "questa release è più recente di {nome} {}, l'ultima su cui l'installer viene \
-         provato: l'installazione prosegue, ma nomi di pacchetti e pacchetto wkhtmltopdf \
-         potrebbero non essere quelli giusti. Se qualcosa non torna, è il primo posto \
-         dove guardare.",
-        format_release(provata)
+        "this release is newer than {name} {}, the latest one the installer is tested on: \
+         the installation carries on, but the package names and the wkhtmltopdf package may \
+         not be the right ones. if something does not add up, this is the first place to \
+         look.",
+        format_release(tested)
     ))
 }
 
@@ -392,15 +396,14 @@ pub fn format_python((major, minor): (u32, u32)) -> String {
 /// a warning and **not** a refusal (A5.1-bis): the day Odoo raises the pin, a
 /// refusal would block a working installation.
 pub fn untested_python_warning(python: (u32, u32)) -> Option<String> {
-    let provato = python_to_flag(python)?;
+    let tested = python_to_flag(python)?;
     Some(format!(
-        "questo sistema ha Python {}, più recente di Python {} — l'ultimo su cui l'installer \
-         porta a termine un'installazione. Odoo pinna gevent e greenlet per versione di \
-         interprete: se per questo Python non ha un pin, non esiste una wheel pronta, pip deve \
-         compilare e lo step `install-python-requirements` fallisce. È il primo posto dove \
-         guardare.",
+        "this system has Python {}, newer than Python {} — the latest one the installer \
+         completes an installation on. Odoo pins gevent and greenlet per interpreter version: \
+         with no pin for this Python there is no prebuilt wheel, pip has to compile, and the \
+         `install-python-requirements` step fails. this is the first place to look.",
         format_python(python),
-        format_python(provato)
+        format_python(tested)
     ))
 }
 
@@ -538,29 +541,29 @@ pub fn choose_python(
 pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
     let system = ops.python_version("python3");
     let catalog = ops.packages().catalog();
-    let candidati: Vec<AlternatePython> = catalog
+    let candidates: Vec<AlternatePython> = catalog
         .alternate_pythons
         .iter()
         .filter(|alt| !python_is_newer_than_tested(alt.version))
         .cloned()
         .collect();
 
-    let disponibili: Vec<AlternatePython> = if candidati.is_empty() {
+    let available: Vec<AlternatePython> = if candidates.is_empty() {
         Vec::new()
     } else if !ops.packages().index_is_queryable() {
         warn!(
-            "indice dei pacchetti non interrogabile: non posso sapere se questa distribuzione \
-             offra un interprete Python alternativo, proseguo con quello di sistema"
+            "the package index cannot be queried, so there is no way to tell whether this \
+             distribution offers an alternative Python: proceeding with the system one"
         );
         Vec::new()
     } else {
-        candidati
+        candidates
             .into_iter()
             .filter(|alt| ops.packages().availability(&alt.interpreter) == Availability::Real)
             .collect()
     };
 
-    let plan = choose_python(system, &disponibili, &catalog.names_for(DepId::PythonDev));
+    let plan = choose_python(system, &available, &catalog.names_for(DepId::PythonDev));
     announce_python_plan(system, &plan);
     plan
 }
@@ -572,19 +575,19 @@ pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
 /// logs is a message no test looks at (A-R9-1).
 fn announce_python_plan(system: Option<(u32, u32)>, plan: &PythonPlan) {
     match (system, plan.is_system()) {
-        (None, _) => info!("ℹ versione di Python non determinabile in questa fase: proseguo"),
+        (None, _) => info!("ℹ the Python version cannot be determined at this stage: proceeding"),
         (Some(v), true) => match untested_python_warning(v) {
             // not covered and no alternative: the M10 case, where the warning
             // already says what will break and where.
             Some(avviso) => warn!(python = %format_python(v), "{avviso}"),
-            None => info!(python = %format_python(v), "✔ interprete Python"),
+            None => info!(python = %format_python(v), "✔ Python interpreter"),
         },
         (Some(v), false) => info!(
-            python_sistema = %format_python(v),
-            interprete = %plan.command,
-            pacchetti = %plan.packages.join(" "),
-            "il Python di sistema è più recente dei pin di Odoo: il virtualenv nascerà su un \
-             interprete supportato, installato per l'occasione e rimosso dal rollback"
+            system_python = %format_python(v),
+            interpreter = %plan.command,
+            packages = %plan.packages.join(" "),
+            "the system Python is newer than Odoo's pins: the virtualenv will be built on a \
+             supported interpreter, installed for the purpose and removed by the rollback"
         ),
     }
 }
@@ -657,7 +660,7 @@ pub fn check_os() -> Result<OsInfo, CheckError> {
         os = %info.id,
         version = %info.version,
         codename = ?info.codename,
-        "✔ OS supportato"
+        "✔ supported OS"
     );
     if let Some(avviso) = untested_release_warning(&info.id, &info.version) {
         warn!(os = %info.id, version = %info.version, "{avviso}");
@@ -708,7 +711,7 @@ pub fn check_disk(target: &Path, required_gb: u64) -> Result<(), CheckError> {
         measured_on = %measure.display(),
         available_gb,
         required_gb,
-        "verifica spazio disco"
+        "checking the disk space"
     );
 
     if available_gb < required_gb {
@@ -745,11 +748,11 @@ pub fn check_ports(
 ) -> Result<(), CheckError> {
     for port in ports_to_check(odoo_port, with_nginx, nginx_already_serving) {
         match probe_port(port) {
-            PortStatus::Free => info!(port, "✔ porta disponibile"),
+            PortStatus::Free => info!(port, "✔ port available"),
             PortStatus::Unknown => {
                 warn!(
                     port,
-                    "impossibile verificare la porta (ss/netstat/lsof assenti): assumo libera"
+                    "cannot check the port (ss/netstat/lsof absent): assuming it is free"
                 )
             }
             PortStatus::InUse => return Err(CheckError::PortInUse { port }),
@@ -776,7 +779,7 @@ pub fn ports_to_check(odoo_port: u16, with_nginx: bool, nginx_already_serving: b
         ports.push(80);
         ports.push(443);
     } else if with_nginx {
-        info!("nginx è già in ascolto: le porte 80/443 sono sue, nessun conflitto da verificare");
+        info!("nginx is already listening: ports 80/443 are its own, no conflict to check");
     }
     ports
 }
@@ -868,7 +871,7 @@ pub fn required_commands(family: OsFamily) -> [&'static str; 2] {
 pub fn check_commands(family: OsFamily) -> Result<(), CheckError> {
     for command in required_commands(family) {
         if command_exists(command) {
-            info!(command, "✔ presente");
+            info!(command, "✔ present");
         } else {
             return Err(CheckError::MissingCommand {
                 command: command.to_string(),
@@ -877,12 +880,9 @@ pub fn check_commands(family: OsFamily) -> Result<(), CheckError> {
     }
     for command in ["nginx", "certbot"] {
         if command_exists(command) {
-            info!(command, "✔ presente");
+            info!(command, "✔ present");
         } else {
-            info!(
-                command,
-                "ℹ opzionale, non trovato (installabile se necessario)"
-            );
+            info!(command, "ℹ optional, not found (installable if needed)");
         }
     }
     Ok(())

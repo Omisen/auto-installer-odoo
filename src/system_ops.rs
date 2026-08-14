@@ -783,7 +783,7 @@ fn run_command_stdin(
         Ok(())
     } else {
         let stderr = if secret {
-            "<output soppresso: potrebbe contenere segreti>".to_string()
+            "<output suppressed: it may contain secrets>".to_string()
         } else {
             String::from_utf8_lossy(&output.stderr).into_owned()
         };
@@ -854,14 +854,14 @@ impl SystemOps for RealSystemOps {
             .flatten()
             .map(|u| u.uid)
             .ok_or_else(|| {
-                StepError::Precondition(format!("utente '{owner}' non trovato per chown"))
+                StepError::Precondition(format!("user '{owner}' not found for chown"))
             })?;
         let gid = nix::unistd::Group::from_name(group)
             .ok()
             .flatten()
             .map(|g| g.gid)
             .ok_or_else(|| {
-                StepError::Precondition(format!("gruppo '{group}' non trovato per chown"))
+                StepError::Precondition(format!("group '{group}' not found for chown"))
             })?;
         nix::unistd::chown(path, Some(uid), Some(gid)).map_err(|e| StepError::io(path, errno_io(e)))
     }
@@ -1221,7 +1221,7 @@ impl SystemOps for RealSystemOps {
             )?;
             if !target.join("odoo-bin").is_file() {
                 return Err(StepError::Precondition(format!(
-                    "fallback tarball completato ma odoo-bin assente in {target_str}"
+                    "the tarball fallback completed but odoo-bin is missing in {target_str}"
                 )));
             }
             Ok(())
@@ -1382,9 +1382,7 @@ impl SystemOps for RealSystemOps {
         let u = nix::unistd::User::from_name(user)
             .ok()
             .flatten()
-            .ok_or_else(|| {
-                StepError::Precondition(format!("utente '{user}' non trovato per chown"))
-            })?;
+            .ok_or_else(|| StepError::Precondition(format!("user '{user}' not found for chown")))?;
         // the same-named group if it exists, else the user's primary group.
         let gid = nix::unistd::Group::from_name(user)
             .ok()

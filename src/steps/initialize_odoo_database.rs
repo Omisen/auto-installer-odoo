@@ -68,7 +68,7 @@ impl Step for InitializeOdooDatabase {
         // schema already there means nothing to do, whoever owns the database.
         if self.ops.pg_db_initialized(&ctx.db_name)? {
             self.prestate = PreState::Preexisting;
-            info!(db = %ctx.db_name, "snapshot: schema Odoo già presente");
+            info!(db = %ctx.db_name, "snapshot: the Odoo schema is already there");
             return Ok(());
         }
 
@@ -81,33 +81,31 @@ impl Step for InitializeOdooDatabase {
         // removing exactly what that run created (A3.3).
         if !ctx.db_created_by_us.load(Ordering::SeqCst) {
             return Err(StepError::Precondition(format!(
-                "Il database '{db}' esisteva già prima dell'installazione; \
-                 l'inizializzazione dello schema Odoo è rifiutata per non alterare \
-                 dati preesistenti. Usa un nome DB diverso o un DB vuoto creato \
-                 dall'installer.\n\
-                 Se '{db}' è il residuo di un'installazione precedente non completata \
-                 (e non un database con dati reali), ripulisci quella installazione con \
-                 `sudo invok rollback`: legge lo stato lasciato da quella \
-                 esecuzione e rimuove solo ciò che aveva creato lei. In alternativa \
-                 rimuovi il database a mano — `sudo -u postgres dropdb {db}` — oppure \
-                 scegli un nome diverso.",
+                "database '{db}' already existed before the installation; initialisation of \
+                 the Odoo schema is refused so pre-existing data is not altered. use a \
+                 different DB name, or an empty DB created by the installer.\n\
+                 if '{db}' is the leftover of an earlier, unfinished installation (and not a \
+                 database with real data), clean that installation up with \
+                 `sudo invok rollback`: it reads the state that run left behind and removes \
+                 only what it created. otherwise remove the database by hand — \
+                 `sudo -u postgres dropdb {db}` — or choose a different name.",
                 db = ctx.db_name
             )));
         }
 
         // ours, and empty: we will proceed.
         self.prestate = PreState::Untracked;
-        info!(db = %ctx.db_name, "snapshot: DB nostro, schema da inizializzare");
+        info!(db = %ctx.db_name, "snapshot: the DB is ours, the schema needs initialising");
         Ok(())
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         if self.prestate == PreState::Preexisting {
-            info!(db = %ctx.db_name, "run: schema già presente, skip init");
+            info!(db = %ctx.db_name, "run: schema already there, skipping the init");
             return Ok(());
         }
         if ctx.dry_run {
-            info!(db = %ctx.db_name, "run (dry-run): odoo-bin -i base --without-demo=all --stop-after-init");
+            info!(db = %ctx.db_name, "run (dry run): odoo-bin -i base --without-demo=all --stop-after-init");
             return Ok(());
         }
 
@@ -123,13 +121,13 @@ impl Step for InitializeOdooDatabase {
         // post-init check: the schema must now be there.
         if !self.ops.pg_db_initialized(&ctx.db_name)? {
             return Err(StepError::Precondition(format!(
-                "inizializzazione del database '{}' fallita: schema base non rilevato",
+                "initialisation of database '{}' failed: the base schema was not detected",
                 ctx.db_name
             )));
         }
 
         self.prestate = PreState::CreatedByUs;
-        info!(db = %ctx.db_name, "run: schema base inizializzato");
+        info!(db = %ctx.db_name, "run: base schema initialised");
         Ok(())
     }
 
@@ -137,8 +135,8 @@ impl Step for InitializeOdooDatabase {
         // a deliberate no-op (C2): the init runs only on databases of ours, and
         // the `dropdb` that follows covers the schema.
         info!(
-            "undo NO-OP: lo schema vive in un DB CreatedByUs; la sua rimozione è \
-             coperta dall'undo di CreateDatabase (dropdb dell'intero DB)"
+            "undo NO-OP: the schema lives in a DB we created, and its removal is covered \
+             by CreateDatabase's undo (a dropdb of the whole DB)"
         );
         Ok(())
     }

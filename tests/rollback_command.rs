@@ -1030,7 +1030,7 @@ fn a_manifest_from_another_installer_is_announced_not_refused() {
         "la nota deve nominare ENTRAMBE le versioni, o non si capisce cosa fare: {nota}"
     );
     assert!(
-        nota.contains("sconosciuto"),
+        nota.contains("unknown"),
         "e deve collegarsi al sintomo che spiega — gli step che questo binario non conosce: {nota}"
     );
 }
