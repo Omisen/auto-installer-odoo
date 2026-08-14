@@ -42,7 +42,7 @@ fn preexisting_database_is_never_dropped() {
     let ops = ops_of(&log);
     assert!(
         !ops.iter().any(|o| matches!(o, Op::DropDb(_))),
-        "un database preesistente non deve MAI essere droppato: {ops:?}"
+        "a pre-existing database must NEVER be dropped: {ops:?}"
     );
     // it was not even created: it was already there.
     assert!(!ops.iter().any(|o| matches!(o, Op::CreateDb { .. })));

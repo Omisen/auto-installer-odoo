@@ -102,8 +102,8 @@ fn unavailable_packages_error(
 /// `Vec::dedup` would not do: it only removes **consecutive** duplicates, and
 /// here the two colliding names are six positions apart.
 pub fn dedup_keeping_order(names: &mut Vec<String>) {
-    let mut visti = std::collections::HashSet::new();
-    names.retain(|name| visti.insert(name.clone()));
+    let mut seen = std::collections::HashSet::new();
+    names.retain(|name| seen.insert(name.clone()));
 }
 
 /// the undo policy for this set of packages.
@@ -241,15 +241,15 @@ impl AptPackagesStep {
         // one pass: take the **first** real name and keep the first virtual one
         // aside. two passes would reach the same verdict at twice the
         // questions.
-        let mut virtuale: Option<&String> = None;
+        let mut virtual_name: Option<&String> = None;
         for name in spec.alternatives() {
             match pm.availability(name) {
                 Availability::Real => return Some(ResolvedPackage::Installable(name.clone())),
-                Availability::VirtualOnly if virtuale.is_none() => virtuale = Some(name),
+                Availability::VirtualOnly if virtual_name.is_none() => virtual_name = Some(name),
                 _ => {}
             }
         }
-        virtuale.map(|name| ResolvedPackage::Virtual(name.clone()))
+        virtual_name.map(|name| ResolvedPackage::Virtual(name.clone()))
     }
 
     /// refreshes the package index before installing (A5.1-bis).

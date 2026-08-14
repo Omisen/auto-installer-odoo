@@ -44,19 +44,19 @@ fn names(v: &[&str]) -> Vec<String> {
 /// silent, and in a rollback it would mean leaving everything installed.
 #[test]
 fn each_family_gets_its_own_backend() {
-    let debian = backend_factory(OsFamily::Debian).expect("la famiglia Debian ha apt")();
-    let fedora = backend_factory(OsFamily::Fedora).expect("la famiglia Fedora ha dnf")();
+    let debian = backend_factory(OsFamily::Debian).expect("the Debian family has apt")();
+    let fedora = backend_factory(OsFamily::Fedora).expect("the Fedora family has dnf")();
 
     assert_eq!(
         debian.packages().catalog().postgres_marker,
         "postgresql",
-        "su Debian il marker del server è il pacchetto `postgresql`"
+        "on one family the server marker is the bare package"
     );
     assert_eq!(
         fedora.packages().catalog().postgres_marker,
         "postgresql-server",
-        "su Fedora `postgresql` è il solo CLIENT: prenderlo come marker farebbe \
-         credere che il server ci sia già, quindi Preexisting, quindi nessun undo"
+        "on the other the bare name is the CLIENT only: taking it as the marker would \
+         suggest the server is already there, hence Preexisting, hence no undo"
     );
 }
 
@@ -78,20 +78,20 @@ fn the_package_lists_come_from_the_backend_catalog() {
             .bootstrap_specs()
             .iter()
             .any(|s| s.preferred() == "git"),
-        "il bootstrap della famiglia Debian contiene git"
+        "the Debian family's bootstrap contains git"
     );
     assert!(
         catalog
             .odoo_specs()
             .iter()
             .any(|s| s.preferred() == "build-essential"),
-        "le dipendenze Odoo della famiglia Debian contengono build-essential"
+        "the Debian family's Odoo dependencies contain build-essential"
     );
     assert_eq!(catalog.postgres_marker, "postgresql");
     assert_eq!(catalog.nginx, "nginx");
     assert!(
         catalog.postgres.contains(&"postgresql-contrib".to_string()),
-        "il server PostgreSQL su Debian sono due pacchetti, non uno"
+        "on that family the PostgreSQL server is two packages, not one"
     );
 }
 
@@ -110,9 +110,9 @@ fn dedup_keeps_the_first_occurrence_and_the_order() {
     dedup_keeping_order(&mut consecutivi);
     assert_eq!(consecutivi, names(&["a", "b"]));
 
-    let mut vuoto: Vec<String> = Vec::new();
-    dedup_keeping_order(&mut vuoto);
-    assert!(vuoto.is_empty());
+    let mut empty: Vec<String> = Vec::new();
+    dedup_keeping_order(&mut empty);
+    assert!(empty.is_empty());
 }
 
 /// **the defect, as it shows up.** two groups resolving to the same name put
@@ -155,8 +155,8 @@ fn two_groups_resolving_to_the_same_name_appear_once_in_the_delta() {
     assert_eq!(
         snap.delta,
         names(&["libjpeg-dev"]),
-        "il delta persistito deve nominare ogni pacchetto UNA volta: è la \
-         contabilità su cui l'undo agisce"
+        "the persisted delta must name each package ONCE: it is the accounting the undo \
+         acts on"
     );
 }
 
@@ -189,7 +189,7 @@ fn a_preexisting_package_shared_by_two_groups_is_listed_once() {
     assert_eq!(snap.already_installed, names(&["libjpeg-dev"]));
     assert!(
         snap.delta.is_empty(),
-        "era già installato: non l'abbiamo aggiunto noi, non è nostro da rimuovere"
+        "it was already installed: we did not add it, it is not ours to remove"
     );
 }
 
@@ -260,7 +260,7 @@ fn an_empty_delta_asks_the_manager_for_nothing() {
         !ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::PkgRemove(_) | Op::PkgRepair)),
-        "nessun pacchetto nel delta: il gestore non va nemmeno invocato"
+        "no package in the delta: the manager is not even invoked"
     );
 }
 
@@ -279,20 +279,20 @@ fn an_empty_delta_asks_the_manager_for_nothing() {
 #[test]
 fn the_production_sequence_uses_the_production_constructors() {
     let sorgente = std::fs::read_to_string("src/steps/mod.rs").expect("leggo steps/mod.rs");
-    let inizio = sorgente
+    let start = sorgente
         .find("pub fn build_steps")
         .expect("build_steps esiste");
-    let fine = sorgente[inizio..]
+    let end = sorgente[start..]
         .find("\n}\n")
-        .map(|i| inizio + i)
-        .expect("fine di build_steps");
-    let corpo = &sorgente[inizio..fine];
+        .map(|i| start + i)
+        .expect("end di build_steps");
+    let body = &sorgente[start..end];
 
     for step in ["CloneOdooRepo", "SetupSystemd"] {
         assert!(
-            corpo.contains(&format!("{step}::for_run(")),
-            "{step} ha parametri di produzione (attese, backoff) che i suoi test azzerano: \
-             in `build_steps` va costruito con `for_run`, non con `with_ops`"
+            body.contains(&format!("{step}::for_run(")),
+            "{step} carries production timings (waits, backoff) that its tests zero out: in \
+             `build_steps` it must be built with `for_run`, not with `with_ops`"
         );
     }
 }
@@ -332,7 +332,7 @@ fn the_undo_still_removes_only_what_we_added() {
     let mut step = AptPackagesStep::custom(
         Box::new(ops),
         "install-system-dependencies",
-        names(&["gia-presente", "aggiunto-da-noi"]),
+        names(&["gia-presente", "added-by-us"]),
         UndoPolicy::PurgeDelta,
     );
     step.snapshot(&ctx()).expect("snapshot");
@@ -349,8 +349,8 @@ fn the_undo_still_removes_only_what_we_added() {
 
     assert_eq!(
         purged,
-        vec![names(&["aggiunto-da-noi"])],
-        "il pacchetto che il cliente aveva già non si tocca, qualunque sia il gestore"
+        vec![names(&["added-by-us"])],
+        "the package the customer already had is untouched, whichever manager it is"
     );
 }
 
@@ -370,13 +370,13 @@ fn a_real_candidate_always_beats_a_virtual_name() {
     assert_eq!(
         availability_from(false, true),
         Availability::VirtualOnly,
-        "installabile ma non per questo nome: è un ripiego, e va detto"
+        "installable but not under this name: a fallback, and it must be said"
     );
     assert_eq!(availability_from(false, false), Availability::Absent);
     assert_eq!(
         availability_from(true, true),
         Availability::Real,
-        "se il candidato è reale la risposta è reale, qualunque cosa dica il \
-         risolutore: un nome rimovibile batte sempre uno che non lo è"
+        "if the candidate is real the answer is real, whatever the resolver says: a \
+         removable name always beats one that is not"
     );
 }

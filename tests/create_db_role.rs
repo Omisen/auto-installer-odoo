@@ -78,7 +78,7 @@ fn preexisting_role_is_never_touched() {
 
     assert!(
         ops_of(&log).is_empty(),
-        "un ruolo preesistente non va né creato né droppato"
+        "a pre-existing role is neither created nor dropped"
     );
 }
 
@@ -86,5 +86,5 @@ fn preexisting_role_is_never_touched() {
 fn sql_literal_escaping_doubles_single_quotes() {
     assert_eq!(escape_sql_literal("p'wn"), "p''wn");
     assert_eq!(escape_sql_literal("a'b'c"), "a''b''c");
-    assert_eq!(escape_sql_literal("nessun apice"), "nessun apice");
+    assert_eq!(escape_sql_literal("no quote"), "no quote");
 }

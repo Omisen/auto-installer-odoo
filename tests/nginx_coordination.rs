@@ -62,7 +62,7 @@ fn full_rollback_restores_default_site_and_removes_only_delta() {
     let mut installer = Installer::new();
     assert!(
         installer.execute(&mut steps, &ctx).is_err(),
-        "lo step finale innesca il rollback"
+        "the final step triggers the rollback"
     );
 
     let ops = ops_of(&log);
@@ -72,12 +72,12 @@ fn full_rollback_restores_default_site_and_removes_only_delta() {
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site)),
-        "il rollback deve ripristinare il default site del cliente"
+        "the rollback must restore the customer's default site"
     );
     // only the delta is removed, never the pre-existing rule.
     assert!(ops.contains(&Op::UfwDelete("443/tcp".to_string())));
     assert!(
         !ops.contains(&Op::UfwDelete("80/tcp".to_string())),
-        "la 80 del cliente non va rimossa"
+        "the customer's port 80 rule is not removed"
     );
 }

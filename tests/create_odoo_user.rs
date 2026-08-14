@@ -22,7 +22,7 @@ fn ctx() -> Context {
 }
 
 fn persisted(step: &CreateOdooUser) -> CreateUserSnapshot {
-    serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile")
+    serde_json::from_value(step.snapshot_value()).expect("the snapshot must serialise")
 }
 
 #[test]
@@ -50,7 +50,7 @@ fn created_by_us_runs_useradd_and_undo_userdel_without_r() {
         Op::CreateUser(spec) => Some(spec),
         _ => None,
     });
-    let spec = created.expect("useradd deve essere eseguito");
+    let spec = created.expect("useradd must run");
     assert_eq!(spec.name, "odoo");
     assert_eq!(spec.home, PathBuf::from("/opt/odoo"));
     assert!(spec.system && spec.create_home && spec.user_group);
@@ -98,7 +98,7 @@ fn preexisting_user_is_never_touched() {
     // no mutation: a pre-existing user is never touched.
     assert!(
         ops.is_empty(),
-        "un utente Preexisting non deve subire alcuna azione, trovato: {ops:?}"
+        "a Preexisting user must undergo no action, found: {ops:?}"
     );
 }
 
@@ -132,7 +132,7 @@ fn undo_restores_original_owner_when_home_was_preexisting() {
             path: PathBuf::from("/opt/odoo"),
             id: original,
         }),
-        "undo deve ripristinare l'owner originale della home, trovato: {ops:?}"
+        "the undo must restore the home's original owner, found: {ops:?}"
     );
     // and the deletion still carries no `-r`.
     assert!(ops.contains(&Op::DeleteUser("odoo".to_string())));
@@ -158,7 +158,7 @@ fn dry_run_creates_nothing() {
 
     assert!(
         ops_of(&log).is_empty(),
-        "dry-run non deve eseguire alcuna operazione"
+        "a dry run must perform no operation"
     );
 }
 
@@ -184,16 +184,16 @@ fn a_preexisting_user_with_a_root_owned_home_is_refused_before_mutating() {
 
     let err = step
         .snapshot(&c)
-        .expect_err("una home di root con l'utente già esistente deve fermare l'installazione");
+        .expect_err("a root-owned home with the user already there must stop the installation");
 
     let msg = err.to_string();
     assert!(
         msg.contains("/opt/odoo") && msg.contains("root"),
-        "il messaggio deve nominare la home e il suo proprietario: {msg}"
+        "the message must name the home and its owner: {msg}"
     );
     assert!(
-        msg.contains("chown") || msg.contains("rimuovila"),
-        "il messaggio deve dire all'utente cosa può fare: {msg}"
+        msg.contains("chown") || msg.contains("remove it"),
+        "the message must tell the user what they can do: {msg}"
     );
 
     // a precondition, not an undo: it fails having touched nothing.
@@ -202,7 +202,7 @@ fn a_preexisting_user_with_a_root_owned_home_is_refused_before_mutating() {
             op,
             Op::CreateUser(_) | Op::ChownNamed { .. } | Op::Chmod { .. }
         )),
-        "nessuna mutazione prima del rifiuto: {:?}",
+        "no mutation before the refusal: {:?}",
         ops_of(&log)
     );
 }
@@ -223,7 +223,7 @@ fn a_root_owned_home_is_fine_when_we_create_the_user() {
     let c = ctx();
 
     step.snapshot(&c)
-        .expect("con l'utente da creare, una home di root è lo stato normale");
+        .expect("with the user still to create, a root-owned home is the normal state");
     step.run(&c).expect("run");
 }
 
@@ -254,7 +254,7 @@ fn a_group_removed_together_with_the_user_is_not_a_failure() {
     };
     assert!(
         group_already_gone(&gia_rimosso),
-        "exit 6 di groupdel significa «il gruppo non esiste», che qui è ciò che volevamo"
+        "groupdel's exit 6 means \"the group does not exist\", which here is what we wanted"
     );
 }
 
@@ -268,28 +268,28 @@ fn a_real_groupdel_failure_is_still_reported() {
     let in_uso = StepError::CommandFailed {
         command: "groupdel -- odoo".to_string(),
         status: "8".to_string(),
-        stderr: "groupdel: cannot remove the primary group of user 'altro'\n".to_string(),
+        stderr: "groupdel: cannot remove the primary group of user 'other'\n".to_string(),
     };
     assert!(
         !group_already_gone(&in_uso),
-        "exit 8 è un ostacolo reale: il gruppo resta sul sistema"
+        "exit 8 is a real obstacle: the group stays on the system"
     );
 
     for status in ["1", "2", "10", "spawn-failed", "signal"] {
-        let altro = StepError::CommandFailed {
+        let other = StepError::CommandFailed {
             command: "groupdel -- odoo".to_string(),
             status: status.to_string(),
             stderr: String::new(),
         };
         assert!(
-            !group_already_gone(&altro),
-            "'{status}' non è «il gruppo non esiste»: nel dubbio si avvisa"
+            !group_already_gone(&other),
+            "'{status}' is not \"the group does not exist\": in doubt we warn"
         );
     }
 
     // an error that did not come from a command is not classifiable.
     assert!(!group_already_gone(&StepError::Precondition(
-        "altro".into()
+        "other".into()
     )));
 }
 
@@ -305,11 +305,11 @@ fn the_verdict_does_not_depend_on_the_system_language() {
     let in_italiano = StepError::CommandFailed {
         command: "groupdel -- odoo".to_string(),
         status: "6".to_string(),
-        stderr: "groupdel: il gruppo «odoo» non esiste\n".to_string(),
+        stderr: "groupdel: group 'odoo' does not exist\n".to_string(),
     };
     assert!(
         group_already_gone(&in_italiano),
-        "il verdetto viene dal codice 6, non dal messaggio: su una macchina \
-         localizzata il testo è un altro e la conclusione dev'essere la stessa"
+        "the verdict comes from the exit code, not from the message: on a localised \
+         machine the text differs and the conclusion must be the same"
     );
 }

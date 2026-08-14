@@ -65,7 +65,7 @@ fn preexisting_venv_is_noop() {
 
     assert!(
         ops_of(&log).is_empty(),
-        "un venv preesistente non va né creato né rimosso"
+        "a pre-existing venv is neither created nor removed"
     );
 }
 
@@ -83,19 +83,19 @@ fn missing_python_venv_is_error() {
     step.snapshot(&c).expect("snapshot");
     let message = step
         .run(&c)
-        .expect_err("senza python3-venv il run deve fallire")
+        .expect_err("without the venv package the run must fail")
         .to_string();
 
     // the message must say what is missing and how to fix it: this is what the
     // user sees instead of a venv that stops halfway (A-R6-1).
     assert!(
         message.contains("ensurepip") && message.contains("python3-venv"),
-        "l'errore deve nominare il modulo mancante e il pacchetto: {message}"
+        "the error must name the missing module and the package: {message}"
     );
     // and above all it stops BEFORE creating a partial sandbox.
     assert!(
         ops_of(&log).is_empty(),
-        "nessuna mutazione se la precondizione non è soddisfatta: {:?}",
+        "no mutation when the precondition is not met: {:?}",
         ops_of(&log)
     );
 }
@@ -120,22 +120,22 @@ fn the_venv_precondition_asks_about_ensurepip_not_about_the_venv_module() {
     let body = source
         .split("fn python_venv_available(&self, python: &str) -> bool {")
         .nth(1)
-        .expect("l'implementazione di python_venv_available deve esistere");
+        .expect("the implementation of python_venv_available must exist");
     let body = body.split("\n    }").next().expect("corpo del metodo");
 
     assert!(
         body.contains("import ensurepip"),
-        "la precondizione deve interrogare ensurepip: {body}"
+        "the precondition must query ensurepip: {body}"
     );
     assert!(
         !body.contains("\"--help\""),
-        "e NON `venv --help`, che risponde 0 anche senza il pacchetto python3-venv: {body}"
+        "and NOT `venv --help`, which exits zero even without the package: {body}"
     );
     // M11: the question goes to the interpreter that will really be used, not a
     // hardcoded one. where the two diverge, asking the wrong one gives the
     // right answer to the wrong question.
     assert!(
         body.contains("Command::new(python)"),
-        "la precondizione deve interrogare l'interprete scelto, non `python3`: {body}"
+        "the precondition must query the chosen interpreter, not `python3`: {body}"
     );
 }

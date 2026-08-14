@@ -46,18 +46,18 @@ fn round_trip_restores_file_byte_for_byte() {
     let ops = ops_of(&log);
     assert!(
         ops.iter().any(|o| matches!(o, Op::AppendLine(_))),
-        "run deve appendere la riga"
+        "the run must append the line"
     );
     assert!(
         !ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
-        "mai riscrivere il .bashrc intero"
+        "never rewrite the whole .bashrc"
     );
     // after the run our line is there.
     let after_run = std::fs::read_to_string(&bashrc).expect("read");
     assert!(after_run.contains(PATH_LINE));
     assert!(
         after_run.starts_with(original),
-        "il contenuto originale resta in testa, intatto"
+        "the original contents stay at the top, intact"
     );
 
     step.undo(&c).expect("undo");
@@ -65,7 +65,7 @@ fn round_trip_restores_file_byte_for_byte() {
     let after_undo = std::fs::read_to_string(&bashrc).expect("read");
     assert_eq!(
         after_undo, original,
-        "dopo l'undo il .bashrc è identico all'originale"
+        "after the undo the .bashrc is identical to the original"
     );
 }
 
@@ -89,7 +89,7 @@ fn line_already_present_is_noop() {
     assert_eq!(
         std::fs::read_to_string(&bashrc).expect("read"),
         content,
-        "riga preesistente: file invariato"
+        "a pre-existing line means an unchanged file"
     );
 }
 
@@ -106,10 +106,10 @@ fn created_bashrc_is_removed_on_undo() {
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
-    assert!(bashrc.exists(), "il run crea il .bashrc mancante");
+    assert!(bashrc.exists(), "the run creates the missing .bashrc");
 
     step.undo(&c).expect("undo");
-    assert!(!bashrc.exists(), "undo rimuove il .bashrc creato da noi");
+    assert!(!bashrc.exists(), "the undo removes the .bashrc we created");
 }
 
 #[test]
@@ -122,7 +122,7 @@ fn missing_sudo_user_is_error() {
     };
     assert!(
         step.snapshot(&c).is_err(),
-        "senza SUDO_USER lo step deve fallire"
+        "without SUDO_USER the step must fail"
     );
 }
 
@@ -132,13 +132,10 @@ fn remove_exact_line_is_not_fuzzy() {
     let content = format!("alias x='y'\nexport PATH=\"$HOME/bin:$PATH\"\n{PATH_LINE}\n");
     let cleaned = remove_exact_line(&content, PATH_LINE);
 
-    assert!(
-        !cleaned.contains(PATH_LINE),
-        "la nostra riga esatta è rimossa"
-    );
+    assert!(!cleaned.contains(PATH_LINE), "our exact line is removed");
     assert!(
         cleaned.contains(r#"export PATH="$HOME/bin:$PATH""#),
-        "la riga PATH diversa dell'utente resta (match esatto, non parziale)"
+        "the user's different PATH line stays (exact match, not partial)"
     );
     assert!(cleaned.contains("alias x='y'"));
     assert_eq!(cleaned, "alias x='y'\nexport PATH=\"$HOME/bin:$PATH\"\n");

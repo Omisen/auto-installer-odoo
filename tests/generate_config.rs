@@ -49,7 +49,7 @@ fn created_by_us_generates_640_and_undo_removes() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    assert!(dest.exists(), "il file deve essere creato");
+    assert!(dest.exists(), "the file must be created");
     let content = std::fs::read_to_string(&dest).expect("read");
     assert!(!content.contains("${"), "nessun placeholder residuo");
     assert!(content.contains("[options]"));
@@ -62,7 +62,7 @@ fn created_by_us_generates_640_and_undo_removes() {
     let ops = ops_of(&log);
     assert!(
         ops.iter().any(|o| matches!(o, Op::CreatePrivateFile(_))),
-        "creazione privata del temp (600, O_EXCL|O_NOFOLLOW)"
+        "the temporary is created privately (0600, O_EXCL|O_NOFOLLOW)"
     );
     assert!(ops
         .iter()
@@ -72,7 +72,7 @@ fn created_by_us_generates_640_and_undo_removes() {
         .any(|o| matches!(o, Op::ChownNamed { owner, .. } if owner == "odoo")));
 
     step.undo(&c).expect("undo");
-    assert!(!dest.exists(), "undo: il file creato da noi viene rimosso");
+    assert!(!dest.exists(), "undo: the file we created is removed");
 }
 
 #[test]
@@ -99,7 +99,7 @@ fn preexisting_undo_restores_backup() {
     let after_run = std::fs::read_to_string(&dest).expect("read");
     assert_ne!(
         after_run, original,
-        "il run sovrascrive con la config generata"
+        "the run overwrites with the generated config"
     );
 
     step.undo(&c).expect("undo");
@@ -108,7 +108,7 @@ fn preexisting_undo_restores_backup() {
     let after_undo = std::fs::read_to_string(&dest).expect("read");
     assert_eq!(
         after_undo, original,
-        "undo deve ripristinare il file originale dal backup"
+        "the undo must restore the original file from the backup"
     );
 }
 
@@ -138,7 +138,7 @@ fn rendering_normalizes_empty_directives_and_no_residue() {
     );
     assert!(
         content.contains("admin_passwd = s3cret"),
-        "la password è nel file (non nei log)"
+        "the password is in the file, not in the logs"
     );
     validate_rendered(&content).expect("valido");
 }

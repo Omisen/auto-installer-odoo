@@ -125,7 +125,7 @@ fn env_parser_reads_pairs_ignores_comments_and_blanks() {
     writeln!(f, "export ODOO_USER=\"quoted\"").unwrap();
     writeln!(f, "WITH_NGINX=true").unwrap();
     writeln!(f, "UNKNOWN_KEY=whatever").unwrap();
-    writeln!(f, "riga senza uguale").unwrap();
+    writeln!(f, "a line without an equals sign").unwrap();
     drop(f);
 
     let raw = parse_env_file(&path).expect("parse");
@@ -160,7 +160,7 @@ fn env_parser_does_not_execute_command_substitution() {
     // and above all the sentinel still exists.
     assert!(
         sentinel.exists(),
-        "il parser .env NON deve eseguire comandi"
+        "the .env parser must NOT execute commands"
     );
 }
 
@@ -256,7 +256,7 @@ fn identifier_rejects_leading_dash_and_dot() {
                 config::validate_identifier(bad, "db_name"),
                 Err(ConfigError::InvalidIdentifier { .. })
             ),
-            "'{bad}' deve essere rifiutato"
+            "'{bad}' must be rejected"
         );
     }
 }
@@ -267,7 +267,7 @@ fn identifier_accepts_internal_dash_and_dot() {
     // dots are legitimate.
     for good in ["foo", "foo_bar", "foo-bar", "foo.bar", "_foo", "0foo", "F"] {
         assert_eq!(
-            config::validate_identifier(good, "db_name").expect("deve essere valido"),
+            config::validate_identifier(good, "db_name").expect("it must be valid"),
             good
         );
     }

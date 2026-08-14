@@ -54,25 +54,25 @@ fn installed_but_stopped_starts_then_stops_no_purge() {
     );
     assert!(
         has(&ops, |o| matches!(o, Op::ServiceStop(_))),
-        "undo deve fermare (D4)"
+        "the undo must stop it (D4)"
     );
     assert!(
         !has(&ops, |o| matches!(o, Op::ServiceDisable(_))),
-        "non disabilitare: era già enabled"
+        "do not disable: it was already enabled"
     );
     assert!(
         !has(&ops, |o| matches!(o, Op::PkgInstall(_))),
-        "già installato: non installare"
+        "already installed: do not install"
     );
     assert!(
         !has(&ops, |o| matches!(o, Op::PkgRemove(_))),
-        "mai purgare senza --aggressive-rollback"
+        "never purge without --aggressive-rollback"
     );
 }
 
 #[test]
 fn all_absent_installs_enables_starts_then_reverts_no_purge() {
-    let cfg = MockConfig::default(); // niente installato, disabled, fermo
+    let cfg = MockConfig::default(); // nothing installed, disabled, stopped
     let ops = run_cycle(cfg, false);
 
     assert!(has(&ops, |o| matches!(o, Op::PkgInstall(_))));
@@ -83,7 +83,7 @@ fn all_absent_installs_enables_starts_then_reverts_no_purge() {
     assert!(has(&ops, |o| matches!(o, Op::ServiceDisable(_))));
     assert!(
         !has(&ops, |o| matches!(o, Op::PkgRemove(_))),
-        "no purge senza flag"
+        "no purge without the flag"
     );
 }
 
@@ -93,13 +93,13 @@ fn purge_only_with_aggressive_rollback() {
     let without = run_cycle(MockConfig::default(), false);
     assert!(
         !has(&without, |o| matches!(o, Op::PkgRemove(_))),
-        "senza flag: no purge"
+        "without the flag: no purge"
     );
 
     let with = run_cycle(MockConfig::default(), true);
     assert!(
         has(&with, |o| matches!(o, Op::PkgRemove(_))),
-        "con --aggressive-rollback: purga"
+        "with --aggressive-rollback: it purges"
     );
     assert!(has(&with, |o| matches!(o, Op::PkgRemoveOrphans)));
 }
@@ -114,7 +114,7 @@ fn aggressive_purge_declined_when_other_databases_present() {
     let ops = run_cycle(cfg, /* aggressive */ true);
     assert!(
         !has(&ops, |o| matches!(o, Op::PkgRemove(_))),
-        "con altri database nel cluster il purge va declinato"
+        "with other databases in the cluster the purge is declined"
     );
     // stop and disable still apply.
     assert!(has(&ops, |o| matches!(o, Op::ServiceStop(_))));
@@ -131,7 +131,7 @@ fn aggressive_purge_allowed_when_only_our_database() {
     let ops = run_cycle(cfg, true);
     assert!(
         has(&ops, |o| matches!(o, Op::PkgRemove(_))),
-        "solo il nostro DB → purge consentito"
+        "only our DB: the purge is allowed"
     );
 }
 
@@ -148,10 +148,10 @@ fn already_active_is_left_running() {
 
     assert!(
         !has(&ops, |o| matches!(o, Op::ServiceStop(_))),
-        "un servizio già attivo va lasciato running"
+        "a service already active is left running"
     );
     assert!(
         !has(&ops, |o| matches!(o, Op::ServiceStart(_))),
-        "già attivo: nessuno start"
+        "already active: no start"
     );
 }

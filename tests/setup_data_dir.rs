@@ -68,9 +68,9 @@ fn creates_the_filestore_and_removes_the_topmost_level_it_created() {
     assert_eq!(
         snap.created_root,
         Some(home.path().join(".local")),
-        "niente esisteva: la radice creata da noi è `.local`"
+        "nothing existed: the root we created is `.local`"
     );
-    assert!(snap.db_was_ours, "il DB non era preesistente");
+    assert!(snap.db_was_ours, "the DB was not pre-existing");
 
     step.run(&c).expect("run");
     assert!(
@@ -78,20 +78,20 @@ fn creates_the_filestore_and_removes_the_topmost_level_it_created() {
             user: "odoo".to_string(),
             path: data_dir.clone(),
         }),
-        "il filestore va creato come utente odoo: {:?}",
+        "the filestore is created as the odoo user: {:?}",
         ops_of(&log)
     );
     assert_eq!(
         snapshot_of(&step).prestate,
         PreState::CreatedByUs,
-        "dopo il run la directory è nostra"
+        "after the run the directory is ours"
     );
 
     step.undo(&c).expect("undo");
     assert_eq!(
         removed_paths(&ops_of(&log)),
         vec![home.path().join(".local")],
-        "l'undo rimuove la radice creata da noi, in un colpo"
+        "the undo removes the root we created, in one go"
     );
 }
 
@@ -110,7 +110,7 @@ fn a_preexisting_dot_local_is_not_touched() {
     assert_eq!(
         snapshot_of(&step).created_root,
         Some(home.path().join(".local").join("share")),
-        "il primo livello mancante è `share`, non `.local`"
+        "the first missing level is `share`, not `.local`"
     );
 
     step.run(&c).expect("run");
@@ -120,7 +120,7 @@ fn a_preexisting_dot_local_is_not_touched() {
     assert_eq!(removed, vec![home.path().join(".local").join("share")]);
     assert!(
         !removed.contains(&home.path().join(".local")),
-        "una directory preesistente del cliente non va mai rimossa: {removed:?}"
+        "a customer's pre-existing directory is never removed: {removed:?}"
     );
 }
 
@@ -141,7 +141,7 @@ fn a_preexisting_filestore_is_left_alone_entirely() {
     step.undo(&c).expect("undo");
     assert!(
         ops_of(&log).is_empty(),
-        "filestore preesistente: né creazione né rimozione. Trovato: {:?}",
+        "a pre-existing filestore: neither created nor removed. found: {:?}",
         ops_of(&log)
     );
 }
@@ -164,7 +164,7 @@ fn the_filestore_of_a_preexisting_database_is_never_removed() {
 
     assert!(
         removed_paths(&ops_of(&log)).is_empty(),
-        "il filestore di un DB preesistente non va rimosso: {:?}",
+        "the filestore of a pre-existing DB is not removed: {:?}",
         ops_of(&log)
     );
 }
@@ -195,7 +195,7 @@ fn the_database_verdict_crosses_the_disk_boundary() {
     assert_eq!(
         removed_paths(&ops_of(&log)),
         vec![home.path().join(".local")],
-        "il verdetto sul DB va riletto dallo snapshot, non dedotto dal Context"
+        "the verdict on the DB is re-read from the snapshot, not derived from the Context"
     );
 }
 
@@ -230,7 +230,7 @@ fn a_snapshot_pointing_outside_the_perimeter_removes_nothing() {
 
     assert!(
         removed_paths(&ops_of(&log)).is_empty(),
-        "nessuna rimozione fuori dal perimetro: {:?}",
+        "no removal outside the perimeter: {:?}",
         ops_of(&log)
     );
 }
@@ -257,7 +257,7 @@ fn dry_run_mutates_nothing() {
 
     assert!(
         ops_of(&log).is_empty(),
-        "dry-run: nessuna operazione sul sistema. Trovato: {:?}",
+        "dry run: no operation on the system. found: {:?}",
         ops_of(&log)
     );
 }

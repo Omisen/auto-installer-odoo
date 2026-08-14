@@ -99,8 +99,8 @@ fn esegui<S: Step>(
 }
 
 /// the heart: a step must do **the same things** on both families.
-fn indifferente_alla_famiglia<S: Step>(
-    nome: &str,
+fn family_independent<S: Step>(
+    name: &str,
     costruisci: impl Fn(Box<dyn invok::system_ops::SystemOps>) -> S,
 ) {
     let (ops_debian, snap_debian) = esegui(&costruisci, OsFamily::Debian);
@@ -108,14 +108,14 @@ fn indifferente_alla_famiglia<S: Step>(
 
     assert_eq!(
         ops_debian, ops_fedora,
-        "'{nome}' si comporta diversamente a seconda della famiglia: non deve. \
-         Se questo step ha iniziato a leggere `ctx.os_family`, la protezione che \
-         presidia ha smesso di essere distro-indipendente"
+        "'{name}' behaves differently per family, and it must not. if this step started \
+         reading the family, the protection it guards has stopped being \
+         distribution-independent"
     );
     assert_eq!(
         snap_debian, snap_fedora,
-        "'{nome}' persiste uno snapshot diverso a seconda della famiglia: l'undo \
-         di domani vedrebbe due verità diverse per lo stesso artefatto"
+        "'{name}' persists a different snapshot per family: tomorrow's undo would see two \
+         different truths for the same artifact"
     );
 }
 
@@ -129,50 +129,50 @@ fn the_critical_protections_do_not_depend_on_the_family() {
     use invok::steps::*;
 
     // the database anti-drop: the verdict is the `PreState`.
-    indifferente_alla_famiglia("create-database", |o| {
+    family_independent("create-database", |o| {
         create_database::CreateDatabase::with_ops(o)
     });
     // the init hard stop: a precondition on the shared verdict.
-    indifferente_alla_famiglia("initialize-odoo-database", |o| {
+    family_independent("initialize-odoo-database", |o| {
         initialize_odoo_database::InitializeOdooDatabase::with_ops(o)
     });
     // the `.bashrc` care: pure filesystem, a backup and a single line.
-    indifferente_alla_famiglia("patch-bashrc", patch_bashrc::PatchBashrc::with_ops);
+    family_independent("patch-bashrc", patch_bashrc::PatchBashrc::with_ops);
     // the filestore: a double condition, ours **and** our database.
-    indifferente_alla_famiglia("setup-data-dir", |o| {
+    family_independent("setup-data-dir", |o| {
         setup_data_dir::SetupDataDir::with_ops(o)
     });
 
     // the PostgreSQL role and the rest of the reversible perimeter.
-    indifferente_alla_famiglia("create-db-role", |o| {
+    family_independent("create-db-role", |o| {
         create_db_role::CreateDbRole::with_ops(o)
     });
-    indifferente_alla_famiglia("prepare-opt-root", |o| {
+    family_independent("prepare-opt-root", |o| {
         prepare_opt_root::PrepareOptRoot::with_ops(o)
     });
-    indifferente_alla_famiglia("create-odoo-user", |o| {
+    family_independent("create-odoo-user", |o| {
         create_odoo_user::CreateOdooUser::with_ops(o)
     });
-    indifferente_alla_famiglia("setup-cache-dir", |o| {
+    family_independent("setup-cache-dir", |o| {
         setup_cache_dir::SetupCacheDir::with_ops(o)
     });
-    indifferente_alla_famiglia("setup-log-dir", setup_log_dir::SetupLogDir::with_ops);
-    indifferente_alla_famiglia("clone-odoo-repo", |o| {
+    family_independent("setup-log-dir", setup_log_dir::SetupLogDir::with_ops);
+    family_independent("clone-odoo-repo", |o| {
         clone_odoo_repo::CloneOdooRepo::with_ops(o)
     });
-    indifferente_alla_famiglia("create-virtualenv", |o| {
+    family_independent("create-virtualenv", |o| {
         create_virtualenv::CreateVirtualenv::with_ops(o)
     });
-    indifferente_alla_famiglia("install-python-requirements", |o| {
+    family_independent("install-python-requirements", |o| {
         install_python_requirements::InstallPythonRequirements::with_ops(o)
     });
-    indifferente_alla_famiglia("generate-config", |o| {
+    family_independent("generate-config", |o| {
         generate_config::GenerateConfig::with_ops(o)
     });
-    indifferente_alla_famiglia("setup-systemd", |o| {
+    family_independent("setup-systemd", |o| {
         setup_systemd::SetupSystemd::with_ops(o)
     });
-    indifferente_alla_famiglia("write-control-script", |o| {
+    family_independent("write-control-script", |o| {
         write_control_script::WriteControlScript::with_ops(o)
     });
 }
@@ -197,24 +197,24 @@ fn the_packaging_steps_do_depend_on_the_family() {
 
     assert_ne!(
         ops_debian, ops_fedora,
-        "install-system-dependencies deve installare pacchetti DIVERSI sulle due \
-         famiglie: se sono uguali, la famiglia non è arrivata fino al catalogo"
+        "install-system-dependencies must install DIFFERENT packages on the two \
+         families: if they match, the family never reached the catalogue"
     );
 
     let reso = |ops: &[String]| ops.join(" ");
 
     assert!(
         reso(&ops_debian).contains("build-essential"),
-        "su Debian il compilatore arriva col metapacchetto"
+        "on one family the compiler arrives with the metapackage"
     );
     assert!(
         reso(&ops_fedora).contains("gcc-c++"),
-        "su Fedora servono i nomi espliciti: build-essential non esiste"
+        "on the other the explicit names are needed: the metapackage does not exist"
     );
     assert!(
         !reso(&ops_fedora).contains("build-essential"),
-        "un nome Debian nella lista Fedora bloccherebbe l'installazione nello \
-         snapshot — che è il comportamento giusto, ma qui vuol dire lista non tradotta"
+        "a name from one catalogue in the other would stop the installation in the \
+         snapshot — the right behaviour, but here it means an untranslated list"
     );
 }
 
@@ -230,12 +230,12 @@ fn the_fedora_delta_has_no_duplicates() {
     );
 
     // the packages handed to the install, taken from the rendered operation.
-    let riga = ops
+    let line = ops
         .iter()
         .find(|o| o.starts_with("PkgInstall"))
         .cloned()
         .unwrap_or_default();
-    let installati: Vec<String> = riga
+    let installati: Vec<String> = line
         .trim_start_matches("PkgInstall([")
         .trim_end_matches("])")
         .split(", ")
@@ -243,12 +243,12 @@ fn the_fedora_delta_has_no_duplicates() {
         .filter(|n| !n.is_empty())
         .collect();
 
-    let mut visti = std::collections::HashSet::new();
-    let doppi: Vec<&String> = installati.iter().filter(|n| !visti.insert(*n)).collect();
+    let mut seen = std::collections::HashSet::new();
+    let duplicates: Vec<&String> = installati.iter().filter(|n| !seen.insert(*n)).collect();
 
     assert!(
-        doppi.is_empty(),
-        "sulla famiglia Fedora più bisogni cadono sullo stesso pacchetto \
-         (i due jpeg): il delta deve elencarlo una volta sola, trovati {doppi:?}"
+        duplicates.is_empty(),
+        "on that family several needs fall on the same package (the two jpeg ones): \
+         the delta must list it once only, found {duplicates:?}"
     );
 }

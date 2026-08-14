@@ -63,7 +63,7 @@ fn reporter_notified_on_failure_and_rollback() {
         .iter()
         .position(|e| e == "undo:alpha")
         .expect("undo alpha");
-    assert!(ub < ua, "undo in ordine inverso");
+    assert!(ub < ua, "undos in reverse order");
 }
 
 #[test]
@@ -101,7 +101,7 @@ fn dry_run_plan_does_not_mutate() {
     // no mutation at all: the operations log is empty.
     assert!(
         ops_of(&log).is_empty(),
-        "dry-run non deve mutare, trovato: {:?}",
+        "a dry run must not mutate, found: {:?}",
         ops_of(&log)
     );
     // the plan lists the step.
@@ -129,6 +129,6 @@ fn dry_run_execute_persists_nothing() {
 
     assert!(
         !state_path.exists(),
-        "in dry-run lo stato non deve essere persistito"
+        "in a dry run the state must not be persisted"
     );
 }

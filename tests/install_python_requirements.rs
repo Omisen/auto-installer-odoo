@@ -65,7 +65,7 @@ fn undo_is_noop_pip_removal_belongs_to_venv() {
     let after_undo = ops_of(&log).len();
 
     // the undo executes NOTHING: no uninstall, no removal.
-    assert_eq!(after_run, after_undo, "9c.undo deve essere no-op");
+    assert_eq!(after_run, after_undo, "9c.undo must be a no-op");
     assert!(!ops_of(&log)
         .iter()
         .any(|o| matches!(o, Op::RemoveDirAll(_))));
@@ -85,7 +85,7 @@ fn gevent_cython_workaround_sequence() {
     step.run(&c).expect("run");
 
     let calls = pip_calls(&ops_of(&log));
-    assert_eq!(calls.len(), 4, "quattro passaggi pip attesi");
+    assert_eq!(calls.len(), 4, "four pip steps were expected");
 
     // upgrade pip, wheel and setuptools.
     assert!(calls[0].contains(&"--upgrade".to_string()) && calls[0].contains(&"pip".to_string()));
@@ -120,7 +120,7 @@ fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
     let calls = pip_calls(&ops_of(&log));
     assert!(
         calls[0].contains(&"setuptools".to_string()),
-        "il bootstrap del venv deve installare setuptools: {:?}",
+        "the venv bootstrap must install setuptools: {:?}",
         calls[0]
     );
 
@@ -128,10 +128,10 @@ fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
     let no_isolation = calls
         .iter()
         .position(|c| c.contains(&"--no-build-isolation".to_string()))
-        .expect("il passo gevent senza isolamento deve esistere");
+        .expect("the gevent step without isolation must exist");
     assert!(
         no_isolation > 0,
-        "setuptools va seminato prima del build senza isolamento: {calls:?}"
+        "setuptools must be seeded before the build without isolation: {calls:?}"
     );
 }
 
@@ -152,17 +152,17 @@ fn every_pip_call_caches_inside_our_perimeter() {
     step.run(&c).expect("run");
 
     let calls = pip_calls(&ops_of(&log));
-    assert!(!calls.is_empty(), "il run deve invocare pip");
+    assert!(!calls.is_empty(), "the run must invoke pip");
     let expected = "/opt/odoo/odoo18/sandbox/.pip-cache".to_string();
     for (i, call) in calls.iter().enumerate() {
         let pos = call
             .iter()
             .position(|a| a == "--cache-dir")
-            .unwrap_or_else(|| panic!("la chiamata pip #{i} deve passare --cache-dir: {call:?}"));
+            .unwrap_or_else(|| panic!("pip call #{i} must pass --cache-dir: {call:?}"));
         assert_eq!(
             call.get(pos + 1),
             Some(&expected),
-            "la cache di pip #{i} deve stare dentro il venv, non nella home di odoo"
+            "pip cache #{i} must live inside the venv, not in the odoo home"
         );
     }
 }
@@ -178,10 +178,13 @@ fn missing_requirements_is_error() {
     let c = ctx();
 
     step.snapshot(&c).expect("snapshot");
-    assert!(step.run(&c).is_err(), "requirements.txt mancante → errore");
+    assert!(
+        step.run(&c).is_err(),
+        "a missing requirements file is an error"
+    );
     assert!(
         pip_calls(&ops_of(&log)).is_empty(),
-        "nessuna install se manca requirements"
+        "no install when the requirements file is missing"
     );
 }
 
@@ -201,15 +204,15 @@ fn every_pinned_version_survives_with_its_marker() {
     for version in ["21.8.0", "22.10.2", "24.2.1", "24.11.1"] {
         assert!(
             lines.contains(&format!("gevent=={version}")),
-            "manca gevent=={version}: pip non può più scegliere. Prodotto:\n{lines}"
+            "gevent=={version} is missing: pip can no longer choose. produced:\n{lines}"
         );
     }
     for version in ["1.1.2", "2.0.2", "3.0.3"] {
         assert!(
             lines.contains(&format!("greenlet=={version}")),
-            "manca greenlet=={version}: pip risolverebbe una versione qualunque \
-             compatibile con la metadata di gevent, ed è così che greenlet 1.1.x \
-             è finito a compilare contro Python 3.12. Prodotto:\n{lines}"
+            "greenlet=={version} is missing: pip would resolve any version compatible with \
+             gevent's metadata, which is how an old greenlet ended up compiling against a \
+             newer Python. produced:\n{lines}"
         );
     }
 
@@ -218,7 +221,7 @@ fn every_pinned_version_survives_with_its_marker() {
     for line in lines.lines().filter(|l| !l.trim().is_empty()) {
         assert!(
             line.contains("python_version"),
-            "riga senza marker d'ambiente, pip non saprebbe quale scegliere: {line}"
+            "a line without an environment marker: pip would not know which to pick: {line}"
         );
     }
 }
@@ -229,7 +232,7 @@ fn the_complement_keeps_everything_else_and_nothing_of_the_stack() {
     assert!(
         !filtered.to_lowercase().contains("gevent")
             && !filtered.to_lowercase().contains("greenlet"),
-        "il passo 4 non deve reinstallare ciò che il passo 3 ha già messo: {filtered}"
+        "step 4 must not reinstall what step 3 already placed: {filtered}"
     );
     assert!(filtered.contains("psycopg2==2.9.9"));
     assert!(filtered.contains("Babel==2.9.1"));
@@ -244,7 +247,7 @@ fn a_similarly_named_package_is_not_mistaken_for_the_stack() {
     assert!(lines.contains("gevent==24.2.1"));
     assert!(
         !lines.contains("gevent-websocket") && !lines.contains("greenlet-stubs"),
-        "catturati pacchetti con nome simile: {lines}"
+        "packages with a similar name were captured: {lines}"
     );
     assert!(filter_out_gevent_stack(requirements).contains("gevent-websocket==0.10.1"));
 }
@@ -265,10 +268,10 @@ fn requirements_without_gevent_produce_no_dedicated_step() {
     step.run(&c).expect("run");
 
     let calls = pip_calls(&ops_of(&log));
-    assert_eq!(calls.len(), 3, "atteso nessun passo gevent: {calls:?}");
+    assert_eq!(calls.len(), 3, "no gevent step was expected: {calls:?}");
     assert!(
         gevent_stack_lines("pytz\nBabel==2.9.1\n").is_empty(),
-        "senza gevent la selezione è vuota, non un default inventato"
+        "without gevent the selection is empty, not an invented default"
     );
 }
 
@@ -291,15 +294,15 @@ fn pip_receives_a_file_never_a_hand_picked_version() {
     let gevent_call = &calls[2];
     assert!(
         gevent_call.contains(&"--requirement".to_string()),
-        "il passo gevent deve passare un file, così pip valuta i marker: {gevent_call:?}"
+        "the gevent step must pass a file, so pip evaluates the markers: {gevent_call:?}"
     );
     assert!(
         !gevent_call.iter().any(|a| a.starts_with("gevent==")),
-        "nessuna versione scelta da noi su argv: {gevent_call:?}"
+        "no version chosen by us on argv: {gevent_call:?}"
     );
     assert!(
         gevent_call.contains(&"--no-build-isolation".to_string()),
-        "il workaround Cython<3 resta: su Jammy gevent 21.8.0 non ha wheel"
+        "the Cython<3 workaround stays: on that release the pinned gevent has no wheel"
     );
 }
 
@@ -336,34 +339,34 @@ fn requirements_are_written_inside_the_venv_not_in_a_shared_temp_dir() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    let creati = created_private_files(&ops_of(&log));
+    let created = created_private_files(&ops_of(&log));
     assert_eq!(
-        creati.len(),
+        created.len(),
         2,
-        "attesi i due file di requirements (gevent + filtrato): {creati:?}"
+        "the two requirements files were expected (gevent and filtered): {created:?}"
     );
 
     let venv = c.install_dir.join("sandbox");
-    for path in &creati {
+    for path in &created {
         assert!(
             path.starts_with(&venv),
-            "{} deve nascere dentro il venv, non altrove: in /tmp sarebbe sostituibile \
-             da un utente locale prima che pip lo legga (A-V3-3)",
+            "{} must be born inside the venv and nowhere else: in a world-writable directory \
+             a local user could replace it before pip reads it (A-V3-3)",
             path.display()
         );
-        let nome = path
+        let name = path
             .file_name()
-            .expect("nome")
+            .expect("name")
             .to_string_lossy()
             .into_owned();
         assert!(
-            nome.starts_with('.') && nome.ends_with(".tmp"),
-            "nome non imprevedibile: {nome}"
+            name.starts_with('.') && name.ends_with(".tmp"),
+            "the name is not unpredictable: {name}"
         );
     }
     assert_ne!(
-        creati[0], creati[1],
-        "due file distinti, non lo stesso path"
+        created[0], created[1],
+        "two distinct files, not the same path"
     );
 }
 
@@ -390,7 +393,7 @@ fn each_requirements_file_is_handed_over_to_the_odoo_user() {
                 Op::ChownNamed { path: p, owner, group }
                     if *p == path && owner == "odoo" && group == "odoo"
             )),
-            "{} non viene consegnato a odoo: pip non potrebbe leggerlo",
+            "{} is not handed to the odoo user: pip could not read it",
             path.display()
         );
     }
@@ -417,7 +420,7 @@ fn requirements_files_are_removed_after_use() {
         assert!(
             ops.iter()
                 .any(|o| matches!(o, Op::RemoveFile(p) if *p == path)),
-            "{} non viene rimosso dopo l'uso",
+            "{} is not removed after use",
             path.display()
         );
     }
@@ -450,24 +453,24 @@ fn a_gevent_failure_on_a_newer_python_says_why() {
     step.snapshot(&c).expect("snapshot");
     let err = step
         .run(&c)
-        .expect_err("il passo gevent è fallito")
+        .expect_err("the gevent step failed")
         .to_string();
 
     assert!(
         err.contains("3.14"),
-        "la diagnosi non dice quale Python c'è sotto: {err}"
+        "the diagnosis does not say which Python is underneath: {err}"
     );
     assert!(
         err.contains("3.13"),
-        "la diagnosi non dice fin dove arriviamo, quindi non si sa di quanto si è avanti: {err}"
+        "the diagnosis does not say how far we get, so there is no telling how far ahead we are: {err}"
     );
     assert!(
         err.contains("gevent==24.11.1"),
-        "la diagnosi non mostra i pin che Odoo dichiara: {err}"
+        "the diagnosis does not show the pins Odoo declares: {err}"
     );
     assert!(
         err.contains("Building wheel for gevent"),
-        "l'errore originale è sparito: spiegare non è nascondere la prova: {err}"
+        "the original error is gone: explaining is not hiding the evidence: {err}"
     );
 }
 
@@ -491,16 +494,16 @@ fn on_a_covered_python_the_pip_error_is_left_alone() {
     step.snapshot(&c).expect("snapshot");
     let err = step
         .run(&c)
-        .expect_err("il passo gevent è fallito")
+        .expect_err("the gevent step failed")
         .to_string();
 
     assert!(
         err.contains("Building wheel for gevent"),
-        "l'errore di pip deve restare quello che è: {err}"
+        "pip's error must stay what it is: {err}"
     );
     assert!(
-        !err.contains("più recente di Python"),
-        "su un Python coperto la diagnosi di A-MD-7 non c'entra nulla: {err}"
+        !err.contains("newer than Python"),
+        "on a covered Python A-MD-7's diagnosis is beside the point: {err}"
     );
 }
 
@@ -523,11 +526,11 @@ fn an_unknown_interpreter_does_not_become_a_guess() {
     step.snapshot(&c).expect("snapshot");
     let err = step
         .run(&c)
-        .expect_err("il passo gevent è fallito")
+        .expect_err("the gevent step failed")
         .to_string();
 
     assert!(
-        !err.contains("più recente di Python"),
-        "senza sapere la versione non si può affermare che sia troppo nuova: {err}"
+        !err.contains("newer than Python"),
+        "without knowing the version there is no claiming it is too new: {err}"
     );
 }

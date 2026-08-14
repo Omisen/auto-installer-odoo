@@ -62,15 +62,15 @@ fn all_absent_installs_then_undo_in_order() {
         .rposition(|o| matches!(o, Op::DaemonReload))
         .expect("reload");
 
-    assert!(stop < disable, "stop prima di disable");
-    assert!(disable < rm, "disable prima di rm");
+    assert!(stop < disable, "stop before disable");
+    assert!(disable < rm, "disable before removal");
     assert!(rm < reload, "rm prima del daemon-reload finale");
 }
 
 #[test]
 fn d4_active_already_running_not_stopped() {
     let cfg = MockConfig {
-        service_active: true, // già attivo (Preexisting)
+        service_active: true, // already active (Preexisting)
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
@@ -87,14 +87,14 @@ fn d4_active_already_running_not_stopped() {
     assert!(has(&ops, |o| matches!(o, Op::ServiceRestart(_))));
     assert!(
         !has(&ops, |o| matches!(o, Op::ServiceStop(_))),
-        "un servizio già attivo va lasciato running"
+        "a service already active is left running"
     );
 }
 
 #[test]
 fn d4_enabled_already_enabled_not_disabled() {
     let cfg = MockConfig {
-        service_enabled: true, // già enabled (Preexisting)
+        service_enabled: true, // already enabled (Preexisting)
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
@@ -108,11 +108,11 @@ fn d4_enabled_already_enabled_not_disabled() {
     let ops = ops_of(&log);
     assert!(
         !has(&ops, |o| matches!(o, Op::ServiceEnable(_))),
-        "già enabled: nessun enable"
+        "already enabled: no enable"
     );
     assert!(
         !has(&ops, |o| matches!(o, Op::ServiceDisable(_))),
-        "già enabled: nessun disable in undo (D4)"
+        "already enabled: no disable in the undo (D4)"
     );
 }
 
@@ -129,7 +129,7 @@ fn start_failure_is_error() {
     step.snapshot(&c).expect("snapshot");
     assert!(
         step.run(&c).is_err(),
-        "se il servizio non parte, il run deve fallire"
+        "if the service does not start, the run must fail"
     );
 }
 
@@ -172,7 +172,7 @@ fn the_unit_makes_no_hollow_hardening_promises() {
         .collect();
     assert!(
         !attive.iter().any(|l| l.starts_with("PermissionsStartOnly")),
-        "direttiva deprecata e ignorata da systemd: non deve essere attiva"
+        "a directive deprecated and ignored by systemd: it must not be active"
     );
 
     // the directives that actually move the needle for a network-facing
@@ -192,14 +192,14 @@ fn the_unit_makes_no_hollow_hardening_promises() {
 
     // AF_UNIX is not optional: it is PostgreSQL's socket. without it the
     // service starts and cannot reach the database.
-    let famiglie = attive
+    let families = attive
         .iter()
         .find(|l| l.starts_with("RestrictAddressFamilies="))
         .expect("RestrictAddressFamilies presente");
-    for famiglia in ["AF_UNIX", "AF_INET", "AF_INET6"] {
+    for family in ["AF_UNIX", "AF_INET", "AF_INET6"] {
         assert!(
-            famiglie.contains(famiglia),
-            "manca {famiglia} in: {famiglie}"
+            families.contains(family),
+            "{family} is missing from: {families}"
         );
     }
 
@@ -207,6 +207,6 @@ fn the_unit_makes_no_hollow_hardening_promises() {
     // list, and getting one wrong breaks the service on a customer machine.
     assert!(
         !attive.iter().any(|l| l.starts_with("ProtectSystem=strict")),
-        "ProtectSystem=strict senza ReadWritePaths impedirebbe a Odoo di scrivere"
+        "ProtectSystem=strict without ReadWritePaths would stop Odoo writing"
     );
 }

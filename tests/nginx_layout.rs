@@ -54,12 +54,12 @@ fn the_vhost_goes_where_its_family_looks_for_it() {
     assert_eq!(
         Debian::new().nginx_layout().vhost_path("18"),
         std::path::PathBuf::from("/etc/nginx/sites-available/odoo18"),
-        "su Debian `sites-enabled/*` include qualunque file: nessuna estensione"
+        "on one family the glob loads any file: no extension needed"
     );
     assert_eq!(
         Fedora::new().nginx_layout().vhost_path("18"),
         std::path::PathBuf::from("/etc/nginx/conf.d/odoo18.conf"),
-        "su Fedora senza `.conf` il file non viene caricato affatto"
+        "there, without the extension the file is not loaded at all"
     );
 }
 
@@ -78,11 +78,11 @@ fn a_missing_concept_is_none_not_a_made_up_path() {
     let fedora = Fedora::new().nginx_layout();
     assert_eq!(
         fedora.enabled_dir, None,
-        "su Fedora `sites-enabled` non ha un altro nome: non c'è"
+        "on the other the enabled directory has no other name: it does not exist"
     );
     assert_eq!(
         fedora.default_site, None,
-        "il server di default vive dentro nginx.conf, non in un file a sé"
+        "the default server lives inside the main configuration, not in a file of its own"
     );
     assert_eq!(fedora.enabled_link("18"), None);
 }
@@ -94,14 +94,14 @@ fn a_missing_concept_is_none_not_a_made_up_path() {
 /// **layout** is checked not to reopen it.
 #[test]
 fn the_backup_never_lands_where_nginx_globs() {
-    for (nome, layout) in [
+    for (name, layout) in [
         ("debian", Debian::new().nginx_layout()),
         ("fedora", Fedora::new().nginx_layout()),
     ] {
         if let Some(enabled) = &layout.enabled_dir {
             assert_ne!(
                 &layout.default_site_backup_dir, enabled,
-                "{nome}: il backup finirebbe nella directory che nginx include con un glob"
+                "{name}: the backup would land in the directory nginx globs"
             );
         }
     }
@@ -130,13 +130,13 @@ fn on_debian_the_site_is_enabled_with_a_symlink() {
             .iter()
             .any(|op| matches!(op, Op::CreateSymlink { link, .. }
             if link.to_string_lossy().contains("sites-enabled/odoo18"))),
-        "il symlink in sites-enabled è ciò che abilita il sito: {ops_log:?}"
+        "the symlink in the enabled directory is what enables the site: {ops_log:?}"
     );
     assert!(
         ops_log
             .iter()
             .any(|op| matches!(op, Op::RemoveSymlink(p) if p.ends_with("default"))),
-        "il default site va tolto di mezzo per liberare la porta 80: {ops_log:?}"
+        "the default site is moved out of the way to free port 80: {ops_log:?}"
     );
 }
 
@@ -157,7 +157,7 @@ fn on_fedora_writing_the_vhost_is_already_enabling_it() {
         !ops_log
             .iter()
             .any(|op| matches!(op, Op::CreateSymlink { .. })),
-        "nessun symlink da creare su questa famiglia: {ops_log:?}"
+        "no symlink to create on this family: {ops_log:?}"
     );
     assert_eq!(
         serde_json::from_value::<serde_json::Value>(step.snapshot_value())
@@ -165,7 +165,7 @@ fn on_fedora_writing_the_vhost_is_already_enabling_it() {
             .get("link")
             .and_then(|v| serde_json::from_value::<PreState>(v.clone()).ok()),
         Some(PreState::Untracked),
-        "niente creato = niente da annullare"
+        "nothing created means nothing to undo"
     );
 }
 
@@ -196,8 +196,8 @@ fn on_fedora_the_default_server_is_never_touched() {
         !ops_log
             .iter()
             .any(|op| matches!(op, Op::RemoveSymlink(_) | Op::MoveFile { .. })),
-        "il server di default sta dentro nginx.conf: non lo rimuoviamo e non lo \
-         spostiamo. Trovato: {ops_log:?}"
+        "the default server lives inside the main configuration: we neither remove nor \
+         move it. found: {ops_log:?}"
     );
 }
 
@@ -205,7 +205,7 @@ fn on_fedora_the_default_server_is_never_touched() {
 /// constant.
 #[test]
 fn the_vhost_step_writes_where_the_layout_says() {
-    for (family, atteso) in [
+    for (family, expected) in [
         (OsFamily::Debian, "/etc/nginx/sites-available/odoo18"),
         (OsFamily::Fedora, "/etc/nginx/conf.d/odoo18.conf"),
     ] {
@@ -219,9 +219,9 @@ fn the_vhost_step_writes_where_the_layout_says() {
         let ops_log = ops_of(&log);
         assert!(
             ops_log.iter().any(
-                |op| matches!(op, Op::MoveFile { dst, .. } if dst.to_string_lossy() == atteso)
+                |op| matches!(op, Op::MoveFile { dst, .. } if dst.to_string_lossy() == expected)
             ),
-            "{family}: il vhost deve finire in {atteso}, trovato {ops_log:?}"
+            "{family}: the vhost must land in {expected}, found {ops_log:?}"
         );
     }
 }
@@ -234,8 +234,8 @@ fn the_vhost_content_does_not_depend_on_the_family() {
     assert_eq!(
         reso(OsFamily::Debian),
         reso(OsFamily::Fedora),
-        "il proxy verso 127.0.0.1:8069 è identico ovunque: se un giorno divergesse, \
-         sarebbe per una ragione da scrivere, non per inerzia"
+        "the proxy to the local port is identical everywhere: if it ever diverged it \
+         would be for a reason worth writing down, not out of inertia"
     );
 }
 
@@ -268,7 +268,7 @@ fn on_fedora_the_proxy_boolean_is_turned_on() {
             |op| matches!(op, Op::SetSelinuxBoolean { boolean, value: true }
             if boolean == "httpd_can_network_connect")
         ),
-        "senza questo boolean il proxy risponde 502: {:?}",
+        "without this boolean the proxy answers 502: {:?}",
         ops_of(&log)
     );
     assert_eq!(
@@ -293,7 +293,7 @@ fn on_debian_selinux_is_left_alone() {
         !ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::SetSelinuxBoolean { .. })),
-        "questa famiglia non ha SELinux: niente da accendere e niente da spegnere"
+        "this family has no SELinux: nothing to turn on and nothing to turn off"
     );
 }
 
@@ -313,7 +313,7 @@ fn a_boolean_that_was_already_on_is_never_turned_off() {
     assert_eq!(
         serde_json::from_value::<PreState>(step.snapshot_value()).expect("prestate"),
         PreState::Preexisting,
-        "era acceso prima di noi"
+        "it was on before us"
     );
 
     step.run(&c).expect("run");
@@ -323,7 +323,7 @@ fn a_boolean_that_was_already_on_is_never_turned_off() {
         !ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::SetSelinuxBoolean { .. })),
-        "né acceso né spento: non è nostro da toccare"
+        "neither on nor off: not ours to touch"
     );
 }
 
@@ -342,8 +342,8 @@ fn what_we_turned_on_we_turn_off() {
         ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::SetSelinuxBoolean { value: false, .. })),
-        "il boolean acceso da noi va rimesso com'era: è una politica di sicurezza \
-         persistente, non un'impostazione di sessione"
+        "the boolean we turned on goes back as it was: it is a persistent security \
+         policy, not a session setting"
     );
 }
 
@@ -368,7 +368,7 @@ fn an_unreadable_policy_is_not_a_policy_to_write() {
         !ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::SetSelinuxBoolean { .. })),
-        "SELinux non interrogabile: nel dubbio non si muta la politica"
+        "SELinux cannot be queried: in doubt the policy is not mutated"
     );
 }
 
@@ -389,20 +389,20 @@ fn the_boolean_is_the_one_the_kernel_actually_denies() {
 
     let selinux = Fedora::new()
         .selinux()
-        .expect("su Fedora SELinux è in uso")
+        .expect("on this family SELinux is in use")
         .nginx_proxy_boolean()
         .to_string();
     assert_eq!(
         selinux, "httpd_can_network_connect",
-        "è il boolean che governa `name_connect` verso una porta locale, che è \
-         esattamente ciò che ausearch mostra negato. `httpd_can_network_relay` \
-         riguarda il proxy verso host remoti e non sbloccherebbe nulla"
+        "this is the boolean governing `name_connect` to a local port, exactly what the \
+         audit log shows denied. the other one covers proxying to remote hosts and \
+         would unblock nothing"
     );
 
     assert!(
         Debian::new().selinux().is_none(),
-        "su questa famiglia SELinux non è in uso: il trait non è implementato, \
-         così non resta nessun ramo che non possa eseguire"
+        "on this family SELinux is not in use: the trait is not implemented, so no branch \
+         is left that cannot run"
     );
 }
 

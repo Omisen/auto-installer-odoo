@@ -40,12 +40,12 @@ const KNOWN_KEYS: &[&str] = &[
 ];
 
 fn resolve_ci_env() -> ResolvedConfig {
-    let raw = config::parse_env_file(Path::new(CI_ENV)).expect("configs/ci.env deve esistere");
+    let raw = config::parse_env_file(Path::new(CI_ENV)).expect("configs/ci.env must exist");
     let empty = config::RawConfig::default();
     // non-interactive, the way CI runs it. the flag matters: there the weak
     // default password is a hard stop.
     ResolvedConfig::resolve(&empty, &raw, &empty, false)
-        .expect("configs/ci.env deve risolvere senza intervento interattivo")
+        .expect("configs/ci.env must resolve without any interactive input")
 }
 
 #[test]
@@ -56,7 +56,7 @@ fn every_key_in_ci_env_is_understood_by_the_parser() {
 }
 
 fn assert_keys_are_known(file: &str) {
-    let content = std::fs::read_to_string(file).unwrap_or_else(|_| panic!("{file} deve esistere"));
+    let content = std::fs::read_to_string(file).unwrap_or_else(|_| panic!("{file} must exist"));
     for (lineno, line) in content.lines().enumerate() {
         let line = line.trim();
         if line.is_empty() || line.starts_with('#') {
@@ -67,12 +67,12 @@ fn assert_keys_are_known(file: &str) {
             .unwrap_or(line)
             .split_once('=')
             .map(|(k, _)| k.trim())
-            .unwrap_or_else(|| panic!("riga {} senza '=': {line}", lineno + 1));
+            .unwrap_or_else(|| panic!("line {} without '=': {line}", lineno + 1));
         assert!(
             KNOWN_KEYS.contains(&key),
-            "{file} riga {}: la chiave '{key}' non è riconosciuta dal parser .env. \
-             Verrebbe ignorata con un warning e l'installer userebbe il default, \
-             falsando il test di integrazione.",
+            "{file} line {}: key '{key}' is not recognised by the .env parser. it would be \
+             ignored with a warning and the installer would use the default, \
+             falsifying the integration test.",
             lineno + 1
         );
     }
@@ -99,12 +99,12 @@ fn the_nginx_ci_config_differs_only_by_nginx() {
     assert_eq!(
         base.with_nginx,
         Some(false),
-        "la config base resta senza nginx"
+        "the base config stays without nginx"
     );
     assert_eq!(
         con_nginx.with_nginx,
         Some(true),
-        "è l'unica ragione per cui questo file esiste"
+        "that is the only reason this file exists"
     );
 }
 
@@ -129,8 +129,8 @@ fn ci_env_resolves_to_what_the_integration_script_expects() {
     assert_eq!(cfg.db_name, "citest");
     assert_ne!(
         cfg.db_name, "odoo",
-        "il db_name della CI deve differire dal default, altrimenti il test non \
-         distingue 'il rollback ha usato la config persistita' da 'ha indovinato'"
+        "the CI's db_name must differ from the default, or the test cannot tell \
+         'the rollback used the persisted config' from 'it guessed'"
     );
 
     assert_eq!(cfg.version, "18.0");
@@ -138,14 +138,14 @@ fn ci_env_resolves_to_what_the_integration_script_expects() {
     assert_eq!(cfg.odoo_user, "odoo");
     assert_eq!(cfg.db_user, "odoo");
     assert_eq!(cfg.port, 8069);
-    assert!(!cfg.with_nginx, "la sonda di CI non configura Nginx");
+    assert!(!cfg.with_nginx, "the CI probe does not configure nginx");
     assert!(
         cfg.odoo_logfile.is_none(),
-        "ODOO_LOGFILE vuoto = log su journal: nessuna log dir da verificare"
+        "an empty ODOO_LOGFILE means logging to the journal: no log dir to check"
     );
     assert!(
         cfg.db_password.is_empty(),
-        "password vuota = autenticazione peer, il percorso che vogliamo esercitare"
+        "an empty password means peer authentication, the path we want to exercise"
     );
 }
 
@@ -159,8 +159,7 @@ fn the_ci_admin_password_is_not_the_weak_default() {
     assert_ne!(
         cfg.admin_passwd.expose(),
         "admin",
-        "una password 'admin' fa fallire l'installazione non interattiva prima \
-         di qualsiasi step"
+        "an 'admin' password fails a non-interactive installation before any step"
     );
 }
 
@@ -182,8 +181,8 @@ fn the_integration_script_and_ci_env_agree_on_the_artifacts() {
         let needle = format!("{var}:-{expected}}}");
         assert!(
             script.contains(&needle),
-            "lo script di integrazione deve avere `${{{var}:-{expected}}}` per \
-             combaciare con configs/ci.env (atteso il frammento `{needle}`)"
+            "the integration script must carry `${{{var}:-{expected}}}` to match \
+             configs/ci.env (the expected fragment is `{needle}`)"
         );
     }
 }
@@ -191,10 +190,10 @@ fn the_integration_script_and_ci_env_agree_on_the_artifacts() {
 #[test]
 fn the_integration_script_is_executable_and_syntactically_valid() {
     use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(CI_SCRIPT).expect("lo script deve esistere");
+    let meta = std::fs::metadata(CI_SCRIPT).expect("the script must exist");
     assert!(
         meta.permissions().mode() & 0o111 != 0,
-        "lo script di integrazione deve avere il bit di esecuzione"
+        "the integration script must carry the execute bit"
     );
 
     // a syntax-only check runs nothing. a broken script would otherwise surface
@@ -202,8 +201,8 @@ fn the_integration_script_is_executable_and_syntactically_valid() {
     let status = std::process::Command::new("bash")
         .args(["-n", CI_SCRIPT])
         .status()
-        .expect("bash deve essere disponibile");
-    assert!(status.success(), "sintassi non valida in {CI_SCRIPT}");
+        .expect("bash must be available");
+    assert!(status.success(), "invalid syntax in {CI_SCRIPT}");
 }
 
 // --- A5.3: the "newest tested release" constants follow the real CI ---------
@@ -221,28 +220,28 @@ const WORKFLOW: &str = ".github/workflows/integration.yml";
 fn the_newest_tested_releases_match_the_ci_matrix() {
     use invok::checks::{NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_UBUNTU};
 
-    let wf = std::fs::read_to_string(WORKFLOW).expect("il workflow di integrazione deve esistere");
+    let wf = std::fs::read_to_string(WORKFLOW).expect("the integration workflow must exist");
 
     // the matrix entries plus the individual jobs' runners, which do not go
     // through it.
     let ubuntu_max = versions_in(&wf, "ubuntu-")
         .into_iter()
         .max()
-        .expect("la CI deve girare su almeno una Ubuntu");
+        .expect("the CI must run on at least one Ubuntu");
     assert_eq!(
         ubuntu_max, NEWEST_TESTED_UBUNTU,
-        "la CI gira su Ubuntu {ubuntu_max:?} ma la costante dice {NEWEST_TESTED_UBUNTU:?}: \
-         l'avviso su release non testate direbbe il falso"
+        "the CI runs on Ubuntu {ubuntu_max:?} while the constant says \
+         {NEWEST_TESTED_UBUNTU:?}: the untested-release warning would lie"
     );
 
     // the container images.
     let debian_max = versions_in(&wf, "debian:")
         .into_iter()
         .max()
-        .expect("la CI deve girare su almeno una Debian");
+        .expect("the CI must run on at least one Debian");
     assert_eq!(
         debian_max, NEWEST_TESTED_DEBIAN,
-        "la CI gira su Debian {debian_max:?} ma la costante dice {NEWEST_TESTED_DEBIAN:?}"
+        "the CI runs on Debian {debian_max:?} while the constant says {NEWEST_TESTED_DEBIAN:?}"
     );
 
     // here the matrix says TWO different things: blocking entries, where a red
@@ -252,26 +251,26 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
     // the constant must follow the blocking entries only: the warning promises
     // "releases the installer is tested on", and a release whose failure stops
     // nobody is observed, not tested.
-    let fedora_bloccanti = versions_in(&senza_sonde(&wf), "fedora:");
-    let fedora_max = fedora_bloccanti
+    let fedora_blocking = versions_in(&without_probes(&wf), "fedora:");
+    let fedora_max = fedora_blocking
         .into_iter()
         .max()
-        .expect("la CI deve girare su almeno una Fedora bloccante");
+        .expect("the CI must run on at least one blocking Fedora");
     assert_eq!(
         fedora_max, NEWEST_TESTED_FEDORA,
-        "la CI gira su Fedora {fedora_max:?} ma la costante dice {NEWEST_TESTED_FEDORA:?}"
+        "the CI runs on Fedora {fedora_max:?} while the constant says {NEWEST_TESTED_FEDORA:?}"
     );
 
     // and the marker must not become a way to silence the guard: a probe only
     // makes sense on a release NEWER than the tested ones. marking a blocking
     // entry as a probe would remove it from the comparison above with nothing
     // to say so — the same defect this test exists to prevent, one level up.
-    for sonda in versions_in(&sole_sonde(&wf), "fedora:") {
+    for probe in versions_in(&probes_only(&wf), "fedora:") {
         assert!(
-            sonda > NEWEST_TESTED_FEDORA,
-            "la sonda su Fedora {sonda:?} non è più recente di {NEWEST_TESTED_FEDORA:?}: \
-             o è una voce bloccante marcata per sbaglio come sonda, o la costante è rimasta \
-             indietro rispetto a una release ormai provata davvero"
+            probe > NEWEST_TESTED_FEDORA,
+            "the Fedora probe {probe:?} is not newer than {NEWEST_TESTED_FEDORA:?}: either it is a \
+             blocking entry mistakenly marked as a probe, or the constant has fallen behind \
+             a release that is genuinely tested now"
         );
     }
 }
@@ -280,42 +279,42 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
 ///
 /// textual, like the rest of this guard: the file is read as it is, without a
 /// YAML parser for a question one line answers.
-fn senza_sonde(wf: &str) -> String {
+fn without_probes(wf: &str) -> String {
     wf.lines()
-        .filter(|riga| !riga.contains(MARCATORE_SONDA))
+        .filter(|line| !line.contains(PROBE_MARKER))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 /// only the lines marked as a probe.
-fn sole_sonde(wf: &str) -> String {
+fn probes_only(wf: &str) -> String {
     wf.lines()
-        .filter(|riga| riga.contains(MARCATORE_SONDA))
+        .filter(|line| line.contains(PROBE_MARKER))
         .collect::<Vec<_>>()
         .join("\n")
 }
 
 /// the comment marking a matrix entry as a probe tolerated in red. must match
 /// the workflow.
-const MARCATORE_SONDA: &str = "sonda-non-bloccante";
+const PROBE_MARKER: &str = "non-blocking-probe";
 
 /// every version following `prefix` in the text, as `(major, minor)`.
-fn versions_in(text: &str, prefisso: &str) -> Vec<(u32, u32)> {
+fn versions_in(text: &str, prefix: &str) -> Vec<(u32, u32)> {
     let mut out = Vec::new();
-    for (_, resto) in text
-        .match_indices(prefisso)
+    for (_, rest) in text
+        .match_indices(prefix)
         .map(|(i, m)| (i, &text[i + m.len()..]))
     {
-        let numero: String = resto
+        let number: String = rest
             .chars()
             .take_while(|c| c.is_ascii_digit() || *c == '.')
             .collect();
-        if numero.is_empty() {
+        if number.is_empty() {
             continue;
         }
-        let mut parti = numero.split('.');
-        let major = parti.next().and_then(|s| s.parse().ok()).unwrap_or(0);
-        let minor = parti.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let mut parts = number.split('.');
+        let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+        let minor = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
         out.push((major, minor));
     }
     out
@@ -335,41 +334,41 @@ fn versions_in(text: &str, prefisso: &str) -> Vec<(u32, u32)> {
 /// only that the two declarations promise the same thing.
 #[test]
 fn the_deb_and_the_rpm_ship_the_same_binary() {
-    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("reading Cargo.toml");
 
-    let blocco = |intestazione: &str| -> String {
-        let inizio = manifest
-            .find(intestazione)
-            .unwrap_or_else(|| panic!("manca il blocco {intestazione}"));
-        let resto = &manifest[inizio + intestazione.len()..];
-        let fine = resto.find("\n[").unwrap_or(resto.len());
-        resto[..fine].to_string()
+    let block = |heading: &str| -> String {
+        let start = manifest
+            .find(heading)
+            .unwrap_or_else(|| panic!("the {heading} block is missing"));
+        let rest = &manifest[start + heading.len()..];
+        let end = rest.find("\n[").unwrap_or(rest.len());
+        rest[..end].to_string()
     };
 
-    let deb = blocco("[package.metadata.deb]");
-    let rpm = blocco("[package.metadata.generate-rpm]");
+    let deb = block("[package.metadata.deb]");
+    let rpm = block("[package.metadata.generate-rpm]");
 
-    for (nome, testo, destinazione) in [
+    for (name, text, destination) in [
         // one tool: ["source", "destination/", "mode"]
         ("deb", &deb, "usr/bin/"),
         // the other: { source, dest, mode }
         ("rpm", &rpm, "/usr/bin/invok"),
     ] {
         assert!(
-            testo.contains("target/release/invok"),
-            "{nome}: deve impacchettare il binario compilato, non altro"
+            text.contains("target/release/invok"),
+            "{name}: it must package the compiled binary and nothing else"
         );
         assert!(
-            testo.contains(destinazione),
-            "{nome}: il binario deve finire in /usr/bin, o il comando non è nel PATH"
+            text.contains(destination),
+            "{name}: the binary must land in /usr/bin, or the command is not on the PATH"
         );
         assert!(
-            testo.contains("755"),
-            "{nome}: un binario senza bit di esecuzione non è un binario"
+            text.contains("755"),
+            "{name}: a binary without the execute bit is not a binary"
         );
         assert!(
-            testo.contains("README"),
-            "{nome}: la doc accompagna il pacchetto in entrambe le confezioni"
+            text.contains("README"),
+            "{name}: the docs travel with the package in both wrappers"
         );
     }
 
@@ -381,27 +380,25 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
     // description names those programs rightly, and a check searching the words
     // anywhere would fail on a correct sentence. this test's first version did
     // exactly that.
-    let dichiarazioni = |testo: &str, chiavi: &[&str]| -> String {
-        testo
-            .lines()
-            .filter(|riga| {
-                let r = riga.trim_start();
-                chiavi.iter().any(|k| r.starts_with(k))
+    let declarations = |text: &str, keys: &[&str]| -> String {
+        text.lines()
+            .filter(|line| {
+                let r = line.trim_start();
+                keys.iter().any(|k| r.starts_with(k))
             })
             .collect::<Vec<_>>()
             .join("\n")
     };
 
-    for (nome, testo) in [("deb", &deb), ("rpm", &rpm)] {
+    for (name, text) in [("deb", &deb), ("rpm", &rpm)] {
         assert!(
-            !testo.contains("systemd-units"),
-            "{nome}: il pacchetto non installa servizi"
+            !text.contains("systemd-units"),
+            "{name}: the package installs no services"
         );
-        let deps = dichiarazioni(testo, &["depends", "requires", "recommends", "suggests"]);
+        let deps = declarations(text, &["depends", "requires", "recommends", "suggests"]);
         assert!(
             !deps.contains("postgresql") && !deps.contains("nginx") && !deps.contains("python"),
-            "{nome}: nessuna dipendenza su ciò che l'installer gestisce a runtime, \
-             trovato: {deps}"
+            "{name}: no dependency on what the installer handles at runtime, found: {deps}"
         );
     }
 }
@@ -425,37 +422,37 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
 /// composed names instead of hand-written ones.
 #[test]
 fn the_readme_download_commands_point_at_this_version() {
-    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
-    let versione = manifest
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("reading Cargo.toml");
+    let version = manifest
         .lines()
         .find_map(|l| l.strip_prefix("version = \""))
         .and_then(|l| l.split('"').next())
-        .expect("Cargo.toml deve dichiarare una versione");
+        .expect("Cargo.toml must declare a version");
     let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
 
     // every download URL names THIS version.
     let mut url = 0;
-    for pezzo in readme.split("releases/download/v").skip(1) {
+    for piece in readme.split("releases/download/v").skip(1) {
         url += 1;
-        let trovata = pezzo.split('/').next().unwrap_or("");
+        let found = piece.split('/').next().unwrap_or("");
         assert_eq!(
-            trovata, versione,
-            "il README scarica dalla release v{trovata} mentre il pacchetto è {versione}"
+            found, version,
+            "the README downloads from release v{found} while the package is {version}"
         );
     }
     assert!(
         url >= 6,
         "attesi almeno sei link di download (tar.gz, .deb, .rpm, con i rispettivi .sha256), \
-         trovati {url}: se la sezione è cambiata, questa guardia va aggiornata insieme"
+         found {url}: if the section changed, this guard must be updated with it"
     );
 
     // and the filenames, composed with the REVISION declared in the manifest —
     // not one written by hand here (A-V3-17).
-    for atteso in [package_file_name("deb"), package_file_name("rpm")] {
+    for expected in [package_file_name("deb"), package_file_name("rpm")] {
         assert!(
-            readme.contains(&atteso),
-            "il README non nomina `{atteso}`: il comando di installazione scaricherebbe un file \
-             che quella release non contiene"
+            readme.contains(&expected),
+            "the README does not name `{expected}`: the install command would download a \
+             file that release does not contain"
         );
     }
 }
@@ -474,14 +471,14 @@ fn the_readme_download_commands_point_at_this_version() {
 /// scenario it exists for.
 #[test]
 fn the_package_revision_is_declared_not_inherited() {
-    for (sezione, chiave) in [
+    for (section, key) in [
         ("[package.metadata.deb]", "revision"),
         ("[package.metadata.generate-rpm]", "release"),
     ] {
         assert!(
-            manifest_value(sezione, chiave).is_some(),
-            "{sezione} deve dichiarare `{chiave}`: senza, il nome del file pubblicato lo decide \
-             il default dello strumento, e il README promette un nome che nessuno controlla"
+            manifest_value(section, key).is_some(),
+            "{section} must declare `{key}`: without it the published filename is decided by \
+             the tool's default, and the README promises a name nobody checks"
         );
     }
 }
@@ -491,14 +488,14 @@ fn the_package_revision_is_declared_not_inherited() {
 /// parsed by section and not by line: a bare key name also appears in a profile
 /// block, and reading the right key in the wrong section is how a guard looks
 /// like it works while measuring something else.
-fn manifest_value(sezione: &str, chiave: &str) -> Option<String> {
-    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
-    let inizio = manifest.find(sezione)? + sezione.len();
-    let resto = &manifest[inizio..];
-    let blocco = &resto[..resto.find("\n[").unwrap_or(resto.len())];
-    blocco.lines().find_map(|riga| {
-        riga.trim()
-            .strip_prefix(chiave)?
+fn manifest_value(section: &str, key: &str) -> Option<String> {
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("reading Cargo.toml");
+    let start = manifest.find(section)? + section.len();
+    let rest = &manifest[start..];
+    let block = &rest[..rest.find("\n[").unwrap_or(rest.len())];
+    block.lines().find_map(|line| {
+        line.trim()
+            .strip_prefix(key)?
             .trim_start()
             .strip_prefix('=')?
             .trim()
@@ -516,17 +513,17 @@ fn manifest_value(sezione: &str, chiave: &str) -> Option<String> {
 /// **actually produced** is the release workflow's job, which holds the package
 /// before publishing it. this is the fast guard; that one is the last word.
 fn package_file_name(confezione: &str) -> String {
-    let versione = manifest_value("[package]", "version").expect("versione nel manifesto");
+    let version = manifest_value("[package]", "version").expect("version in the manifest");
     match confezione {
         "deb" => {
             let rev = manifest_value("[package.metadata.deb]", "revision")
-                .expect("revisione del .deb nel manifesto");
-            format!("invok_{versione}-{rev}_amd64.deb")
+                .expect("the .deb revision in the manifest");
+            format!("invok_{version}-{rev}_amd64.deb")
         }
         _ => {
             let rel = manifest_value("[package.metadata.generate-rpm]", "release")
-                .expect("release del .rpm nel manifesto");
-            format!("invok-{versione}-{rel}.x86_64.rpm")
+                .expect("the .rpm release in the manifest");
+            format!("invok-{version}-{rel}.x86_64.rpm")
         }
     }
 }
@@ -539,17 +536,17 @@ fn package_file_name(confezione: &str) -> String {
 /// consumer: flag, log and manifest must all say the same number (A-V3-16).
 #[test]
 fn the_version_the_binary_reports_is_the_one_in_the_manifest() {
-    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
-    let dichiarata = manifest
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("reading Cargo.toml");
+    let declared = manifest
         .lines()
         .find_map(|l| l.strip_prefix("version = \""))
         .and_then(|l| l.split('"').next())
-        .expect("Cargo.toml deve dichiarare una versione");
+        .expect("Cargo.toml must declare a version");
 
     assert_eq!(
         invok::INSTALLER_VERSION,
-        dichiarata,
-        "il binario dice di essere {} ma il pacchetto è {dichiarata}",
+        declared,
+        "the binary claims to be {} while the package is {declared}",
         invok::INSTALLER_VERSION
     );
 }
@@ -572,46 +569,45 @@ fn the_version_the_binary_reports_is_the_one_in_the_manifest() {
 /// freezing the wording.
 #[test]
 fn every_package_face_disclaims_affiliation_with_odoo() {
-    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("reading Cargo.toml");
     let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
 
     // The metadata block, isolated: searching the whole manifest would pass
     // even if the disclaimer lived only in a comment — and a comment ends up in
     // no package.
-    let blocco = |intestazione: &str| -> String {
-        let inizio = manifest
-            .find(intestazione)
-            .unwrap_or_else(|| panic!("manca il blocco {intestazione}"));
-        let resto = &manifest[inizio + intestazione.len()..];
-        let fine = resto.find("\n[").unwrap_or(resto.len());
+    let block = |heading: &str| -> String {
+        let start = manifest
+            .find(heading)
+            .unwrap_or_else(|| panic!("the {heading} block is missing"));
+        let rest = &manifest[start + heading.len()..];
+        let end = rest.find("\n[").unwrap_or(rest.len());
         // Comments out: the disclaimer must live in a VALUE.
-        resto[..fine]
+        rest[..end]
             .lines()
             .filter(|r| !r.trim_start().starts_with('#'))
             .collect::<Vec<_>>()
             .join("\n")
     };
 
-    for (dove, testo) in [
+    for (where_, text) in [
         ("README.md", readme.as_str()),
         (
             ".deb (extended-description)",
-            &blocco("[package.metadata.deb]"),
+            &block("[package.metadata.deb]"),
         ),
-        (".rpm (summary)", &blocco("[package.metadata.generate-rpm]")),
+        (".rpm (summary)", &block("[package.metadata.generate-rpm]")),
     ] {
         assert!(
-            testo.contains("Odoo S.A."),
-            "{dove}: the disclaimer must name the trademark holder"
+            text.contains("Odoo S.A."),
+            "{where_}: the disclaimer must name the trademark holder"
         );
         // Case-insensitive: the sentence opens a paragraph in one place and
         // sits mid-sentence in another, and freezing the capital letter would
         // fail on a correct text.
         assert!(
-            testo
-                .to_lowercase()
+            text.to_lowercase()
                 .contains("not affiliated with odoo s.a."),
-            "{dove}: the explicit denial of affiliation is missing"
+            "{where_}: the explicit denial of affiliation is missing"
         );
     }
 }
@@ -631,62 +627,63 @@ fn every_package_face_disclaims_affiliation_with_odoo() {
 /// them falls behind.
 #[test]
 fn the_deb_and_the_rpm_install_the_same_alias() {
-    let leggi = |p: &str| std::fs::read_to_string(p).unwrap_or_else(|_| panic!("manca {p}"));
+    let read_file =
+        |p: &str| std::fs::read_to_string(p).unwrap_or_else(|_| panic!("{p} is missing"));
 
-    let installano = [
-        ("deb", leggi("debian/postinst")),
-        ("rpm", leggi("rpm/post.sh")),
+    let installers = [
+        ("deb", read_file("debian/postinst")),
+        ("rpm", read_file("rpm/post.sh")),
     ];
-    for (confezione, script) in &installano {
+    for (wrapper, script) in &installers {
         assert!(
             script.contains("ln -sfn invok /usr/bin/vok"),
-            "{confezione}: l'alias deve essere un symlink RELATIVO a `invok`"
+            "{wrapper}: the alias must be a RELATIVE symlink to `invok`"
         );
         // the caution: a target that is not a symlink belongs to somebody else
         // and is not overwritten.
         assert!(
             script.contains("[ ! -L /usr/bin/vok ]"),
-            "{confezione}: non deve sovrascrivere un /usr/bin/vok che non sia un collegamento"
+            "{wrapper}: it must not overwrite a /usr/bin/vok that is not a link"
         );
     }
 
-    let rimuovono = [
-        ("deb", leggi("debian/postrm")),
-        ("rpm", leggi("rpm/postun.sh")),
+    let removers = [
+        ("deb", read_file("debian/postrm")),
+        ("rpm", read_file("rpm/postun.sh")),
     ];
-    for (confezione, script) in &rimuovono {
+    for (wrapper, script) in &removers {
         // only OUR link is removed: pointing elsewhere means it is not ours.
         assert!(
             script.contains(r#"[ "$(readlink /usr/bin/vok)" = "invok" ]"#),
-            "{confezione}: deve rimuovere solo un link che punta ancora a invok"
+            "{wrapper}: it must remove only a link still pointing at invok"
         );
     }
     // and only on a real removal, never during an upgrade — written in the two
     // different conventions, which is exactly why there are two files.
     assert!(
-        rimuovono[0].1.contains("remove | purge") || rimuovono[0].1.contains("remove|purge"),
-        "deb: la rimozione dell'alias non deve avvenire su `upgrade`"
+        removers[0].1.contains("remove | purge") || removers[0].1.contains("remove|purge"),
+        "deb: the alias must not be removed on an `upgrade`"
     );
     assert!(
-        rimuovono[1].1.contains(r#"[ "$1" = "0" ]"#),
-        "rpm: la rimozione dell'alias deve avvenire solo con $1 = 0 (disinstallazione vera)"
+        removers[1].1.contains(r#"[ "$1" = "0" ]"#),
+        "rpm: the alias must be removed only when $1 is 0 (a real uninstall)"
     );
 
     // the declared paths must EXIST: the tool accepts either an inline script
     // or a path and tells them apart by whether the file is there. a wrong path
     // is no error — it lands in the package as a literal command, and shows up
     // on a customer's machine.
-    let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
-    for campo in ["post_install_script", "post_uninstall_script"] {
-        let percorso = manifest
+    let manifest = std::fs::read_to_string("Cargo.toml").expect("reading Cargo.toml");
+    for field in ["post_install_script", "post_uninstall_script"] {
+        let path_value = manifest
             .lines()
-            .find_map(|l| l.trim().strip_prefix(&format!("{campo} = ")))
+            .find_map(|l| l.trim().strip_prefix(&format!("{field} = ")))
             .map(|v| v.trim().trim_matches('"'))
-            .unwrap_or_else(|| panic!("Cargo.toml deve dichiarare {campo}"));
+            .unwrap_or_else(|| panic!("Cargo.toml must declare {field}"));
         assert!(
-            Path::new(percorso).is_file(),
-            "{campo} punta a `{percorso}`, che non è un file: finirebbe nel .rpm \
-             come comando letterale invece che come scriptlet"
+            Path::new(path_value).is_file(),
+            "{field} points at `{path_value}`, which is not a file: it would land in the .rpm \
+             as a literal command instead of a scriptlet"
         );
     }
 }
@@ -706,21 +703,21 @@ fn the_deb_and_the_rpm_install_the_same_alias() {
 /// asking the real registry. here only what the repository knows about itself.
 #[test]
 fn the_crate_metadata_is_publishable() {
-    let leggi = |chiave: &str| {
-        manifest_value("[package]", chiave)
-            .unwrap_or_else(|| panic!("[package] deve dichiarare `{chiave}` per pubblicare"))
+    let read_key = |key: &str| {
+        manifest_value("[package]", key)
+            .unwrap_or_else(|| panic!("[package] must declare `{key}` to publish"))
     };
 
     // the readme key must point at a file that exists: otherwise the registry
     // page is the one-line description alone, and nothing about the repository
     // says so.
-    let readme = leggi("readme");
+    let readme = read_key("readme");
     assert!(
         std::path::Path::new(&readme).is_file(),
-        "[package] readme = `{readme}`, che non è un file"
+        "[package] readme = `{readme}`, which is not a file"
     );
 
-    let parole: Vec<String> = leggi("keywords")
+    let words: Vec<String> = read_key("keywords")
         .trim_matches(|c| c == '[' || c == ']')
         .split(',')
         .map(|k| k.trim().trim_matches('"').to_string())
@@ -728,42 +725,42 @@ fn the_crate_metadata_is_publishable() {
         .collect();
 
     assert!(
-        !parole.is_empty() && parole.len() <= 5,
-        "crates.io accetta da 1 a 5 keyword, qui ce ne sono {}: {parole:?}",
-        parole.len()
+        !words.is_empty() && words.len() <= 5,
+        "crates.io accepts 1 to 5 keywords, there are {} here: {words:?}",
+        words.len()
     );
-    for k in &parole {
+    for k in &words {
         assert!(
             k.len() <= 20,
-            "la keyword `{k}` è di {} caratteri: crates.io ne accetta al massimo 20",
+            "keyword `{k}` is {} characters long: crates.io accepts at most 20",
             k.len()
         );
         assert!(
             k.chars().next().is_some_and(|c| c.is_ascii_alphanumeric()),
-            "la keyword `{k}` deve iniziare con un carattere alfanumerico"
+            "keyword `{k}` must start with an alphanumeric character"
         );
         assert!(
             k.chars()
                 .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '-'),
-            "la keyword `{k}` contiene un carattere che crates.io non accetta"
+            "keyword `{k}` contains a character crates.io does not accept"
         );
     }
 
-    let categorie = leggi("categories");
+    let categories = read_key("categories");
     assert!(
-        categorie.contains('"'),
-        "[package] categories non dichiara nessuna categoria: {categorie}"
+        categories.contains('"'),
+        "[package] categories declares no category: {categories}"
     );
 
     // the command the README has people paste names the crate REALLY published.
     // the filename guard (A-V3-17) applied to the fourth package: two sources
     // that must coincide, and a symptom — an install that finds nothing — that
     // never reaches us.
-    let nome = leggi("name");
-    let readme_testo = std::fs::read_to_string("README.md").expect("leggo README.md");
+    let name = read_key("name");
+    let readme_text = std::fs::read_to_string("README.md").expect("reading README.md");
     assert!(
-        readme_testo.contains(&format!("cargo install {nome}")),
-        "README: il comando deve essere `cargo install {nome}`, il crate che release.yml pubblica"
+        readme_text.contains(&format!("cargo install {name}")),
+        "README: the command must be `cargo install {name}`, the crate release.yml publishes"
     );
 }
 
@@ -781,30 +778,31 @@ fn the_crate_metadata_is_publishable() {
 #[test]
 fn every_release_job_declares_which_event_it_belongs_to() {
     const WORKFLOW: &str = ".github/workflows/release.yml";
-    let testo = std::fs::read_to_string(WORKFLOW).unwrap_or_else(|_| panic!("manca {WORKFLOW}"));
+    let text =
+        std::fs::read_to_string(WORKFLOW).unwrap_or_else(|_| panic!("{WORKFLOW} is missing"));
 
-    let corpo = testo
+    let body = text
         .split_once("\njobs:\n")
-        .map(|(_, dopo)| dopo)
-        .unwrap_or_else(|| panic!("{WORKFLOW}: manca la sezione `jobs:`"));
+        .map(|(_, after)| after)
+        .unwrap_or_else(|| panic!("{WORKFLOW}: the `jobs:` section is missing"));
 
     // a job is a key at two spaces of indentation; its own keys sit at four.
     // anything deeper belongs to the steps and is none of our business.
     let mut job: Option<String> = None;
-    let mut visti: Vec<(String, Option<String>)> = Vec::new();
-    for riga in corpo.lines() {
-        if let Some(nome) = riga
+    let mut seen: Vec<(String, Option<String>)> = Vec::new();
+    for line in body.lines() {
+        if let Some(name) = line
             .strip_prefix("  ")
             .filter(|r| !r.starts_with([' ', '#', '-']))
             .and_then(|r| r.split_once(':'))
             .map(|(n, _)| n)
         {
-            job = Some(nome.to_string());
-            visti.push((nome.to_string(), None));
-        } else if let Some(cond) = riga.strip_prefix("    if:") {
+            job = Some(name.to_string());
+            seen.push((name.to_string(), None));
+        } else if let Some(cond) = line.strip_prefix("    if:") {
             if job.is_some() {
-                if let Some(ultimo) = visti.last_mut() {
-                    ultimo.1 = Some(cond.trim().to_string());
+                if let Some(last) = seen.last_mut() {
+                    last.1 = Some(cond.trim().to_string());
                 }
             }
         }
@@ -814,36 +812,36 @@ fn every_release_job_declares_which_event_it_belongs_to() {
     // recognising jobs, it would iterate nothing and stay green while looking
     // at nothing. so the jobs are demanded by NAME, not by count: a number gets
     // updated absent-mindedly when one is removed, a missing name says which.
-    let nomi: Vec<&str> = visti.iter().map(|(n, _)| n.as_str()).collect();
-    for atteso in ["upload-assets", "deb", "rpm", "crates-io"] {
+    let names: Vec<&str> = seen.iter().map(|(n, _)| n.as_str()).collect();
+    for expected in ["upload-assets", "deb", "rpm", "crates-io"] {
         assert!(
-            nomi.contains(&atteso),
-            "{WORKFLOW}: manca il job `{atteso}`; trovati: {nomi:?}"
+            names.contains(&expected),
+            "{WORKFLOW}: the job `{expected}` is missing; found: {names:?}"
         );
     }
 
-    for (nome, cond) in &visti {
+    for (name, cond) in &seen {
         let cond = cond.as_deref().unwrap_or_else(|| {
             panic!(
-                "{WORKFLOW}: il job `{nome}` non dichiara un `if`, quindi gira a ENTRAMBI gli \
-                 eventi: al `release: published` ripartirebbero i build"
+                "{WORKFLOW}: job `{name}` declares no `if`, so it runs on BOTH events: on \
+                 `release: published` the builds would start again"
             )
         });
-        if nome == "crates-io" {
+        if name == "crates-io" {
             assert!(
                 cond.contains("github.event_name == 'release'"),
-                "{WORKFLOW}: `{nome}` deve girare sul `release: published`, non sul tag — su \
-                 crates.io non si torna indietro: {cond}"
+                "{WORKFLOW}: `{name}` must run on `release: published`, not on the tag — there is \
+                 no going back on crates.io: {cond}"
             );
             assert!(
                 cond.contains("prerelease == false"),
-                "{WORKFLOW}: `{nome}` deve escludere le prerelease: crates.io non ha il concetto \
-                 di bozza, e una beta lì è indistinguibile da una stabile: {cond}"
+                "{WORKFLOW}: `{name}` must exclude prereleases: crates.io has no draft concept, and \
+                 a beta there is indistinguishable from a stable: {cond}"
             );
         } else {
             assert!(
                 cond.contains("github.event_name == 'push'"),
-                "{WORKFLOW}: `{nome}` costruisce artefatti e deve girare solo sul push del tag: \
+                "{WORKFLOW}: `{name}` builds artifacts and must run only on the tag push: \
                  {cond}"
             );
         }

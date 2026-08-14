@@ -24,19 +24,19 @@ use invok::system_ops::{
 fn a_hanging_command_is_killed_and_reported_as_timeout() {
     let start = Instant::now();
     let err = run_with_timeout("sleep", &["60"], Duration::from_millis(200))
-        .expect_err("un comando che non termina deve scadere");
+        .expect_err("a command that does not finish must time out");
 
     match err {
         StepError::Timeout { command, secs } => {
             assert!(command.contains("sleep"), "comando riportato: {command}");
-            assert_eq!(secs, 0, "il limite sub-secondo si arrotonda a 0s");
+            assert_eq!(secs, 0, "a sub-second limit rounds to 0s");
         }
         other => panic!("atteso Timeout, ottenuto: {other}"),
     }
     // the point of the whole fix: we do not wait out the command.
     assert!(
         start.elapsed() < Duration::from_secs(10),
-        "l'attesa deve terminare al timeout, non alla fine del comando"
+        "the wait must end at the timeout, not at the command's end"
     );
 }
 
@@ -79,10 +79,10 @@ fn a_verbose_command_does_not_deadlock_on_a_full_pipe() {
     let start = Instant::now();
     run_with_timeout(
         "sh",
-        &["-c", "yes riga-di-progresso | head -n 60000 >&2"],
+        &["-c", "yes progress-line | head -n 60000 >&2"],
         Duration::from_secs(30),
     )
-    .expect("un comando verboso non deve andare in deadlock");
+    .expect("a verbose command must not deadlock");
     assert!(start.elapsed() < Duration::from_secs(30));
 }
 
@@ -96,7 +96,7 @@ fn timeout_policy_default_override_and_disable() {
         Some(Duration::from_secs(DEFAULT_NETWORK_TIMEOUT_SECS))
     );
     assert_eq!(
-        timeout_from_setting(Some("non-un-numero")),
+        timeout_from_setting(Some("not-a-number")),
         Some(Duration::from_secs(DEFAULT_NETWORK_TIMEOUT_SECS))
     );
     // an explicit override, tolerating spaces.
@@ -128,7 +128,7 @@ fn timeout_error_message_names_the_env_var() {
     let rendered = err.to_string();
     assert!(
         rendered.contains(NETWORK_TIMEOUT_ENV),
-        "il messaggio deve dire come alzare il limite: {rendered}"
+        "the message must say how to raise the limit: {rendered}"
     );
-    assert!(rendered.contains("300"), "deve dire quanto ha atteso");
+    assert!(rendered.contains("300"), "it must say how long it waited");
 }

@@ -70,7 +70,7 @@ fn created_by_us_creates_and_removes() {
         .any(|op| matches!(op, Op::Chmod { mode, .. } if *mode == 0o750)));
     assert!(
         ops.contains(&Op::Rmdir(dir)),
-        "undo deve rimuovere la dir creata (vuota)"
+        "the undo must remove the directory we created, when empty"
     );
 }
 
@@ -92,7 +92,7 @@ fn preexisting_dir_is_not_touched() {
 
     assert!(
         ops_of(&log).is_empty(),
-        "una log dir Preexisting non va toccata"
+        "a Preexisting log dir is not touched"
     );
 }
 
@@ -115,6 +115,6 @@ fn undo_does_not_remove_non_empty_dir() {
     let ops = ops_of(&log);
     assert!(
         !ops.iter().any(|op| matches!(op, Op::Rmdir(_))),
-        "undo non deve rimuovere una log dir non vuota"
+        "the undo must not remove a non-empty log dir"
     );
 }

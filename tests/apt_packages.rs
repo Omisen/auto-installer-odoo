@@ -65,18 +65,18 @@ fn undo_purges_only_the_delta() {
     // the delta only.
     assert!(
         ops.contains(&Op::PkgRemove(strings(&["b", "c"]))),
-        "atteso purge di [b,c], trovato: {ops:?}"
+        "expected a purge of [b,c], found: {ops:?}"
     );
     // no global autoremove in the rollback: it would take orphans unrelated to
     // Odoo, outside our delta.
     assert!(
         !ops.contains(&Op::PkgRemoveOrphans),
-        "l'undo non deve lanciare un autoremove globale, trovato: {ops:?}"
+        "the undo must not run a global autoremove, found: {ops:?}"
     );
     assert!(
         !ops.iter()
             .any(|op| matches!(op, Op::PkgRemove(p) if p.contains(&"a".to_string()))),
-        "il pacchetto preesistente 'a' non deve mai essere purgato"
+        "the pre-existing package 'a' must never be purged"
     );
 }
 
@@ -90,7 +90,7 @@ fn undo_purges_only_the_delta() {
 fn undo_recovers_a_broken_dpkg_before_purging() {
     let cfg = MockConfig {
         installed_packages: installed(&["a"]),
-        dpkg_broken: true, // uno step a valle ha rotto dpkg
+        dpkg_broken: true, // a later step broke dpkg
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
@@ -110,25 +110,25 @@ fn undo_recovers_a_broken_dpkg_before_purging() {
     let fix = ops
         .iter()
         .position(|o| matches!(o, Op::PkgRepair))
-        .expect("il recovery di dpkg deve precedere il purge");
+        .expect("the dpkg recovery must come before the purge");
     let purge = ops
         .iter()
         .position(|o| matches!(o, Op::PkgRemove(_)))
-        .expect("il purge deve essere tentato");
+        .expect("the purge must be attempted");
     assert!(
         fix < purge,
-        "fix-broken prima del purge, altrimenti apt rifiuta: {ops:?}"
+        "fix-broken before the purge, or apt refuses: {ops:?}"
     );
     // and after the recovery the purge really succeeds.
     assert!(
         ops.contains(&Op::PkgRemove(strings(&["b", "c"]))),
-        "il delta deve essere purgato dopo il recovery: {ops:?}"
+        "the delta must be purged after the recovery: {ops:?}"
     );
     // the protection holds: never the pre-existing one.
     assert!(
         !ops.iter()
             .any(|op| matches!(op, Op::PkgRemove(p) if p.contains(&"a".to_string()))),
-        "il pacchetto preesistente 'a' non va mai purgato"
+        "the pre-existing package 'a' must never be purged"
     );
 }
 
@@ -157,12 +157,12 @@ fn undo_retries_the_purge_after_dpkg_configure_all() {
     let ops = ops_of(&log);
     assert!(
         ops.contains(&Op::PkgDeepRepair),
-        "se il fix-broken fallisce si tenta dpkg --configure -a: {ops:?}"
+        "if fix-broken fails, the deeper repair is attempted: {ops:?}"
     );
     assert_eq!(
         ops.iter().filter(|o| matches!(o, Op::PkgRemove(_))).count(),
         2,
-        "il purge va ritentato dopo il recovery: {ops:?}"
+        "the purge must be retried after the recovery: {ops:?}"
     );
 }
 
@@ -188,7 +188,7 @@ fn undo_stays_best_effort_when_recovery_fails_completely() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
     step.undo(&c)
-        .expect("undo best-effort: non propaga mai l'errore");
+        .expect("a best-effort undo never propagates the error");
 }
 
 #[test]
@@ -214,7 +214,7 @@ fn empty_delta_is_noop() {
 
     assert!(
         ops_of(&log).is_empty(),
-        "delta vuoto → nessuna azione, trovato: {:?}",
+        "an empty delta means no action, found: {:?}",
         ops_of(&log)
     );
 }
@@ -222,7 +222,7 @@ fn empty_delta_is_noop() {
 #[test]
 fn bootstrap_does_not_purge_on_normal_undo() {
     // a normal undo leaves the common bootstrap utilities.
-    let cfg = MockConfig::default(); // niente già installato → delta = tutti
+    let cfg = MockConfig::default(); // nothing installed, so the delta is all of them
     let (mock, log) = MockSystemOps::new(cfg);
     let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
     let c = ctx(false); // a NON-aggressive rollback
@@ -234,11 +234,11 @@ fn bootstrap_does_not_purge_on_normal_undo() {
     let ops = ops_of(&log);
     assert!(
         ops.iter().any(|op| matches!(op, Op::PkgInstall(_))),
-        "il run deve installare"
+        "the run must install"
     );
     assert!(
         !ops.iter().any(|op| matches!(op, Op::PkgRemove(_))),
-        "undo normale non deve purgare le utility bootstrap, trovato: {ops:?}"
+        "a normal undo must not purge the bootstrap utilities, found: {ops:?}"
     );
 }
 
@@ -256,12 +256,12 @@ fn bootstrap_purges_only_with_aggressive_rollback() {
     let ops = ops_of(&log);
     assert!(
         ops.iter().any(|op| matches!(op, Op::PkgRemove(_))),
-        "con --aggressive-rollback il bootstrap deve purgare il delta"
+        "with --aggressive-rollback the bootstrap must purge its delta"
     );
     // not even aggressively: a global autoremove is outside the delta.
     assert!(
         !ops.contains(&Op::PkgRemoveOrphans),
-        "nessun autoremove globale nemmeno con --aggressive-rollback, trovato: {ops:?}"
+        "no global autoremove even with --aggressive-rollback, found: {ops:?}"
     );
 }
 
@@ -282,11 +282,11 @@ fn deps_delta_excludes_bootstrap_overlap() {
     assert!(snap.already_installed.contains(&"git".to_string()));
     assert!(
         !snap.delta.contains(&"git".to_string()),
-        "git non deve essere nel delta"
+        "git must not be in the delta"
     );
     assert!(
         snap.delta.contains(&"python3-pip".to_string()),
-        "gli altri deps restano nel delta"
+        "the other deps stay in the delta"
     );
 }
 
@@ -320,7 +320,7 @@ fn the_preferred_name_wins_when_available() {
     step.run(&c).expect("run");
     assert!(
         ops_of(&log).contains(&Op::PkgInstall(strings(&["libtiff5-dev"]))),
-        "apt deve ricevere il nome preferito: {:?}",
+        "apt must receive the preferred name: {:?}",
         ops_of(&log)
     );
 }
@@ -338,13 +338,13 @@ fn the_fallback_is_used_when_the_preferred_name_does_not_exist() {
     let c = ctx(false);
 
     step.snapshot(&c)
-        .expect("snapshot: il fallback deve salvare lo step");
+        .expect("snapshot: the fallback must save the step");
     assert_eq!(snapshot_of(&step).delta, strings(&["libtiff-dev"]));
 
     step.run(&c).expect("run");
     assert!(
         ops_of(&log).contains(&Op::PkgInstall(strings(&["libtiff-dev"]))),
-        "apt deve ricevere il fallback, mai il nome inesistente: {:?}",
+        "apt must receive the fallback, never the non-existent name: {:?}",
         ops_of(&log)
     );
 
@@ -352,7 +352,7 @@ fn the_fallback_is_used_when_the_preferred_name_does_not_exist() {
     step.undo(&c).expect("undo");
     assert!(
         ops_of(&log).contains(&Op::PkgRemove(strings(&["libtiff-dev"]))),
-        "il delta persistito è in nomi risolti: {:?}",
+        "the persisted delta holds resolved names: {:?}",
         ops_of(&log)
     );
 }
@@ -375,7 +375,7 @@ fn an_already_installed_alternative_wins_over_the_preferred_one() {
     assert_eq!(snap.already_installed, strings(&["libtiff-dev"]));
     assert!(
         snap.delta.is_empty(),
-        "un'alternativa già presente non è nostra: delta vuoto, trovato {:?}",
+        "an alternative already present is not ours: an empty delta, found {:?}",
         snap.delta
     );
 
@@ -383,7 +383,7 @@ fn an_already_installed_alternative_wins_over_the_preferred_one() {
     step.undo(&c).expect("undo");
     assert!(
         !ops_of(&log).iter().any(|o| matches!(o, Op::PkgRemove(_))),
-        "niente da purgare: non abbiamo installato nulla. Trovato: {:?}",
+        "nothing to purge: we installed nothing. found: {:?}",
         ops_of(&log)
     );
 }
@@ -410,19 +410,19 @@ fn a_group_with_no_installable_alternative_fails_before_mutating() {
 
     let err = step
         .snapshot(&ctx(false))
-        .expect_err("un gruppo vuoto deve essere un errore");
+        .expect_err("an empty group must be an error");
     let message = err.to_string();
     assert!(
         message.contains("sparito-dev") && message.contains("sparito2-dev"),
-        "il messaggio deve dire quale gruppo è vuoto: {message}"
+        "the message must say which group is empty: {message}"
     );
     assert!(
         message.contains("A5.1"),
-        "e come chiuderlo (aggiungere l'alternativa): {message}"
+        "and how to close it (add the alternative): {message}"
     );
     assert!(
         ops_of(&log).is_empty(),
-        "nessuna mutazione prima dell'errore: {:?}",
+        "no mutation before the error: {:?}",
         ops_of(&log)
     );
 }
@@ -448,15 +448,15 @@ fn an_unusable_apt_index_is_diagnosed_as_such_not_as_a_missing_package() {
 
     let message = step
         .snapshot(&ctx(false))
-        .expect_err("indice inservibile → errore, ma con la diagnosi giusta")
+        .expect_err("an unusable index is an error, but with the right diagnosis")
         .to_string();
     assert!(
         message.contains("apt-get update"),
-        "con l'indice inservibile il messaggio deve indicare 'apt-get update': {message}"
+        "with an unusable index the message must point at 'apt-get update': {message}"
     );
     assert!(
         !message.contains("do not exist on this release"),
-        "e NON deve dichiarare assenti pacchetti che non ha potuto verificare: {message}"
+        "and it must NOT call absent packages it could not check: {message}"
     );
 }
 
@@ -487,24 +487,24 @@ fn bootstrap_updates_the_index_so_the_next_step_sees_the_candidates() {
     let mut bootstrap = AptPackagesStep::bootstrap_with_ops(model.boxed());
     bootstrap
         .snapshot(&c)
-        .expect("lo snapshot del bootstrap non deve morire su un indice stantìo");
+        .expect("the bootstrap snapshot must not die on a stale index");
     assert!(
         snapshot_of(&bootstrap).delta.is_empty(),
-        "scenario del bug: le utility bootstrap sono già presenti, delta vuoto"
+        "the bug's scenario: the bootstrap utilities are already there, an empty delta"
     );
     bootstrap
         .run(&c)
-        .expect("il run del bootstrap aggiorna l'indice anche con delta vuoto");
+        .expect("the bootstrap run refreshes the index even with an empty delta");
 
     // from here the index is fresh and the dependencies step resolves
     // everything.
     let mut deps = AptPackagesStep::odoo_dependencies_with_ops(model.boxed());
     deps.snapshot(&c)
-        .expect("dopo l'update i candidati ci sono: nessun falso positivo");
+        .expect("after the refresh the candidates are there: no false positive");
     let snap = snapshot_of(&deps);
     assert!(
         snap.delta.contains(&"libfreetype6-dev".to_string()),
-        "il pacchetto che in campo veniva bocciato deve essere risolto: {:?}",
+        "the package the field rejected must resolve: {:?}",
         snap.delta
     );
 }
@@ -521,11 +521,11 @@ fn without_the_update_the_dependencies_step_refuses_instead_of_guessing() {
 
     let message = deps
         .snapshot(&ctx(false))
-        .expect_err("senza indice lo step dei deps non può decidere")
+        .expect_err("without an index the dependencies step cannot decide")
         .to_string();
     assert!(
         message.contains("apt-get update"),
-        "diagnosi sull'indice, non sui nomi: {message}"
+        "a diagnosis about the index, not about the names: {message}"
     );
 }
 
@@ -540,7 +540,7 @@ fn the_index_update_lives_in_run_never_in_snapshot() {
     step.snapshot(&c).expect("snapshot");
     assert!(
         !ops_of(&log).contains(&Op::PkgRefreshIndex),
-        "lo snapshot deve restare NON mutante: nessun apt-get update. Trovato: {:?}",
+        "the snapshot must stay NON-mutating: no index refresh. found: {:?}",
         ops_of(&log)
     );
 
@@ -549,14 +549,14 @@ fn the_index_update_lives_in_run_never_in_snapshot() {
     let update = ops
         .iter()
         .position(|o| matches!(o, Op::PkgRefreshIndex))
-        .expect("il run del bootstrap deve aggiornare l'indice");
+        .expect("the bootstrap run must refresh the index");
     let install = ops
         .iter()
         .position(|o| matches!(o, Op::PkgInstall(_)))
-        .expect("e poi installare");
+        .expect("and then install");
     assert!(
         update < install,
-        "l'update va prima dell'install, non dopo: {ops:?}"
+        "the refresh comes before the install, not after: {ops:?}"
     );
 }
 
@@ -572,7 +572,7 @@ fn only_bootstrap_updates_the_index() {
     deps.run(&c).expect("run");
     assert!(
         !ops_of(&log).contains(&Op::PkgRefreshIndex),
-        "install-system-dependencies non rifà l'update: {:?}",
+        "install-system-dependencies does not repeat the refresh: {:?}",
         ops_of(&log)
     );
 }
@@ -590,7 +590,7 @@ fn dry_run_does_not_touch_the_apt_index() {
     step.run(&c).expect("run");
     assert!(
         ops_of(&log).is_empty(),
-        "dry-run: nessun apt-get update, nessuna install. Trovato: {:?}",
+        "dry run: no refresh, no install. found: {:?}",
         ops_of(&log)
     );
 }
@@ -602,7 +602,7 @@ fn a_third_party_repo_that_fails_does_not_block_the_install() {
     // hostage to somebody's broken third-party source.
     let cfg = MockConfig {
         apt_update_fails: true,
-        apt_index_populated: true, // ma l'indice è comunque utilizzabile
+        apt_index_populated: true, // but the index is usable anyway
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
@@ -611,10 +611,10 @@ fn a_third_party_repo_that_fails_does_not_block_the_install() {
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c)
-        .expect("un update parziale non deve fermare l'installazione");
+        .expect("a partial refresh must not stop the installation");
     assert!(
         ops_of(&log).iter().any(|o| matches!(o, Op::PkgInstall(_))),
-        "e l'install deve avvenire comunque: {:?}",
+        "and the install must happen anyway: {:?}",
         ops_of(&log)
     );
 }
@@ -635,15 +635,15 @@ fn an_update_that_leaves_no_index_at_all_is_a_hard_error() {
     step.snapshot(&c).expect("snapshot");
     let message = step
         .run(&c)
-        .expect_err("senza indice l'installazione non può procedere")
+        .expect_err("without an index the installation cannot proceed")
         .to_string();
     assert!(
         message.contains("apt-get update") && message.contains("index"),
-        "il messaggio deve spiegare cosa manca: {message}"
+        "the message must explain what is missing: {message}"
     );
     assert!(
         !ops_of(&log).iter().any(|o| matches!(o, Op::PkgInstall(_))),
-        "e non si installa nulla dopo l'errore: {:?}",
+        "and nothing is installed after the error: {:?}",
         ops_of(&log)
     );
 }
@@ -666,14 +666,14 @@ fn a_real_name_beats_a_virtual_one_because_only_the_real_one_is_purgeable() {
     assert_eq!(
         snapshot_of(&step).delta,
         strings(&["libfreetype-dev"]),
-        "vince il nome REALE, non quello virtuale"
+        "the REAL name wins, not the virtual one"
     );
 
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
     assert!(
         ops_of(&log).contains(&Op::PkgRemove(strings(&["libfreetype-dev"]))),
-        "e l'undo purga qualcosa che dpkg conosce davvero: {:?}",
+        "and the undo purges something dpkg genuinely knows: {:?}",
         ops_of(&log)
     );
 }
@@ -692,13 +692,13 @@ fn a_virtual_only_group_is_installed_rather_than_refused() {
     let c = ctx(false);
 
     step.snapshot(&c)
-        .expect("un nome virtuale installabile non è un pacchetto assente");
+        .expect("an installable virtual name is not an absent package");
     assert_eq!(snapshot_of(&step).delta, strings(&["libfreetype6-dev"]));
 
     step.run(&c).expect("run");
     assert!(
         ops_of(&log).contains(&Op::PkgInstall(strings(&["libfreetype6-dev"]))),
-        "apt riceve il nome virtuale, che sa risolvere: {:?}",
+        "the manager receives the virtual name, which it can resolve: {:?}",
         ops_of(&log)
     );
 }
@@ -712,10 +712,10 @@ fn the_canonical_list_declares_the_real_name_for_the_virtual_one() {
         .odoo_specs()
         .into_iter()
         .find(|s| s.alternatives().iter().any(|n| n == "libfreetype6-dev"))
-        .expect("'libfreetype6-dev' deve restare in lista");
+        .expect("'libfreetype6-dev' must stay in the list");
     assert!(
         group.alternatives().iter().any(|n| n == "libfreetype-dev"),
-        "il nome reale deve essere fra le alternative, trovato {:?}",
+        "the real name must be among the alternatives, found {:?}",
         group.alternatives()
     );
 }
@@ -815,15 +815,15 @@ fn the_refactor_did_not_lose_a_single_package() {
         if required.contains(*pkg) {
             assert!(
                 !demoted,
-                "'{pkg}' è marcato come declassato ma è ancora obbligatorio: \
-                 aggiorna INTENTIONALLY_DEMOTED o la lista"
+                "'{pkg}' is marked as demoted but is still mandatory: \
+                 update INTENTIONALLY_DEMOTED or the list"
             );
             continue;
         }
         if demoted {
             assert!(
                 optional.contains(*pkg),
-                "'{pkg}' è dichiarato declassato ma non è nemmeno fra gli opzionali"
+                "'{pkg}' is declared demoted but is not among the optional ones either"
             );
             continue;
         }
@@ -832,8 +832,8 @@ fn the_refactor_did_not_lose_a_single_package() {
 
     assert!(
         lost.is_empty(),
-        "pacchetti persi rispetto a prima di R6: {lost:?}. \
-         Se la rimozione è voluta, dichiarala in INTENTIONALLY_DEMOTED con la ragione"
+        "packages lost since before R6: {lost:?}. \
+         if the removal is intended, declare it in INTENTIONALLY_DEMOTED with the reason"
     );
 }
 
@@ -853,7 +853,7 @@ fn the_python3_core_set_is_complete() {
     ] {
         assert!(
             required.contains(pkg),
-            "'{pkg}' deve stare fra le dipendenze OBBLIGATORIE: {:?}",
+            "'{pkg}' must be among the MANDATORY dependencies: {:?}",
             required
                 .iter()
                 .filter(|p| p.starts_with("python3"))
@@ -869,7 +869,7 @@ fn python3_venv_is_never_optional() {
     let optional = optional_names();
     assert!(
         !optional.iter().any(|p| p.contains("venv")),
-        "nessun pacchetto venv può stare fra gli opzionali: {optional:?}"
+        "no venv package may sit among the optional ones: {optional:?}"
     );
 }
 
@@ -898,8 +898,8 @@ fn python3_venv_reaches_apt_whether_or_not_it_is_already_installed() {
             || snap.already_installed.contains(&"python3-venv".to_string());
         assert!(
             seen,
-            "python3-venv deve risultare nello snapshot (delta o già installato), \
-             già presente = {already_present}: delta={:?}",
+            "python3-venv must appear in the snapshot (delta or already installed), \
+             already present = {already_present}: delta={:?}",
             snap.delta
         );
 
@@ -910,11 +910,11 @@ fn python3_venv_reaches_apt_whether_or_not_it_is_already_installed() {
                 Op::PkgInstall(pkgs) => Some(pkgs),
                 _ => None,
             })
-            .expect("il run deve invocare apt-get install");
+            .expect("the run must invoke the install command");
         assert!(
             installed_line.contains(&"python3-venv".to_string()),
-            "python3-venv deve essere nella riga di apt anche quando è già presente \
-             (apt è idempotente), già presente = {already_present}: {installed_line:?}"
+            "python3-venv must be on the install line even when already present \
+             (the manager is idempotent), already present = {already_present}: {installed_line:?}"
         );
     }
 }
@@ -931,9 +931,9 @@ fn apt_cache_stats_output_is_parsed_as_apt_prints_it() {
         Some(0)
     );
     assert_eq!(
-        total_package_names("E: Impossibile aprire il file di lock\n"),
+        total_package_names("E: Could not open lock file\n"),
         None,
-        "output senza la riga → non lo sappiamo, che NON è zero"
+        "output without the line means we do not know, which is NOT zero"
     );
 }
 
@@ -958,13 +958,13 @@ fn an_optional_group_without_candidates_does_not_stop_the_install() {
     let c = ctx(false);
 
     step.snapshot(&c)
-        .expect("un opzionale mancante non è un errore");
+        .expect("a missing optional is not an error");
     assert_eq!(snapshot_of(&step).delta, strings(&["build-essential"]));
 
     step.run(&c).expect("run");
     assert!(
         ops_of(&log).contains(&Op::PkgInstall(strings(&["build-essential"]))),
-        "il pacchetto disponibile va installato comunque: {:?}",
+        "the available package is installed anyway: {:?}",
         ops_of(&log)
     );
 }
@@ -978,11 +978,11 @@ fn the_canonical_list_declares_the_renames_seen_in_the_field() {
         let group = specs
             .iter()
             .find(|s| s.alternatives().iter().any(|n| n == broken))
-            .unwrap_or_else(|| panic!("'{broken}' deve restare in lista"));
+            .unwrap_or_else(|| panic!("'{broken}' must stay in the list"));
         assert!(
             group.alternatives().len() > 1,
-            "'{broken}' non esiste su Debian 12: il suo gruppo deve avere un'alternativa, \
-             trovato {:?}",
+            "'{broken}' does not exist on that release: its group must have an alternative, \
+             found {:?}",
             group.alternatives()
         );
     }
@@ -1003,11 +1003,11 @@ fn apt_cache_policy_output_is_parsed_as_apt_prints_it() {
     assert!(has_installable_candidate(available));
     assert!(
         !has_installable_candidate(virtual_only),
-        "'Candidate: (none)' non è installabile"
+        "'Candidate: (none)' is not installable"
     );
     assert!(
         !has_installable_candidate(missing),
-        "senza riga Candidate il pacchetto non esiste"
+        "without a Candidate line the package does not exist"
     );
     assert!(!has_installable_candidate(""));
 }

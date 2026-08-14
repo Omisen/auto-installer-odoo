@@ -26,17 +26,16 @@ fn every_need_is_covered_by_every_family() {
         ("fedora", DnfBackend.catalog()),
     ];
 
-    for (famiglia, catalog) in &cataloghi {
-        let scoperti: Vec<&DepId> = DepId::ALL
+    for (family, catalog) in &cataloghi {
+        let uncovered: Vec<&DepId> = DepId::ALL
             .iter()
             .filter(|id| !catalog.covers(**id))
             .collect();
 
         assert!(
-            scoperti.is_empty(),
-            "la famiglia '{famiglia}' non copre questi bisogni: {scoperti:?}. \
-             Aggiungere una dipendenza a una sola famiglia compila benissimo: è \
-             questo il test che lo impedisce"
+            uncovered.is_empty(),
+            "family '{family}' does not cover these needs: {uncovered:?}. adding a dependency \
+             to a single family compiles fine: this is the test that stops it"
         );
     }
 }
@@ -48,20 +47,20 @@ fn every_need_is_covered_by_every_family() {
 /// worse than omitting it, because it removes the suspicion too.
 #[test]
 fn no_catalog_entry_is_empty() {
-    for (famiglia, catalog) in [
+    for (family, catalog) in [
         ("debian", AptBackend.catalog()),
         ("fedora", DnfBackend.catalog()),
     ] {
         for entry in catalog.bootstrap.iter().chain(catalog.odoo.iter()) {
             assert!(
                 !entry.specs.is_empty(),
-                "{famiglia}: la voce {:?} non elenca alcun pacchetto",
+                "{family}: entry {:?} lists no package",
                 entry.id
             );
             for spec in &entry.specs {
                 assert!(
                     !spec.alternatives().is_empty(),
-                    "{famiglia}: la voce {:?} ha un gruppo di alternative vuoto",
+                    "{family}: entry {:?} has an empty alternatives group",
                     entry.id
                 );
             }
@@ -91,13 +90,13 @@ fn a_need_may_cost_more_packages_on_one_family() {
     assert_eq!(
         voce(&debian, DepId::BuildTools),
         1,
-        "su Debian è il metapacchetto build-essential"
+        "on one family it is the build-essential metapackage"
     );
     assert!(
         voce(&fedora, DepId::BuildTools) >= 3,
-        "su Fedora servono almeno gcc, gcc-c++ e make: `@development-tools` è un \
-         gruppo dnf, con una sintassi propria e un comportamento poco chiaro alla \
-         rimozione — il delta non saprebbe cosa reclamare"
+        "on the other at least gcc, gcc-c++ and make are needed: the group form has its \
+         own syntax and unclear removal behaviour — the delta would not know what to \
+         reclaim"
     );
 }
 
@@ -109,7 +108,7 @@ fn a_need_may_cost_more_packages_on_one_family() {
 #[test]
 fn two_needs_may_share_one_package_on_fedora() {
     let fedora = DnfBackend.catalog();
-    let nome = |id: DepId| {
+    let name = |id: DepId| {
         fedora
             .odoo
             .iter()
@@ -120,10 +119,10 @@ fn two_needs_may_share_one_package_on_fedora() {
     };
 
     assert_eq!(
-        nome(DepId::Jpeg),
-        nome(DepId::Jpeg8),
-        "i due bisogni jpeg cadono sullo stesso pacchetto: è la deduplica di \
-         A-MD-1 a impedire che il delta lo elenchi due volte"
+        name(DepId::Jpeg),
+        name(DepId::Jpeg8),
+        "the two jpeg needs fall on the same package: A-MD-1's deduplication is what \
+         stops the delta listing it twice"
     );
 }
 
@@ -141,7 +140,7 @@ fn the_postgres_server_is_a_different_package_on_each_family() {
     assert!(debian.postgres.contains(&"postgresql".to_string()));
     assert!(
         fedora.postgres.contains(&"postgresql-server".to_string()),
-        "su Fedora il server è un pacchetto a parte dal client"
+        "there the server is a separate package from the client"
     );
     assert_eq!(debian.postgres_marker, "postgresql");
     assert_eq!(fedora.postgres_marker, "postgresql-server");
@@ -172,17 +171,17 @@ fn the_fedora_names_are_not_the_debian_ones() {
         .map(|s| s.preferred().to_string())
         .collect();
 
-    let comuni = fedora.iter().filter(|n| debian.contains(n)).count();
+    let common = fedora.iter().filter(|n| debian.contains(n)).count();
     assert!(
-        comuni < fedora.len() / 2,
-        "troppi nomi identici fra le due famiglie ({comuni} su {}): la lista Fedora \
-         sembra una copia non tradotta di quella Debian",
+        common < fedora.len() / 2,
+        "too many identical names between the two families ({common} of {}): one \
+         catalogue looks like an untranslated copy of the other",
         fedora.len()
     );
 
     // the non-mechanical cases, pinned so a future "cleanup" does not reduce
     // them to a naive suffix swap.
-    for atteso in [
+    for expected in [
         "openldap-devel",      // libldap2-dev
         "cyrus-sasl-devel",    // libsasl2-dev
         "libjpeg-turbo-devel", // libjpeg-dev
@@ -193,9 +192,9 @@ fn the_fedora_names_are_not_the_debian_ones() {
         "zlib-ng-compat-devel",
     ] {
         assert!(
-            fedora.iter().any(|n| n == atteso),
-            "'{atteso}' non è nella lista Fedora: è una delle traduzioni che NON \
-             si ottengono sostituendo -dev con -devel"
+            fedora.iter().any(|n| n == expected),
+            "'{expected}' is not in that catalogue: one of the translations you do NOT get by \
+             swapping the suffix"
         );
     }
 }
@@ -218,7 +217,7 @@ fn dnf_remove_never_touches_orphaned_dependencies() {
     assert!(
         args.iter()
             .any(|a| a == "--setopt=clean_requirements_on_remove=False"),
-        "senza questo flag il rollback su Fedora rimuove più di quanto ha messo: {args:?}"
+        "without this flag the rollback removes more than it added: {args:?}"
     );
     assert_eq!(args.first().map(String::as_str), Some("remove"));
     assert!(args.iter().any(|a| a == "pippo") && args.iter().any(|a| a == "pluto"));
@@ -262,7 +261,7 @@ fn dnf_does_not_use_the_argument_separator() {
     ] {
         assert!(
             !args.iter().any(|a| a == "--"),
-            "dnf5 rifiuta `--`: metterlo rompe il comando invece di proteggerlo ({args:?})"
+            "the newer manager rejects `--`: adding it breaks the command instead of protecting it ({args:?})"
         );
     }
 
@@ -281,7 +280,7 @@ fn the_two_families_speak_different_commands() {
     assert_eq!(dnf.first().map(String::as_str), Some("remove"));
     assert!(
         !dnf.iter().any(|a| a == "purge"),
-        "«purge» è un concetto deb: su rpm non esiste, e prometterlo sarebbe falso"
+        "\"purge\" is one family's concept: it does not exist on the other, and promising it would be false"
     );
 }
 
@@ -324,33 +323,33 @@ fn the_refresh_hint_names_the_right_command() {
 #[test]
 fn the_fedora_list_declares_the_real_name_for_each_virtual_one() {
     let specs = DnfBackend.catalog();
-    let gruppo = |virtuale: &str| -> Vec<String> {
+    let group = |virtual_name: &str| -> Vec<String> {
         specs
             .bootstrap_specs()
             .into_iter()
             .chain(specs.odoo_specs())
-            .find(|s| s.alternatives().iter().any(|n| n == virtuale))
-            .unwrap_or_else(|| panic!("'{virtuale}' deve restare in lista"))
+            .find(|s| s.alternatives().iter().any(|n| n == virtual_name))
+            .unwrap_or_else(|| panic!("'{virtual_name}' must stay in the list"))
             .alternatives()
             .to_vec()
     };
 
-    for (virtuale, reale) in [
+    for (virtual_name, real_name) in [
         ("wget", "wget1-wget"),
         ("zlib-devel", "zlib-ng-compat-devel"),
         ("openjpeg2-devel", "openjpeg-devel"),
     ] {
-        let alternative = gruppo(virtuale);
+        let alternative = group(virtual_name);
         assert!(
-            alternative.iter().any(|n| n == reale),
-            "'{virtuale}' è virtuale su Fedora 41: il gruppo deve offrire il nome \
-             reale '{reale}', trovato {alternative:?}"
+            alternative.iter().any(|n| n == real_name),
+            "'{virtual_name}' is virtual on that release: the group must offer the real name \
+             '{real_name}', found {alternative:?}"
         );
         assert_eq!(
             alternative.first().map(String::as_str),
-            Some(reale),
-            "il nome reale va per PRIMO: è quello che compare nei messaggi \
-             diagnostici, e quello che vogliamo nel delta"
+            Some(real_name),
+            "the real name comes FIRST: it is the one that appears in the diagnostics, and \
+             the one we want in the delta"
         );
     }
 }

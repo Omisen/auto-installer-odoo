@@ -52,10 +52,7 @@ fn a_supported_system_interpreter_is_left_alone() {
         &fedora_alternates(),
         &system_dev(),
     );
-    assert!(
-        plan.is_system(),
-        "sulla versione provata non si cambia nulla"
-    );
+    assert!(plan.is_system(), "on the tested version nothing changes");
 }
 
 /// a Python newer than the pins builds the venv on the newest **covered**
@@ -67,17 +64,17 @@ fn a_supported_system_interpreter_is_left_alone() {
 fn an_unsupported_system_interpreter_is_replaced_by_the_newest_covered_one() {
     let plan = choose_python(Some((3, 14)), &fedora_alternates(), &system_dev());
 
-    assert_eq!(plan.command, "python3.13", "3.13 batte 3.12: è più recente");
+    assert_eq!(plan.command, "python3.13", "3.13 beats 3.12: it is newer");
     assert!(!plan.is_system());
     assert_eq!(
         plan.packages,
         vec!["python3.13".to_string(), "python3.13-devel".to_string()],
-        "l'interprete da solo non basta: senza header non si compila nessuna estensione"
+        "the interpreter alone is not enough: without headers no extension compiles"
     );
     assert_eq!(
         plan.supersedes,
         system_dev(),
-        "gli header del Python di sistema non servono più a nessuno"
+        "the system Python's headers are of no use to anyone now"
     );
 }
 
@@ -97,7 +94,7 @@ fn an_alternate_that_is_just_as_new_is_not_a_solution() {
     let plan = choose_python(Some((3, 14)), &troppo_nuovi, &system_dev());
     assert!(
         plan.is_system(),
-        "nessun interprete coperto: si resta dove si è"
+        "no covered interpreter: we stay where we are"
     );
     assert!(plan.packages.is_empty());
 }
@@ -129,8 +126,8 @@ fn specs(names: &[&str]) -> Vec<PackageSpec> {
 /// with the system interpreter the package list is **unchanged**.
 #[test]
 fn the_package_list_is_untouched_when_the_system_interpreter_is_used() {
-    let lista = specs(&["python3-devel", "gcc", "libpq-devel"]);
-    assert_eq!(PythonPlan::default().adapt_specs(&lista), lista);
+    let list_ = specs(&["python3-devel", "gcc", "libpq-devel"]);
+    assert_eq!(PythonPlan::default().adapt_specs(&list_), list_);
 }
 
 /// with an alternative one: the system headers out, its own in.
@@ -141,20 +138,23 @@ fn the_package_list_is_untouched_when_the_system_interpreter_is_used() {
 fn the_alternate_interpreter_replaces_the_system_headers_and_nothing_else() {
     let plan = choose_python(Some((3, 14)), &fedora_alternates(), &system_dev());
     let adattata = plan.adapt_specs(&specs(&["python3-devel", "gcc", "libpq-devel"]));
-    let nomi: Vec<&str> = adattata.iter().map(|s| s.preferred()).collect();
+    let names: Vec<&str> = adattata.iter().map(|s| s.preferred()).collect();
 
     assert!(
-        !nomi.contains(&"python3-devel"),
-        "gli header del Python di sistema non servono a un venv su 3.13: {nomi:?}"
-    );
-    assert!(nomi.contains(&"python3.13"), "manca l'interprete: {nomi:?}");
-    assert!(
-        nomi.contains(&"python3.13-devel"),
-        "mancano i suoi header, e sei estensioni C non compilerebbero: {nomi:?}"
+        !names.contains(&"python3-devel"),
+        "the system Python's headers are of no use to a venv on 3.13: {names:?}"
     );
     assert!(
-        nomi.contains(&"gcc") && nomi.contains(&"libpq-devel"),
-        "il resto della lista non c'entra e deve restare: {nomi:?}"
+        names.contains(&"python3.13"),
+        "manca l'interprete: {names:?}"
+    );
+    assert!(
+        names.contains(&"python3.13-devel"),
+        "its headers are missing, and six C extensions would not compile: {names:?}"
+    );
+    assert!(
+        names.contains(&"gcc") && names.contains(&"libpq-devel"),
+        "the rest of the list is unrelated and must stay: {names:?}"
     );
 }
 
@@ -193,20 +193,20 @@ fn the_interpreter_is_installed_by_the_step_whose_undo_purges_it() {
     let mut deps = AptPackagesStep::odoo_dependencies_with_ops(Box::new(mock));
     deps.snapshot(&ctx).expect("snapshot");
     deps.run(&ctx).expect("run");
-    let pacchetti = installed(&ops_of(&log));
+    let packages = installed(&ops_of(&log));
     assert!(
-        pacchetti.iter().any(|p| p == "python3.13"),
-        "install-system-dependencies deve portare l'interprete: {pacchetti:?}"
+        packages.iter().any(|p| p == "python3.13"),
+        "install-system-dependencies must carry the interpreter: {packages:?}"
     );
 
     let (mock, log) = MockSystemOps::new(MockConfig::default());
     let mut boot = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
     boot.snapshot(&ctx).expect("snapshot");
     boot.run(&ctx).expect("run");
-    let pacchetti = installed(&ops_of(&log));
+    let packages = installed(&ops_of(&log));
     assert!(
-        !pacchetti.iter().any(|p| p.starts_with("python3.1")),
-        "bootstrap NON deve portarlo: il suo undo non lo rimuoverebbe ({pacchetti:?})"
+        !packages.iter().any(|p| p.starts_with("python3.1")),
+        "bootstrap must NOT carry it: its undo would not remove it ({packages:?})"
     );
 }
 
@@ -231,7 +231,7 @@ fn the_virtualenv_is_born_on_the_chosen_interpreter() {
             o,
             Op::CreateVenv { python, .. } if python == "python3.13"
         )),
-        "il venv deve nascere su python3.13: {:?}",
+        "the venv must be born on python3.13: {:?}",
         ops_of(&log)
     );
 }
@@ -260,13 +260,13 @@ fn the_failure_diagnosis_asks_the_interpreter_the_venv_actually_uses() {
         Box::new(mock),
     );
     step.snapshot(&ctx).expect("snapshot");
-    let _ = step.run(&ctx).expect_err("il passo gevent è fallito");
+    let _ = step.run(&ctx).expect_err("the gevent step failed");
 
     assert!(
         ops_of(&log)
             .iter()
-            .any(|o| matches!(o, Op::PythonVersion(nome) if nome == "python3.13")),
-        "la diagnosi deve chiedere la versione a python3.13, non a python3: {:?}",
+            .any(|o| matches!(o, Op::PythonVersion(name) if name == "python3.13")),
+        "the diagnosis must ask python3.13 for the version, not python3: {:?}",
         ops_of(&log)
     );
 }
@@ -287,22 +287,22 @@ fn fedora_offers_at_least_one_interpreter_covered_by_the_pins() {
     let catalog = DnfBackend.catalog();
     assert!(
         !catalog.alternate_pythons.is_empty(),
-        "senza alternative M11 su Fedora è codice morto"
+        "without alternatives, M11 on this family is dead code"
     );
     assert!(
         catalog
             .alternate_pythons
             .iter()
             .any(|alt| !python_is_newer_than_tested(alt.version)),
-        "nessuna delle alternative è coperta dai pin: la scelta ripiegherebbe \
-         sempre sull'interprete di sistema"
+        "none of the alternatives is covered by the pins: the choice would always fall \
+         back on the system interpreter"
     );
     // and every alternative carries its headers: the interpreter alone builds
     // nothing.
     for alt in &catalog.alternate_pythons {
         assert!(
             alt.devel.starts_with(&alt.interpreter),
-            "{} non porta gli header corrispondenti ({})",
+            "{} does not carry the matching headers ({})",
             alt.interpreter,
             alt.devel
         );

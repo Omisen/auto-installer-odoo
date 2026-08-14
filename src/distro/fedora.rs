@@ -55,8 +55,8 @@ impl Selinux for FedoraSelinux {
     /// `setsebool -P`: **persistent**, surviving a reboot, which is why it is a
     /// recorded artifact and not an incidental command.
     fn set(&self, boolean: &str, value: bool) -> Result<(), StepError> {
-        let valore = if value { "on" } else { "off" };
-        run_command("setsebool", &["-P", boolean, valore])
+        let value = if value { "on" } else { "off" };
+        run_command("setsebool", &["-P", boolean, value])
     }
 }
 

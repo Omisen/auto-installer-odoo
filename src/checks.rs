@@ -579,7 +579,7 @@ fn announce_python_plan(system: Option<(u32, u32)>, plan: &PythonPlan) {
         (Some(v), true) => match untested_python_warning(v) {
             // not covered and no alternative: the M10 case, where the warning
             // already says what will break and where.
-            Some(avviso) => warn!(python = %format_python(v), "{avviso}"),
+            Some(warning) => warn!(python = %format_python(v), "{warning}"),
             None => info!(python = %format_python(v), "✔ Python interpreter"),
         },
         (Some(v), false) => info!(

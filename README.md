@@ -1,4 +1,6 @@
-# Invok
+<p align="center">
+  <img src=".github/assets/invok-logo.png" alt="Invok" width="600">
+</p>
 
 > Installer for Odoo
 
@@ -401,5 +403,4 @@ This project is independent and is **not affiliated with Odoo S.A.**, nor endors
 trademark of Odoo S.A.
 
 ---
-
-> ## [→ Technical documentation](https://github.com/Omisen/invok/wiki)
+<a href="https://github.com/Omisen/invok/wiki"><h2>→ Technical documentation</h2></a>

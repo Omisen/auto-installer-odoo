@@ -54,13 +54,13 @@ fn on_fedora_the_cluster_is_initialized_and_recorded() {
 
     assert!(
         ops_of(&log).contains(&Op::InitPostgresCluster),
-        "senza initdb il servizio non parte: {:?}",
+        "without the init the service does not start: {:?}",
         ops_of(&log)
     );
     assert_eq!(
         snap(&step).cluster_initialized,
         PreState::CreatedByUs,
-        "l'abbiamo creato noi: è un artefatto nostro, e l'undo deve saperlo"
+        "we created it: it is our artifact, and the undo must know"
     );
 }
 
@@ -72,12 +72,12 @@ fn on_debian_nothing_is_initialized() {
 
     assert!(
         !ops_of(&log).contains(&Op::InitPostgresCluster),
-        "su questa famiglia il cluster lo crea il postinst del pacchetto"
+        "on this family the package's post-install creates the cluster"
     );
     assert_eq!(
         snap(&step).cluster_initialized,
         PreState::Untracked,
-        "niente da inizializzare = niente da annullare"
+        "nothing to initialise means nothing to undo"
     );
 }
 
@@ -93,8 +93,8 @@ fn an_existing_cluster_is_left_alone() {
 
     assert!(
         !ops_of(&log).contains(&Op::InitPostgresCluster),
-        "il cluster c'era già: `postgresql-setup --initdb` su un PGDATA popolato \
-         è esattamente ciò che non deve succedere"
+        "the cluster was already there: an init on a populated data directory is exactly \
+         what must not happen"
     );
     assert_eq!(snap(&step).cluster_initialized, PreState::Preexisting);
 }
@@ -121,11 +121,11 @@ fn the_cluster_is_initialized_before_the_service_starts() {
 
     assert!(
         install < init,
-        "prima si installa il pacchetto, poi si inizializza il cluster: {ops:?}"
+        "the package is installed first, then the cluster initialised: {ops:?}"
     );
     assert!(
         init < start,
-        "l'initdb deve precedere lo start, o il servizio non parte: {ops:?}"
+        "the init must precede the start, or the service does not come up: {ops:?}"
     );
 }
 
@@ -148,7 +148,7 @@ fn without_the_aggressive_flag_the_cluster_survives() {
         !ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::RemoveDirAll(_))),
-        "il cluster non si rimuove senza flag esplicito: {:?}",
+        "the cluster is not removed without the explicit flag: {:?}",
         ops_of(&log)
     );
 }
@@ -169,7 +169,7 @@ fn with_the_aggressive_flag_and_an_empty_cluster_it_is_removed() {
             .iter()
             .any(|op| matches!(op, Op::RemoveDirAll(p)
             if p.ends_with("data"))),
-        "con --aggressive-rollback e nessun database di terzi il cluster va via: {:?}",
+        "with --aggressive-rollback and no third-party database the cluster goes: {:?}",
         ops_of(&log)
     );
 }
@@ -198,8 +198,8 @@ fn a_cluster_hosting_other_databases_is_never_removed() {
         !ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::RemoveDirAll(_))),
-        "nel cluster c'è un database che non abbiamo creato noi: il PGDATA li \
-         contiene TUTTI, e rimuoverlo distruggerebbe dati del cliente"
+        "the cluster holds a database we did not create: the data directory holds them \
+         ALL, and removing it would destroy the customer's data"
     );
 }
 
@@ -219,7 +219,7 @@ fn a_preexisting_cluster_is_never_removed() {
         !ops_of(&log)
             .iter()
             .any(|op| matches!(op, Op::RemoveDirAll(_))),
-        "PreState::Preexisting: c'era prima di noi, non è nostro da distruggere"
+        "PreState::Preexisting: it was there before us, not ours to destroy"
     );
 }
 
@@ -241,18 +241,18 @@ fn a_snapshot_written_before_this_axis_still_rehydrates() {
     let (ops, _log) = MockSystemOps::new(MockConfig::default());
     let mut step = SetupPostgres::with_ops(Box::new(ops));
     step.rehydrate(&legacy)
-        .expect("uno snapshot pre-M3 deve restare leggibile");
+        .expect("a pre-M3 snapshot must stay readable");
 
     let s = snap(&step);
     assert_eq!(
         s.installed,
         PreState::CreatedByUs,
-        "gli assi noti si leggono"
+        "the known axes are read"
     );
     assert_eq!(
         s.cluster_initialized,
         PreState::Untracked,
-        "senza il campo, nessun cluster è nostro: è ciò che quelle installazioni erano"
+        "without the field no cluster is ours: that is what those installations were"
     );
 }
 
@@ -294,16 +294,15 @@ fn each_family_declares_its_own_cluster_policy() {
     assert_eq!(
         Debian::new().postgres_data_dir(),
         None,
-        "su Debian/Ubuntu il postinst del pacchetto crea e avvia il cluster: \
-         dichiarare un PGDATA qui farebbe eseguire un initdb che non serve, con \
-         un comando che su quella famiglia non esiste"
+        "on that family the package's post-install creates and starts the cluster: \
+         declaring a data directory here would run an init that is not needed, with a \
+         command that does not exist there"
     );
 
     assert_eq!(
         Fedora::new().postgres_data_dir(),
         Some(std::path::PathBuf::from("/var/lib/pgsql/data")),
-        "su Fedora il cluster va creato, e il percorso è quello di default della \
-         distribuzione"
+        "on this family the cluster must be created, at the distribution's default path"
     );
 }
 
@@ -320,7 +319,7 @@ fn initialising_where_it_is_not_needed_succeeds_quietly() {
 
     assert!(
         Debian::new().init_postgres_cluster().is_ok(),
-        "su questa famiglia non c'è nulla da fare, e «nulla da fare» è un successo"
+        "on this family there is nothing to do, and \"nothing to do\" is a success"
     );
 }
 
@@ -346,22 +345,22 @@ fn the_declared_pgdata_is_read_the_way_postgresql_setup_reads_it() {
             "Environment=PG_OOM_ADJUST_FILE=/proc/self/oom_score_adj PGDATA=/srv/pg/data\n"
         ),
         Some(PathBuf::from("/srv/pg/data")),
-        "PGDATA non è per forza la prima variabile della riga"
+        "the data directory is not necessarily the line's first variable"
     );
     assert_eq!(
         pgdata_from_environment("Environment=PGDATA=/var/lib/pgsql/data PGDATA=/srv/pg/data\n"),
         Some(PathBuf::from("/srv/pg/data")),
-        "come in systemd, l'ultima definizione vince: è così che agisce un drop-in"
+        "as in systemd, the last definition wins: that is how a drop-in acts"
     );
     assert_eq!(
         pgdata_from_environment("Environment=\n"),
         None,
-        "una unit senza PGDATA è «non lo so», non un percorso vuoto"
+        "a unit without the variable means \"I do not know\", not an empty path"
     );
     assert_eq!(
         pgdata_from_environment(""),
         None,
-        "e nemmeno un output assente si traduce in un percorso"
+        "and an absent output does not translate into a path either"
     );
 }
 
@@ -375,23 +374,23 @@ fn a_conflict_is_only_a_conflict_when_both_answers_exist_and_differ() {
 
     assert!(
         cluster_path_conflict(nostro, Some(Path::new("/var/lib/pgsql/data"))).is_none(),
-        "stesso percorso: è il caso normale di ogni Fedora"
+        "the same path: the normal case on every machine of that family"
     );
     assert!(
         cluster_path_conflict(nostro, None).is_none(),
-        "«non lo so» non è un conflitto: cecità non è divergenza"
+        "\"I do not know\" is not a conflict: blindness is not divergence"
     );
 
-    let messaggio = cluster_path_conflict(nostro, Some(Path::new("/srv/pg/data")))
-        .expect("percorsi diversi: va rifiutato");
+    let message = cluster_path_conflict(nostro, Some(Path::new("/srv/pg/data")))
+        .expect("different paths: it must be refused");
     assert!(
-        messaggio.contains("/srv/pg/data") && messaggio.contains("/var/lib/pgsql/data"),
-        "il messaggio deve nominare ENTRAMBI i percorsi, o non si capisce cosa non torna: \
-         {messaggio}"
+        message.contains("/srv/pg/data") && message.contains("/var/lib/pgsql/data"),
+        "the message must name BOTH paths, or there is no telling what does not add up: \
+         {message}"
     );
     assert!(
-        messaggio.contains("aggressive-rollback"),
-        "e deve dire qual è il danno che si sta evitando: {messaggio}"
+        message.contains("aggressive-rollback"),
+        "and it must say which damage is being avoided: {message}"
     );
 }
 
@@ -413,14 +412,14 @@ fn a_cluster_configured_elsewhere_stops_the_installation_before_it_starts() {
 
     let err = step
         .snapshot(&ctx(false))
-        .expect_err("un PGDATA diverso dal nostro deve fermare lo step");
+        .expect_err("a data directory other than ours must stop the step");
     assert!(
         matches!(err, StepError::Precondition(_)),
-        "dev'essere una precondizione, non un errore qualsiasi: {err:?}"
+        "it must be a precondition, not just any error: {err:?}"
     );
     assert!(
         ops_of(&log).is_empty(),
-        "lo snapshot non deve aver mutato niente: {:?}",
+        "the snapshot must have mutated nothing: {:?}",
         ops_of(&log)
     );
 }
@@ -432,7 +431,7 @@ fn a_cluster_configured_elsewhere_stops_the_installation_before_it_starts() {
 /// pass the test above unnoticed.
 #[test]
 fn the_usual_fedora_is_not_stopped_by_this_check() {
-    for dichiarato in [
+    for declared in [
         None,
         Some(std::path::PathBuf::from(
             invok::distro::fedora::POSTGRES_DATA_DIR,
@@ -440,14 +439,14 @@ fn the_usual_fedora_is_not_stopped_by_this_check() {
     ] {
         let cfg = MockConfig {
             family: OsFamily::Fedora,
-            pg_declared_data_dir: dichiarato.clone(),
+            pg_declared_data_dir: declared.clone(),
             ..Default::default()
         };
         let (mock, _log) = MockSystemOps::new(cfg);
         let mut step = SetupPostgres::with_ops(Box::new(mock));
         assert!(
             step.snapshot(&ctx(false)).is_ok(),
-            "con PGDATA {dichiarato:?} lo step deve procedere"
+            "with data directory {declared:?} the step must proceed"
         );
     }
 }

@@ -49,13 +49,13 @@ fn created_by_us_round_trip() {
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
-    assert!(home.exists(), "run deve creare la directory");
+    assert!(home.exists(), "the run must create the directory");
     assert_eq!(persisted_prestate(&step), PreState::CreatedByUs);
 
     step.undo(&c).expect("undo");
     assert!(
         !home.exists(),
-        "undo deve rimuovere la directory creata da noi"
+        "the undo must remove the directory we created"
     );
 }
 
@@ -75,7 +75,10 @@ fn preexisting_is_noop() {
     step.undo(&c).expect("undo");
 
     // a pre-existing directory survives: not ours, not deleted.
-    assert!(home.exists(), "undo NON deve rimuovere una dir Preexisting");
+    assert!(
+        home.exists(),
+        "the undo must NOT remove a Preexisting directory"
+    );
 }
 
 #[test]
@@ -97,7 +100,7 @@ fn undo_does_not_force_on_non_empty_dir() {
     step.undo(&c).expect("undo best-effort");
     assert!(
         home.exists(),
-        "undo non deve rimuovere una dir non vuota (no rm -rf)"
+        "the undo must not remove a non-empty directory (never rm -rf)"
     );
     assert!(home.join("intruso.txt").exists());
 }
@@ -114,7 +117,7 @@ fn dry_run_does_not_create() {
     step.run(&c).expect("run");
 
     // a dry run creates nothing and leaves the state untracked.
-    assert!(!home.exists(), "dry-run non deve creare la directory");
+    assert!(!home.exists(), "a dry run must not create the directory");
     assert_eq!(persisted_prestate(&step), PreState::Untracked);
 
     step.undo(&c).expect("undo");
@@ -145,11 +148,11 @@ fn an_already_existing_user_receives_the_home_immediately() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    assert!(home.exists(), "la directory va comunque creata");
+    assert!(home.exists(), "the directory is created anyway");
     assert_eq!(
         persisted_prestate(&step),
         PreState::CreatedByUs,
-        "la consegna non cambia la proprietà: la directory resta nostra da rimuovere"
+        "the handover does not change ownership: the directory stays ours to remove"
     );
 
     let ops = ops_of(&log);
@@ -159,13 +162,13 @@ fn an_already_existing_user_receives_the_home_immediately() {
             Op::ChownNamed { path, owner, group }
                 if *path == home && owner == "odoo" && group == "odoo"
         )),
-        "la home deve essere consegnata all'utente che esiste già: {ops:?}"
+        "the home must be handed to the already-existing user: {ops:?}"
     );
     assert!(
         ops.iter()
             .any(|op| matches!(op, Op::Chmod { path, mode } if *path == home && *mode == 0o750)),
-        "stessi permessi che imposterebbe CreateOdooUser: la home deve risultare \
-         identica quale che sia lo step che l'ha consegnata: {ops:?}"
+        "the same permissions CreateOdooUser would set: the home must come out identical \
+         whichever step handed it over: {ops:?}"
     );
 }
 
@@ -186,7 +189,7 @@ fn without_the_user_the_home_stays_root_owned() {
     let ops = ops_of(&log);
     assert!(
         !ops.iter().any(|op| matches!(op, Op::ChownNamed { .. })),
-        "nessuna consegna: l'utente non esiste ancora, ci penserà CreateOdooUser: {ops:?}"
+        "no handover: the user does not exist yet, CreateOdooUser will see to it: {ops:?}"
     );
 }
 
@@ -212,7 +215,7 @@ fn a_preexisting_home_is_never_handed_over() {
     assert_eq!(persisted_prestate(&step), PreState::Preexisting);
     assert!(
         ops_of(&log).is_empty(),
-        "su una directory non nostra non si tocca nulla: {:?}",
+        "on a directory that is not ours nothing is touched: {:?}",
         ops_of(&log)
     );
 }
@@ -235,5 +238,5 @@ fn dry_run_hands_over_nothing() {
     step.run(&c).expect("run");
 
     assert!(!home.exists());
-    assert!(ops_of(&log).is_empty(), "dry-run non muta nulla");
+    assert!(ops_of(&log).is_empty(), "a dry run mutates nothing");
 }

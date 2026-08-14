@@ -73,7 +73,7 @@ fn a_finished_installation_is_refused_not_overwritten() {
     assert_eq!(
         start_decision(&state, &cfg, false),
         StartDecision::RefuseFinished,
-        "reinstallare sopra un'istanza completa deve fermarsi, non sovrascrivere il manifesto"
+        "reinstalling over a complete instance must stop, not overwrite the manifest"
     );
 }
 
@@ -119,24 +119,24 @@ fn resuming_with_different_artifacts_is_refused_and_says_which() {
     let ctx = ctx_with_state(&dir);
     let state = partial_state(&ctx, &[("alpha", PreState::CreatedByUs)]);
 
-    let mut altra = ctx_with_state(&dir);
-    altra.db_name = "fatturazione".to_string();
-    let cfg = InstallConfig::from_context(&altra);
+    let mut other = ctx_with_state(&dir);
+    other.db_name = "fatturazione".to_string();
+    let cfg = InstallConfig::from_context(&other);
 
-    let StartDecision::RefuseIdentityMismatch(differenze) = start_decision(&state, &cfg, false)
+    let StartDecision::RefuseIdentityMismatch(differences) = start_decision(&state, &cfg, false)
     else {
-        panic!("atteso un rifiuto per identità diversa");
+        panic!("a refusal on a different identity was expected");
     };
 
-    assert_eq!(differenze.len(), 1, "una sola differenza: il database");
+    assert_eq!(differences.len(), 1, "a single difference: the database");
     assert_eq!(
-        differenze[0],
+        differences[0],
         (
             "database name",
             "citest".to_string(),
             "fatturazione".to_string()
         ),
-        "il messaggio deve poter dire QUALE artefatto non coincide"
+        "the message must be able to say WHICH artifact does not match"
     );
 }
 
@@ -150,7 +150,7 @@ fn non_identifying_fields_do_not_block_a_resume() {
 
     let mut diverso = ctx_with_state(&dir);
     diverso.port = 8888;
-    diverso.sudo_user = Some("un-altro-admin".to_string());
+    diverso.sudo_user = Some("un-other-admin".to_string());
     let cfg = InstallConfig::from_context(&diverso);
 
     assert_eq!(start_decision(&state, &cfg, false), StartDecision::Resume);
@@ -195,20 +195,20 @@ fn resume_does_not_re_run_completed_steps() {
     let mut installer = Installer::resuming_from(state);
     installer
         .execute(&mut steps, &ctx)
-        .expect("alpha è già stato eseguito: non va rifatto");
+        .expect("alpha has already run: it must not be repeated");
 
     assert_eq!(
         installer.state().completed.len(),
         2,
-        "il manifesto deve contenere alpha (ereditato) e beta (eseguito ora), una volta ciascuno"
+        "the manifest must hold alpha (inherited) and beta (run now), once each"
     );
-    let nomi: Vec<&str> = installer
+    let names: Vec<&str> = installer
         .state()
         .completed
         .iter()
         .map(|r| r.name.as_str())
         .collect();
-    assert_eq!(nomi, vec!["alpha", "beta"]);
+    assert_eq!(names, vec!["alpha", "beta"]);
 }
 
 /// **the defect's test.** on a re-run, a step that already executed would see
@@ -241,15 +241,15 @@ fn resume_inherits_ownership_instead_of_re_deducing_it() {
 
     let mut installer = Installer::resuming_from(state);
     let err = installer.execute(&mut steps, &ctx);
-    assert!(err.is_err(), "beta fallisce e innesca il rollback");
+    assert!(err.is_err(), "beta fails and triggers the rollback");
 
-    let azioni = log.lock().expect("log").clone();
+    let actions = log.lock().expect("log").clone();
     assert_eq!(
-        azioni,
+        actions,
         vec!["alpha".to_string()],
-        "l'undo di alpha deve AGIRE: il manifesto dice che l'artefatto è nostro. \
-         Senza eredità sarebbe stato Preexisting e l'artefatto resterebbe sulla macchina \
-         per sempre — è esattamente il danno di A-V3-1"
+        "alpha's undo must ACT: the manifest says the artifact is ours. without the \
+         inheritance it would have been Preexisting and the artifact would stay on the \
+         machine forever — exactly A-V3-1's damage"
     );
 }
 
@@ -264,17 +264,17 @@ fn resume_keeps_the_recorded_config() {
 
     // the engine gets a context naming a different database: overwriting the
     // config would point the undos at the wrong one.
-    let mut altro = ctx_with_state(&dir);
-    altro.db_name = "fatturazione".to_string();
+    let mut other = ctx_with_state(&dir);
+    other.db_name = "fatturazione".to_string();
 
     let mut steps: Vec<Box<dyn Step>> = vec![Box::new(NoopStep::new("alpha"))];
     let mut installer = Installer::resuming_from(state);
-    installer.execute(&mut steps, &altro).expect("execute");
+    installer.execute(&mut steps, &other).expect("execute");
 
     assert_eq!(
         installer.state().config.as_ref(),
         Some(&originale),
-        "la config del manifesto è l'identità degli artefatti: non si riscrive a metà corsa"
+        "the manifest's config is the artifacts' identity: it is not rewritten mid-run"
     );
 }
 
@@ -300,7 +300,7 @@ fn an_unreadable_snapshot_stops_the_resume() {
     let mut installer = Installer::resuming_from(state);
     assert!(
         installer.execute(&mut steps, &ctx).is_err(),
-        "senza uno snapshot leggibile non sappiamo di chi sia l'artefatto: meglio fermarsi"
+        "without a readable snapshot we do not know whose the artifact is: better to stop"
     );
 }
 
@@ -329,9 +329,9 @@ fn a_resumed_installation_finishes_with_a_single_coherent_manifest() {
     installer.mark_finished(&ctx).expect("mark_finished");
 
     let riletto = InstallState::load(&ctx.state_path).expect("load");
-    let nomi: Vec<&str> = riletto.completed.iter().map(|r| r.name.as_str()).collect();
-    assert_eq!(nomi, vec!["alpha", "beta", "gamma"]);
-    assert!(riletto.finished, "l'installazione ripresa è conclusa");
+    let names: Vec<&str> = riletto.completed.iter().map(|r| r.name.as_str()).collect();
+    assert_eq!(names, vec!["alpha", "beta", "gamma"]);
+    assert!(riletto.finished, "the resumed installation is finished");
 
     // the inherited ownership survives the whole pass.
     let alpha: PreState =
@@ -353,7 +353,7 @@ fn a_manifest_past_setup_systemd_owns_the_http_port() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx_with_state(&dir);
 
-    let prima = partial_state(
+    let before = partial_state(
         &ctx,
         &[
             ("prepare-opt-root", PreState::CreatedByUs),
@@ -361,8 +361,8 @@ fn a_manifest_past_setup_systemd_owns_the_http_port() {
         ],
     );
     assert!(
-        !prima.owns_the_http_port(),
-        "senza setup-systemd la porta non è nostra: un conflitto è reale e va segnalato"
+        !before.owns_the_http_port(),
+        "without setup-systemd the port is not ours: a conflict is real and must be flagged"
     );
 
     let dopo = partial_state(
@@ -374,8 +374,8 @@ fn a_manifest_past_setup_systemd_owns_the_http_port() {
     );
     assert!(
         dopo.owns_the_http_port(),
-        "con setup-systemd registrato la porta è del nostro servizio: il controllo va saltato, \
-         o il resume muore sul servizio che ha appena installato (A-R9-1)"
+        "with setup-systemd recorded the port belongs to our own service: the check is \
+         skipped, or the resume dies on the service it just installed (A-R9-1)"
     );
 }
 

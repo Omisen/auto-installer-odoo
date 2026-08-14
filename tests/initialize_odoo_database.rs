@@ -43,24 +43,24 @@ fn hard_stop_on_preexisting_db_never_inits() {
     let result = step.snapshot(&c);
     assert!(
         result.is_err(),
-        "init su DB preesistente deve essere rifiutato (hard-stop)"
+        "an init on a pre-existing DB must be refused (hard stop)"
     );
     // A3.3: the message must raise the "leftover of a failed run" hypothesis,
     // or the user is stuck without understanding why.
     let msg = result.expect_err("errore").to_string();
     assert!(
         msg.contains("leftover"),
-        "il messaggio deve offrire la diagnosi 'residuo di run precedente': {msg}"
+        "the message must offer the 'leftover of an earlier run' diagnosis: {msg}"
     );
     assert!(
         msg.contains("dropdb odoo"),
-        "il messaggio deve indicare l'azione concreta: {msg}"
+        "the message must name the concrete action: {msg}"
     );
     assert!(
         !ops_of(&log)
             .iter()
             .any(|o| matches!(o, Op::OdooInitBase { .. })),
-        "l'init NON deve mai essere invocato su un DB preesistente"
+        "the init must NEVER be invoked on a pre-existing DB"
     );
 }
 
@@ -84,7 +84,7 @@ fn created_by_us_runs_init_and_undo_is_noop() {
     assert_eq!(
         ops_of(&log).len(),
         after_run,
-        "undo è no-op (pulizia coperta dal dropdb di Fase 5)"
+        "the undo is a no-op (the cleanup is covered by the dropdb)"
     );
 
     assert!(ops_of(&log)

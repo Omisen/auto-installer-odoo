@@ -29,12 +29,12 @@ fn create_private_file_never_writes_through_a_symlink() {
 
     let ops = RealSystemOps::debian();
     let err = ops.create_private_file(&tmp, "admin_passwd = s3cret");
-    assert!(err.is_err(), "l'apertura deve fallire, non seguire il link");
+    assert!(err.is_err(), "the open must fail, not follow the link");
 
     assert_eq!(
         std::fs::read_to_string(&victim).expect("read"),
         "contenuto originale",
-        "il file bersaglio non deve essere toccato"
+        "the target file must not be touched"
     );
     // the symlink is untouched: neither removed nor replaced.
     assert!(std::fs::symlink_metadata(&tmp)
@@ -48,13 +48,13 @@ fn create_private_file_never_writes_through_a_symlink() {
 #[test]
 fn create_private_file_rejects_dangling_symlink() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let target = dir.path().join("non-esiste-ancora");
+    let target = dir.path().join("does-not-exist-yet");
     let tmp = dir.path().join(".odoo18.conf.tmp");
     std::os::unix::fs::symlink(&target, &tmp).expect("symlink");
 
     let ops = RealSystemOps::debian();
     assert!(ops.create_private_file(&tmp, "segreto").is_err());
-    assert!(!target.exists(), "non deve creare il bersaglio del link");
+    assert!(!target.exists(), "it must not create the link's target");
 }
 
 /// `O_EXCL`: an existing regular file is never overwritten. this stops root
@@ -75,7 +75,7 @@ fn create_private_file_refuses_a_preexisting_file() {
     assert_eq!(
         std::fs::read_to_string(&tmp).expect("read"),
         "piazzato prima",
-        "il file preesistente non deve essere troncato né riscritto"
+        "the pre-existing file must be neither truncated nor rewritten"
     );
 }
 
@@ -95,7 +95,7 @@ fn create_private_file_creates_0600() {
         "admin_passwd = s3cret"
     );
     let mode = std::fs::metadata(&tmp).expect("stat").permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "atteso 0600, trovato {mode:o}");
+    assert_eq!(mode, 0o600, "0600 expected, found {mode:o}");
 }
 
 /// the temporary's name is unpredictable and does not collide: two concurrent
@@ -108,7 +108,7 @@ fn private_temp_path_is_unique_and_next_to_dest() {
 
     let a = private_temp_path(&dest, "odoo.conf");
     let b = private_temp_path(&dest, "odoo.conf");
-    assert_ne!(a, b, "due temp per la stessa destinazione devono differire");
+    assert_ne!(a, b, "two temporaries for the same destination must differ");
 
     // the destination's own directory, so the final move is an atomic rename.
     assert_eq!(a.parent(), dest.parent());
@@ -146,11 +146,11 @@ fn positional_names_are_preceded_by_double_dash() {
 
     for (cmd, args, name) in cases {
         let last = args.last().expect("almeno un argomento");
-        assert_eq!(last, name, "{cmd}: il nome deve essere l'ultimo argomento");
+        assert_eq!(last, name, "{cmd}: the name must be the last argument");
         assert_eq!(
             args.get(args.len() - 2).map(String::as_str),
             Some("--"),
-            "{cmd}: manca il `--` prima del posizionale (args: {args:?})"
+            "{cmd}: the `--` before the positional is missing (args: {args:?})"
         );
     }
 }
@@ -202,7 +202,7 @@ fn lockfile_is_created_private() {
     let guard = lockfile::acquire(&path).expect("lock acquisito");
 
     let mode = std::fs::metadata(&path).expect("stat").permissions().mode() & 0o777;
-    assert_eq!(mode, 0o600, "atteso 0600, trovato {mode:o}");
+    assert_eq!(mode, 0o600, "0600 expected, found {mode:o}");
 
     // the lock stays exclusive.
     assert!(lockfile::acquire(&path).is_err());

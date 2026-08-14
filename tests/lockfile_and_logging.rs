@@ -18,11 +18,11 @@ fn second_concurrent_lock_is_refused_and_released_on_drop() {
     // a second run, a new descriptor on the same file, is refused.
     assert!(
         lockfile::acquire(&path).is_err(),
-        "una seconda installazione deve essere rifiutata"
+        "a second installation must be refused"
     );
 
-    drop(guard); // RAII: il lock è rilasciato al Drop.
-    let _again = lockfile::acquire(&path).expect("dopo il rilascio si può riacquisire");
+    drop(guard); // RAII: the lock is released on Drop.
+    let _again = lockfile::acquire(&path).expect("after the release it can be acquired again");
 }
 
 #[test]
@@ -33,7 +33,7 @@ fn log_file_open_degrades_without_failing() {
     // an unwritable one yields none: it degrades rather than panics.
     assert!(
         logging::try_open(Path::new("/proc/nonexistent-dir-xyz/installer.log")).is_none(),
-        "un percorso non scrivibile deve degradare a None"
+        "a non-writable path must degrade to None"
     );
 }
 
@@ -59,12 +59,12 @@ fn installer_bookkeeping_lives_outside_the_reversible_perimeter() {
     for (what, path) in [
         ("il lock", lockfile::DEFAULT_LOCK_PATH),
         ("il log", logging::DEFAULT_LOG_PATH),
-        ("il manifesto", state::DEFAULT_STATE_PATH),
+        ("the manifest", state::DEFAULT_STATE_PATH),
     ] {
         assert!(
             !Path::new(path).starts_with(home),
-            "{what} ({path}) sta dentro {}: la directory non potrebbe più essere \
-             rimossa dall'undo di prepare-opt-root (A-V3-2)",
+            "{what} ({path}) lives inside {}: the directory could no longer be removed by \
+             prepare-opt-root's undo (A-V3-2)",
             home.display()
         );
     }
@@ -72,8 +72,8 @@ fn installer_bookkeeping_lives_outside_the_reversible_perimeter() {
     // the historical path does sit inside, which is why it is historical.
     assert!(
         Path::new(state::LEGACY_STATE_PATH).starts_with(home),
-        "se il percorso storico non fosse più dentro {}, questa costante non \
-         servirebbe più a nulla e andrebbe rimossa",
+        "if the historical path were no longer inside {}, this constant would serve no \
+         purpose and should be removed",
         home.display()
     );
 }
@@ -102,7 +102,7 @@ fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
     assert_eq!(
         state::pick_state_path(&current, &legacy),
         storico,
-        "un manifesto scritto da una versione precedente deve restare consumabile"
+        "a manifest written by an earlier version must stay consumable"
     );
 
     // the previous name's manifest exists too: the more recent wins. the REAL
@@ -111,7 +111,7 @@ fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
     assert_eq!(
         state::pick_state_path(&current, &legacy),
         rinominato,
-        "fra due manifesti storici si consuma il più recente"
+        "between two historical manifests the most recent is consumed"
     );
 
     // the current one exists: it always wins.
@@ -129,21 +129,21 @@ fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
 fn the_pre_rename_manifest_path_is_still_read() {
     assert!(
         state::LEGACY_STATE_PATHS.contains(&state::RENAMED_STATE_PATH),
-        "il percorso pre-rename deve restare fra quelli letti"
+        "the pre-rename path must stay among the ones read"
     );
     assert!(
         state::LEGACY_STATE_PATHS.contains(&state::LEGACY_STATE_PATH),
-        "il percorso pre-2.2.0 deve restare fra quelli letti"
+        "the pre-2.2.0 path must stay among the ones read"
     );
     assert_eq!(
         state::LEGACY_STATE_PATHS.first(),
         Some(&state::RENAMED_STATE_PATH),
-        "l'elenco va dal più recente al più vecchio: l'ordine decide quale \
-         manifesto si consuma se ne esistessero due"
+        "the list goes newest to oldest: the order decides which manifest is consumed if \
+         two existed"
     );
     assert!(
         !state::DEFAULT_STATE_PATH.contains("odoo"),
-        "il percorso CORRENTE non deve più portare il nome vecchio"
+        "the CURRENT path must no longer carry the old name"
     );
 }
 
@@ -152,17 +152,17 @@ fn the_pre_rename_manifest_path_is_still_read() {
 #[test]
 fn clear_does_not_remove_an_arbitrary_parent_directory() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let parent = dir.path().join("stato-di-qualcun-altro");
+    let parent = dir.path().join("somebody-elses-state");
     std::fs::create_dir(&parent).expect("mkdir");
     let path = parent.join("state.json");
     std::fs::write(&path, b"{}").expect("write");
 
     state::InstallState::clear(&path).expect("clear");
 
-    assert!(!path.exists(), "il file di stato deve essere rimosso");
+    assert!(!path.exists(), "the state file must be removed");
     assert!(
         parent.exists(),
-        "clear non deve rimuovere la directory genitrice di un --state arbitrario"
+        "clear must not remove the parent directory of an arbitrary --state"
     );
 }
 
@@ -176,8 +176,8 @@ fn the_state_dir_constant_is_actually_the_parent_of_the_state_file() {
     assert_eq!(
         Path::new(state::DEFAULT_STATE_PATH).parent(),
         Some(Path::new(state::DEFAULT_STATE_DIR)),
-        "se non è il genitore, il ramo che rimuove la directory in clear() non \
-         si attiva mai e il guscio vuoto resta sul disco"
+        "if it is not the parent, the branch in clear() that removes the directory never \
+         fires and the empty shell stays on disk"
     );
 }
 
@@ -194,12 +194,12 @@ fn acquire_does_not_create_the_parent_directory() {
 
     assert!(
         result.is_err(),
-        "con il genitore assente l'acquisizione deve fallire, non creare la directory"
+        "with the parent missing the acquisition must fail, not create the directory"
     );
     assert!(
         !parent.exists(),
-        "acquire non deve creare la directory genitrice: è così che `/opt/odoo` \
-         nasceva fuori dal motore (A-V3-2)"
+        "acquire must not create the parent directory: that is how the perimeter came \
+         into existence outside the engine (A-V3-2)"
     );
 }
 
@@ -228,7 +228,7 @@ fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
     let _guard = lockfile::acquire(&lock_path).expect("lock acquisito");
     assert!(
         !home.exists(),
-        "l'acquisizione del lock non deve aver creato la home"
+        "acquiring the lock must not have created the home"
     );
 
     // …then the engine.
@@ -246,13 +246,13 @@ fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
     assert_eq!(
         prestate,
         PreState::CreatedByUs,
-        "con il lock fuori dal perimetro la home è nostra, non preesistente"
+        "with the lock outside the perimeter the home is ours, not pre-existing"
     );
 
     step.undo(&ctx).expect("undo");
     assert!(
         !home.exists(),
-        "dopo il rollback la home non deve sopravvivere: è la promessa dominante del progetto"
+        "after the rollback the home must not survive: that is the project's dominant promise"
     );
 }
 
@@ -287,7 +287,7 @@ fn lock_inside_the_home_is_what_made_the_undo_dead_code() {
     assert_eq!(prestate, PreState::Preexisting);
     assert!(
         home.exists(),
-        "documenta il difetto: con il lock dentro, l'undo non poteva attivarsi"
+        "it documents the defect: with the lock inside, the undo could never fire"
     );
 }
 
@@ -297,16 +297,16 @@ fn lock_inside_the_home_is_what_made_the_undo_dead_code() {
 #[test]
 fn log_does_not_depend_on_a_directory_the_installer_must_still_create() {
     let root = tempfile::tempdir().expect("tempdir");
-    let home: PathBuf = root.path().join("odoo"); // assente, come su macchina vergine
+    let home: PathBuf = root.path().join("odoo"); // absent, as on a virgin machine
     let var_log = root.path().join("var-log");
     std::fs::create_dir(&var_log).expect("mkdir var-log");
 
     // a log inside the home never appears, the old behaviour…
     assert!(
         logging::try_open(&home.join(".installer.log")).is_none(),
-        "senza la home, un log al suo interno non può nascere"
+        "without the home, a log inside it cannot come into existence"
     );
     // …one outside does, without bringing the home into existence.
     assert!(logging::try_open(&var_log.join("invok.log")).is_some());
-    assert!(!home.exists(), "aprire il log non deve creare la home");
+    assert!(!home.exists(), "opening the log must not create the home");
 }

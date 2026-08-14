@@ -32,11 +32,11 @@ fn steps_do_not_import_ui_crates() {
     for (name, content) in read_rs_files(&steps_dir) {
         assert!(
             !imports_or_uses(&content, "inquire"),
-            "{name} non deve dipendere da inquire"
+            "{name} must not depend on inquire"
         );
         assert!(
             !imports_or_uses(&content, "indicatif"),
-            "{name} non deve dipendere da indicatif"
+            "{name} must not depend on indicatif"
         );
     }
 }
@@ -48,11 +48,11 @@ fn engine_does_not_depend_on_indicatif() {
     let content = fs::read_to_string(&engine).expect("read engine.rs");
     assert!(
         !imports_or_uses(&content, "indicatif"),
-        "il motore deve dipendere dall'astrazione ProgressReporter, non da indicatif"
+        "the engine must depend on the ProgressReporter abstraction, not on indicatif"
     );
     // but it must use the abstraction.
     assert!(
         content.contains("ProgressReporter"),
-        "il motore usa l'astrazione di progresso"
+        "the engine uses the progress abstraction"
     );
 }

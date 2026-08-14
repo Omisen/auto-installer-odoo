@@ -818,7 +818,7 @@ jobs:
           # that it describes nothing we created.
           [ -z "$(sudo ls -A /opt/odoo)" ] || { echo "::error::it mutated /opt/odoo before refusing"; exit 1; }
           test ! -d /opt/odoo/odoo18 || { echo "::error::it created the install dir"; exit 1; }
-          test ! -f /etc/systemd/system/odoo18.service || { echo "::error::ha installato l'unit"; exit 1; }
+          test ! -f /etc/systemd/system/odoo18.service || { echo "::error::it installed the unit"; exit 1; }
           if sudo test -f /var/lib/invok/state.json; then
             if sudo grep -q '"CreatedByUs"' /var/lib/invok/state.json; then
               echo "::error::the manifest records artifacts we created: the precondition stopped nothing"

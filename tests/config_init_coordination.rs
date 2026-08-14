@@ -56,11 +56,11 @@ fn run_chain(db_exists: bool) -> (bool, Vec<Op>) {
 fn our_db_allows_init() {
     // absent database: created by us, so the init is allowed to proceed.
     let (ok, ops) = run_chain(/* db_exists */ false);
-    assert!(ok, "la catena deve completare");
+    assert!(ok, "the chain must complete");
     assert!(ops.iter().any(|o| matches!(o, Op::CreateDb { .. })));
     assert!(
         ops.iter().any(|o| matches!(o, Op::OdooInitBase { .. })),
-        "su DB nostro l'init procede"
+        "on a DB of ours the init proceeds"
     );
 }
 
@@ -69,9 +69,9 @@ fn preexisting_db_blocks_init_through_engine() {
     // pre-existing database: the init's hard stop fires and the whole chain
     // fails without it ever running.
     let (ok, ops) = run_chain(/* db_exists */ true);
-    assert!(!ok, "il DB preesistente deve bloccare la catena");
+    assert!(!ok, "a pre-existing DB must block the chain");
     assert!(
         !ops.iter().any(|o| matches!(o, Op::OdooInitBase { .. })),
-        "init mai eseguito su DB preesistente, nemmeno attraverso il motore"
+        "the init never runs on a pre-existing DB, not even through the engine"
     );
 }

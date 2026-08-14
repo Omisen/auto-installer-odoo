@@ -50,9 +50,9 @@ fn no_fixed_file_name_is_joined_onto_the_shared_temp_dir() {
         for (n, line) in content.lines().enumerate() {
             assert!(
                 !line.contains("temp_dir().join("),
-                "{file}:{} attacca un nome fisso alla directory temporanea condivisa.\n  {}\n\
-                 Usa private_temp_path (o private_temp_path_keeping_extension se serve \
-                 conservare l'estensione): un nome prevedibile in /tmp è A-V3-3",
+                "{file}:{} joins a fixed name to the shared temporary directory.\n  {}\n\
+                 use private_temp_path (or private_temp_path_keeping_extension when the \
+                 extension must be kept): a predictable name there is A-V3-3",
                 n + 1,
                 line.trim()
             );
@@ -77,9 +77,9 @@ fn steps_do_not_write_files_behind_system_ops() {
             }
             assert!(
                 !line.contains("fs::write("),
-                "{file}:{} scrive un file fuori da SystemOps.\n  {line}\n\
-                 Le scritture passano da create_private_file/write_private_file: \
-                 sono fail-closed e osservabili dai test (A-V3-3)",
+                "{file}:{} writes a file outside SystemOps.\n  {line}\n\
+                 writes go through create_private_file/write_private_file: they are \
+                 fail-closed and observable from the tests (A-V3-3)",
                 n + 1
             );
         }
@@ -99,20 +99,20 @@ fn the_deb_temp_name_stays_installable_and_unpredictable() {
     let a = private_temp_path_keeping_extension(dir, pkg);
     let b = private_temp_path_keeping_extension(dir, pkg);
 
-    let nome_a = a.file_name().expect("nome").to_string_lossy().into_owned();
+    let name_a = a.file_name().expect("name").to_string_lossy().into_owned();
     assert!(
-        nome_a.ends_with(".deb"),
-        "apt non riconoscerebbe un percorso locale senza estensione .deb: {nome_a}"
+        name_a.ends_with(".deb"),
+        "the manager would not recognise a local path without the .deb extension: {name_a}"
     );
     assert!(
-        nome_a != pkg && !nome_a.ends_with("_amd64.deb"),
-        "il nome deve portare un suffisso casuale prima dell'estensione: {nome_a}"
+        name_a != pkg && !name_a.ends_with("_amd64.deb"),
+        "the name must carry a random suffix before the extension: {name_a}"
     );
-    assert_ne!(a, b, "due invocazioni non devono produrre lo stesso nome");
+    assert_ne!(a, b, "two invocations must not produce the same name");
     assert_eq!(
         a.parent(),
         Some(dir),
-        "il file resta nella directory richiesta"
+        "the file stays in the requested directory"
     );
 }
 
@@ -121,15 +121,18 @@ fn the_deb_temp_name_stays_installable_and_unpredictable() {
 #[test]
 fn a_name_without_extension_falls_back_to_the_plain_form() {
     let dir = Path::new("/tmp");
-    let generato = private_temp_path_keeping_extension(dir, "senza-estensione");
-    let nome = generato
+    let generato = private_temp_path_keeping_extension(dir, "no-extension");
+    let name = generato
         .file_name()
-        .expect("nome")
+        .expect("name")
         .to_string_lossy()
         .into_owned();
 
-    assert!(nome.ends_with(".tmp"), "atteso il formato normale: {nome}");
-    assert!(nome.starts_with(".senza-estensione."), "{nome}");
+    assert!(
+        name.ends_with(".tmp"),
+        "the normal format was expected: {name}"
+    );
+    assert!(name.starts_with(".no-extension."), "{name}");
     assert_eq!(generato.parent(), Some(dir));
 }
 
@@ -139,22 +142,22 @@ fn a_name_without_extension_falls_back_to_the_plain_form() {
 #[test]
 fn temp_names_are_hidden_and_unpredictable() {
     let dest = Path::new("/tmp/odoo-src.tar.gz");
-    let uno = private_temp_path(dest, "odoo-src.tar.gz");
-    let due = private_temp_path(dest, "odoo-src.tar.gz");
+    let first = private_temp_path(dest, "odoo-src.tar.gz");
+    let second = private_temp_path(dest, "odoo-src.tar.gz");
 
-    for path in [&uno, &due] {
-        let nome = path
+    for path in [&first, &second] {
+        let name = path
             .file_name()
-            .expect("nome")
+            .expect("name")
             .to_string_lossy()
             .into_owned();
-        assert!(nome.starts_with('.'), "nome non nascosto: {nome}");
+        assert!(name.starts_with('.'), "name non nascosto: {name}");
         assert_ne!(
-            nome, "odoo-src.tar.gz",
-            "il nome fisso è proprio il difetto"
+            name, "odoo-src.tar.gz",
+            "the fixed name is precisely the defect"
         );
     }
-    assert_ne!(uno, due);
+    assert_ne!(first, second);
 }
 
 // --- the downloader creates the file itself, fail-closed --------------------
@@ -177,22 +180,22 @@ fn the_downloader_refuses_a_destination_that_already_exists() {
 
     let dir = tempfile::tempdir().expect("tempdir");
     let dest = dir.path().join("gia-occupato.deb");
-    fs::write(&dest, b"contenuto di qualcun altro").expect("write");
+    fs::write(&dest, b"contenuto di qualcun other").expect("write");
 
     // a URL that would fail at once, were it ever contacted.
     let err = RealDownloader::new()
         .download("http://127.0.0.1:1/pacchetto.deb", &dest)
-        .expect_err("un path già occupato deve far fallire il download");
+        .expect_err("an already-occupied path must fail the download");
 
     assert!(
         matches!(err, StepError::Io { .. }),
-        "atteso un errore di I/O dalla creazione fail-closed, non un fallimento di \
-         wget: se wget parte, il file è già stato troncato. Ottenuto: {err:?}"
+        "an I/O error from the fail-closed creation was expected, not a download failure: \
+         if the downloader starts, the file has already been truncated. got: {err:?}"
     );
     assert_eq!(
         fs::read(&dest).expect("read"),
-        b"contenuto di qualcun altro",
-        "il file preesistente non deve essere toccato"
+        b"contenuto di qualcun other",
+        "the pre-existing file must not be touched"
     );
 }
 
@@ -203,8 +206,8 @@ fn the_downloader_does_not_follow_a_symlink_at_the_destination() {
     use invok::system_ops::{Downloader, RealDownloader};
 
     let dir = tempfile::tempdir().expect("tempdir");
-    let bersaglio = dir.path().join("file-di-sistema");
-    fs::write(&bersaglio, b"da non sovrascrivere").expect("write");
+    let bersaglio = dir.path().join("system-file");
+    fs::write(&bersaglio, b"not to be overwritten").expect("write");
     let dest = dir.path().join("pacchetto.deb");
     std::os::unix::fs::symlink(&bersaglio, &dest).expect("symlink");
 
@@ -212,7 +215,7 @@ fn the_downloader_does_not_follow_a_symlink_at_the_destination() {
 
     assert_eq!(
         fs::read(&bersaglio).expect("read"),
-        b"da non sovrascrivere",
-        "il bersaglio del symlink è stato toccato: O_NOFOLLOW non sta proteggendo nulla"
+        b"not to be overwritten",
+        "the symlink's target was touched: O_NOFOLLOW is protecting nothing"
     );
 }

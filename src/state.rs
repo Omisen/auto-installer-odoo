@@ -387,7 +387,7 @@ pub fn start_decision(
         return StartDecision::RefuseUnknownIdentity;
     };
 
-    let differenze: Vec<(&'static str, String, String)> = precedente
+    let differences: Vec<(&'static str, String, String)> = precedente
         .identity()
         .into_iter()
         .zip(requested.identity())
@@ -395,10 +395,10 @@ pub fn start_decision(
         .map(|((field, before), (_, now))| (field, before, now))
         .collect();
 
-    if differenze.is_empty() {
+    if differences.is_empty() {
         StartDecision::Resume
     } else {
-        StartDecision::RefuseIdentityMismatch(differenze)
+        StartDecision::RefuseIdentityMismatch(differences)
     }
 }
 

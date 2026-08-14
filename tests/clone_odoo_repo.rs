@@ -78,11 +78,11 @@ fn git_existing_correct_branch_is_noop() {
     let ops = ops_of(&log);
     assert!(
         !ops.iter().any(|o| matches!(o, Op::GitClone { .. })),
-        "già clonato: nessun clone"
+        "already cloned: no clone"
     );
     assert!(
         !ops.iter().any(|o| matches!(o, Op::RemoveDirAll(_))),
-        "Preexisting: undo no-op"
+        "Preexisting: the undo is a no-op"
     );
 }
 
@@ -101,7 +101,7 @@ fn branch_mismatch_is_error_not_regenerated() {
     // a different branch errors in the snapshot, never regenerates silently.
     assert!(
         step.snapshot(&c).is_err(),
-        "branch mismatch deve essere un errore"
+        "a branch mismatch must be an error"
     );
 }
 
@@ -132,7 +132,7 @@ fn retries_then_succeeds_with_cleanup_between() {
             |o| matches!(o, Op::RemoveDirAll(p) if *p == repo_dir())
         ),
         2,
-        "pulizia degli artefatti parziali tra i tentativi"
+        "partial artifacts are cleaned between attempts"
     );
 }
 
@@ -180,7 +180,7 @@ fn clone_timeout_is_retryable_and_falls_back_to_tarball() {
     assert_eq!(
         count(&ops, |o| matches!(o, Op::GitClone { .. })),
         3,
-        "un timeout consuma un tentativo come ogni altro fallimento"
+        "a timeout consumes an attempt like any other failure"
     );
     assert!(ops.iter().any(|o| matches!(o, Op::TarballInstall { .. })));
 }
@@ -223,6 +223,6 @@ fn tarball_failure_after_clone_failure_errors() {
     step.snapshot(&c).expect("snapshot");
     assert!(
         step.run(&c).is_err(),
-        "clone + tarball entrambi falliti → errore"
+        "clone and tarball both failed: an error"
     );
 }

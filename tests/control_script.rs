@@ -75,13 +75,13 @@ fn absent_creates_owned_by_sudo_user_and_undo_removes() {
     assert!(!chowns.is_empty());
     assert!(
         chowns.iter().all(|u| *u == "alice"),
-        "owner deve essere SUDO_USER, trovato: {chowns:?}"
+        "the owner must be SUDO_USER, found: {chowns:?}"
     );
 
     // not global: nothing under a system path.
     assert!(
         all_paths(&ops).iter().all(|p| !p.contains("/usr/")),
-        "il comando non va installato globalmente"
+        "the command is not installed globally"
     );
 
     // the undo removes our artifacts.
@@ -118,29 +118,29 @@ fn preexisting_artifacts_are_not_recreated_or_removed() {
     // installation's service.
     assert!(
         ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
-        "lo script va riscritto: il suo contenuto dipende dalla versione installata"
+        "the script is rewritten: its contents depend on the installed version"
     );
     // but what was there is not destroyed: it is set aside first.
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::CopyFile { src, .. } if src.ends_with(".scripts/odoo.sh"))),
-        "uno script preesistente va salvato in un backup prima di riscriverlo: {ops:?}"
+        "a pre-existing script is backed up before being rewritten: {ops:?}"
     );
 
     assert!(
         !ops.iter().any(|o| matches!(o, Op::CreateSymlink { .. })),
-        "symlink preesistente: non ricreato (punta comunque allo stesso script)"
+        "a pre-existing symlink is not recreated (it points at the same script anyway)"
     );
     // the undo does not remove what was not ours: it puts it back.
     assert!(
         !ops.iter().any(|o| matches!(o, Op::RemoveFile(_))),
-        "non rimuoviamo artefatti non nostri"
+        "we do not remove artifacts that are not ours"
     );
     assert!(!ops.iter().any(|o| matches!(o, Op::RemoveSymlink(_))));
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::MoveFile { dst, .. } if dst.ends_with(".scripts/odoo.sh"))),
-        "l'undo deve rimettere al suo posto lo script preesistente: {ops:?}"
+        "the undo must put the pre-existing script back: {ops:?}"
     );
 }
 
@@ -151,7 +151,7 @@ fn missing_sudo_user_is_error() {
     let c = ctx(None); // SUDO_USER assente
     assert!(
         step.snapshot(&c).is_err(),
-        "senza SUDO_USER lo step deve fallire"
+        "without SUDO_USER the step must fail"
     );
 }
 

@@ -32,10 +32,10 @@ fn check_disk_does_not_create_target() {
     check_disk(&target, 0).expect("check_disk ok");
 
     // the C4 fix: no directory was created in order to measure.
-    assert!(!target.exists(), "check_disk NON deve creare il target");
+    assert!(!target.exists(), "check_disk must NOT create the target");
     assert!(
         !dir.path().join("opt").exists(),
-        "check_disk NON deve creare neppure gli intermedi"
+        "check_disk must not create the intermediates either"
     );
 }
 
@@ -45,7 +45,7 @@ fn check_disk_reports_insufficient_without_creating() {
     let target = dir.path().join("opt").join("odoo");
 
     // an unreachable threshold errors, still without creating anything.
-    let err = check_disk(&target, u64::MAX).expect_err("deve fallire");
+    let err = check_disk(&target, u64::MAX).expect_err("it must fail");
     assert!(matches!(err, CheckError::InsufficientDisk { .. }));
     assert!(!target.exists());
 }
@@ -152,7 +152,7 @@ fn port_80_held_by_a_running_nginx_is_not_a_conflict() {
     assert_eq!(
         ports_to_check(8069, true, /* nginx_already_serving */ true),
         vec![8069],
-        "un nginx che già serve non è un conflitto con sé stesso"
+        "an nginx already serving is not a conflict with itself"
     );
 
     // requested but not yet listening: the conflict would be real.
@@ -163,7 +163,7 @@ fn port_80_held_by_a_running_nginx_is_not_a_conflict() {
     assert_eq!(
         ports_to_check(8069, false, true),
         vec![8069],
-        "senza --with-nginx lo stato di nginx è irrilevante"
+        "without --with-nginx the state of nginx is irrelevant"
     );
 }
 
@@ -180,7 +180,7 @@ fn an_occupied_port_still_stops_the_installation() {
 
     assert!(
         check_ports(porta, false, false).is_err(),
-        "una porta occupata da terzi deve fermare l'installazione"
+        "a port held by a third party must stop the installation"
     );
 }
 
@@ -205,8 +205,8 @@ fn a_release_newer_than_the_tested_ones_is_flagged() {
     assert!(!is_newer_than_tested("debian", "12"));
     assert!(
         is_newer_than_tested("debian", "13"),
-        "Debian 13 supera le soglie e va segnalata: è lo stesso scenario che in \
-         A5.2 si prendeva un pacchetto Ubuntu"
+        "Debian 13 passes the thresholds and must be flagged: the same scenario that in \
+         A5.2 picked an Ubuntu package"
     );
 }
 
@@ -222,10 +222,10 @@ fn a_newer_release_is_still_accepted() {
         };
         assert!(
             validate_os(&info).is_ok(),
-            "{id} {version} dev'essere accettata: bloccarla sarebbe un danno certo \
-             per evitarne uno ipotetico"
+            "{id} {version} must be accepted: blocking it would be certain damage to \
+             avoid a hypothetical one"
         );
-        assert!(is_newer_than_tested(id, version), "…ma con un avviso");
+        assert!(is_newer_than_tested(id, version), "…but with a warning");
     }
 }
 
@@ -248,23 +248,24 @@ fn an_unsupported_distribution_has_no_upper_threshold() {
 fn the_untested_warning_names_only_the_family_being_installed() {
     // a deliberately high version: this test is about *who* gets named, not
     // where the threshold falls.
-    for (id, propria, estranee) in [
+    for (id, own, estranee) in [
         ("ubuntu", "Ubuntu", ["Debian", "Fedora"]),
         ("debian", "Debian", ["Ubuntu", "Fedora"]),
         ("fedora", "Fedora", ["Ubuntu", "Debian"]),
     ] {
-        let avviso = untested_release_warning(id, "99.99")
-            .unwrap_or_else(|| panic!("{id} 99.99 è oltre ogni soglia: l'avviso deve esserci"));
+        let warning = untested_release_warning(id, "99.99").unwrap_or_else(|| {
+            panic!("{id} 99.99 is past every threshold: the warning must be there")
+        });
 
         assert!(
-            avviso.contains(propria),
-            "su {id} l'avviso deve nominare {propria}, ma dice: {avviso}"
+            warning.contains(own),
+            "on {id} the warning must name {own}, but it says: {warning}"
         );
-        for altra in estranee {
+        for other in estranee {
             assert!(
-                !avviso.contains(altra),
-                "su {id} l'avviso nomina {altra}, che non c'entra nulla con questa \
-                 installazione — è esattamente A-MD-5. Testo: {avviso}"
+                !warning.contains(other),
+                "on {id} the warning names {other}, which has nothing to do with this \
+                 installation — exactly A-MD-5. text: {warning}"
             );
         }
     }
@@ -278,7 +279,7 @@ fn the_untested_warning_names_only_the_family_being_installed() {
 /// function would only prove it equals itself.
 #[test]
 fn the_untested_warning_quotes_the_tested_release_from_the_constants() {
-    fn come_la_scrive_la_distro((major, minor): (u32, u32)) -> String {
+    fn as_the_distro_writes_it((major, minor): (u32, u32)) -> String {
         if minor == 0 {
             format!("{major}")
         } else {
@@ -286,17 +287,17 @@ fn the_untested_warning_quotes_the_tested_release_from_the_constants() {
         }
     }
 
-    for (id, costante) in [
+    for (id, constant) in [
         ("ubuntu", NEWEST_TESTED_UBUNTU),
         ("debian", NEWEST_TESTED_DEBIAN),
         ("fedora", NEWEST_TESTED_FEDORA),
     ] {
-        let avviso = untested_release_warning(id, "99.99").expect("avviso presente");
-        let attesa = come_la_scrive_la_distro(costante);
+        let warning = untested_release_warning(id, "99.99").expect("the warning must be there");
+        let expected = as_the_distro_writes_it(constant);
         assert!(
-            avviso.contains(&attesa),
-            "su {id} l'avviso deve citare la release provata ({attesa}, dalla costante \
-             {costante:?}) invece di un numero scritto a mano. Testo: {avviso}"
+            warning.contains(&expected),
+            "on {id} the warning must cite the tested release ({expected}, from the constant \
+             {constant:?}) instead of a hand-written number. text: {warning}"
         );
     }
 }
@@ -318,8 +319,8 @@ fn no_warning_on_a_release_we_actually_test() {
         assert_eq!(
             untested_release_warning(id, version),
             None,
-            "{id} {version} è fra quelle che proviamo (o non è affar nostro): \
-             avvisare sarebbe un falso allarme"
+            "{id} {version} is among the ones we test (or is none of our business): warning \
+             would be a false alarm"
         );
     }
 }
@@ -336,12 +337,12 @@ fn a_release_is_rendered_the_way_the_distribution_writes_it() {
     assert_eq!(
         format_release((25, 10)),
         "25.10",
-        "due cifre restano due cifre"
+        "two digits stay two digits"
     );
     assert_eq!(
         format_release((12, 0)),
         "12",
-        "«Debian 12.0» non lo dice nessuno"
+        "nobody writes \"Debian 12.0\""
     );
     assert_eq!(format_release((41, 0)), "41");
 }
@@ -357,12 +358,12 @@ fn the_interpreter_version_is_read_from_what_python_actually_prints() {
     assert_eq!(
         parse_python_version("Python 3.14.0rc1\n"),
         Some((3, 14)),
-        "una release candidate è comunque quel minor"
+        "a release candidate is still that minor"
     );
     assert_eq!(
         parse_python_version("Python 3.13\n"),
         Some((3, 13)),
-        "due sole componenti sono un output legittimo"
+        "two components alone are a legitimate output"
     );
 }
 
@@ -390,12 +391,12 @@ fn an_unreadable_version_is_not_a_version() {
 fn only_an_interpreter_newer_than_the_tested_one_is_flagged() {
     assert!(
         python_is_newer_than_tested((3, 14)),
-        "3.14 (Fedora 44) è oltre la soglia: è il caso per cui il controllo esiste"
+        "3.14 is past the threshold: the case the check exists for"
     );
     assert!(python_is_newer_than_tested((4, 0)));
     assert!(
         !python_is_newer_than_tested(NEWEST_TESTED_PYTHON),
-        "sulla versione provata non c'è niente da segnalare"
+        "on the tested version there is nothing to flag"
     );
     assert!(!python_is_newer_than_tested((3, 12)));
     assert!(!python_is_newer_than_tested((3, 10)));
@@ -409,27 +410,27 @@ fn only_an_interpreter_newer_than_the_tested_one_is_flagged() {
 /// (A-R9-1).
 #[test]
 fn the_python_warning_names_both_versions_and_what_will_break() {
-    let avviso = untested_python_warning((3, 14)).expect("3.14 va segnalato");
+    let warning = untested_python_warning((3, 14)).expect("3.14 va segnalato");
     assert!(
-        avviso.contains("3.14"),
-        "l'avviso non dice quale Python ha trovato: {avviso}"
+        warning.contains("3.14"),
+        "the warning does not say which Python it found: {warning}"
     );
     assert!(
-        avviso.contains(&format_python(NEWEST_TESTED_PYTHON)),
-        "l'avviso non cita la versione provata, quindi non si sa di quanto si è avanti: {avviso}"
+        warning.contains(&format_python(NEWEST_TESTED_PYTHON)),
+        "the warning does not cite the tested version, so there is no telling how far ahead we are: {warning}"
     );
     assert!(
-        avviso.contains("gevent"),
-        "l'avviso non nomina il pacchetto che fallisce: {avviso}"
+        warning.contains("gevent"),
+        "the warning does not name the package that fails: {warning}"
     );
     assert!(
-        avviso.contains("install-python-requirements"),
-        "l'avviso non dice dove si fermerà: {avviso}"
+        warning.contains("install-python-requirements"),
+        "the warning does not say where it will stop: {warning}"
     );
     assert_eq!(
         untested_python_warning(NEWEST_TESTED_PYTHON),
         None,
-        "sulla versione provata non c'è nessun avviso da emettere"
+        "on the tested version there is no warning to emit"
     );
 }
 
@@ -439,5 +440,5 @@ fn the_python_warning_names_both_versions_and_what_will_break() {
 fn a_python_version_is_rendered_the_way_python_writes_it() {
     assert_eq!(format_python((3, 14)), "3.14");
     assert_eq!(format_python((3, 9)), "3.9");
-    assert_eq!(format_python((4, 0)), "4.0", "qui lo zero non si omette");
+    assert_eq!(format_python((4, 0)), "4.0", "here the zero is not dropped");
 }

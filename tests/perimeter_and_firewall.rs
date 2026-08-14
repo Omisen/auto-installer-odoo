@@ -34,7 +34,7 @@ fn port_80_is_not_found_inside_port_8080() {
 
     assert!(
         !ufw_rule_in_status(&status, "80/tcp"),
-        "80/tcp NON è presente: è solo una sottostringa di 8080/tcp"
+        "80/tcp is NOT present: it is only a substring of 8080/tcp"
     );
     assert!(ufw_rule_in_status(&status, "8080/tcp"));
     assert!(ufw_rule_in_status(&status, "22/tcp"));
@@ -63,7 +63,7 @@ fn the_header_is_not_mistaken_for_a_rule() {
     for header in ["To", "--", "Status:"] {
         assert!(
             !ufw_rule_in_status(&status, header),
-            "'{header}' è intestazione, non una regola"
+            "'{header}' is a heading, not a rule"
         );
     }
 }
@@ -98,12 +98,12 @@ fn a_manifest_declaring_another_home_is_refused() {
     let bugiardo = config_with("/", "/etc");
     let err = bugiardo
         .validate_perimeter()
-        .expect_err("un manifesto che dichiara '/' come home non è nostro");
+        .expect_err("a manifest declaring '/' as the home is not ours");
 
     let msg = err.to_string();
     assert!(
         msg.contains("/opt/odoo"),
-        "il messaggio deve dire qual è il perimetro vero: {msg}"
+        "the message must say what the real perimeter is: {msg}"
     );
 }
 
@@ -163,7 +163,7 @@ fn a_world_or_group_writable_file_is_refused() {
 /// **replaced** without being writable.
 #[test]
 fn a_file_in_a_world_writable_directory_is_refused() {
-    let err = trust_verdict(0, 0o100600, Some(0o40777)).expect_err("directory aperta a tutti");
+    let err = trust_verdict(0, 0o100600, Some(0o40777)).expect_err("a world-writable directory");
     assert!(err.contains("directory"), "{err}");
 }
 

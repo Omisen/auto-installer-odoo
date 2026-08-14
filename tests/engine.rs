@@ -43,7 +43,7 @@ fn rollback_runs_undo_in_reverse_order() {
     let mut installer = Installer::new();
     let result = installer.execute(&mut steps, &ctx);
 
-    assert!(result.is_err(), "l'esecuzione deve fallire su gamma");
+    assert!(result.is_err(), "the run must fail on gamma");
     let order = log.lock().expect("lock").clone();
     // only the completed ones are undone, in reverse order.
     assert_eq!(order, vec!["beta".to_string(), "alpha".to_string()]);
@@ -74,7 +74,7 @@ fn rollback_is_best_effort() {
     let mut installer = Installer::new();
     let result = installer.execute(&mut steps, &ctx);
 
-    assert!(result.is_err(), "l'esecuzione deve fallire su gamma");
+    assert!(result.is_err(), "the run must fail on gamma");
     let order = log.lock().expect("lock").clone();
     // it acts and fails, and the other is cleaned up regardless.
     assert_eq!(order, vec!["beta".to_string(), "alpha".to_string()]);
@@ -106,17 +106,17 @@ fn preexisting_step_undo_is_noop() {
     let mut installer = Installer::new();
     let result = installer.execute(&mut steps, &ctx);
 
-    assert!(result.is_err(), "l'esecuzione deve fallire su beta");
+    assert!(result.is_err(), "the run must fail on beta");
     // the undo was invoked…
     assert_eq!(
         alpha_calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
-        "undo di alpha deve essere invocato dal motore"
+        "alpha's undo must be invoked by the engine"
     );
     // …but performed no action: an empty log means no artifact of ours.
     assert!(
         log.lock().expect("lock").is_empty(),
-        "un undo su Preexisting non deve compiere azioni"
+        "an undo on Preexisting must take no action"
     );
 }
 
@@ -143,7 +143,7 @@ fn install_state_roundtrip_and_permissions() {
         .expect("metadata")
         .permissions()
         .mode();
-    assert_eq!(mode & 0o777, 0o600, "il file di stato deve essere 0600");
+    assert_eq!(mode & 0o777, 0o600, "the state file must be 0600");
 
     // the records survive the round trip.
     let reloaded = InstallState::load(&path).expect("load");
@@ -154,7 +154,7 @@ fn install_state_roundtrip_and_permissions() {
 
     // a missing file yields an empty state, not an error.
     InstallState::clear(&path).expect("clear");
-    let empty = InstallState::load(&path).expect("load assente");
+    let empty = InstallState::load(&path).expect("load with nothing there");
     assert!(empty.completed.is_empty());
 }
 
@@ -210,19 +210,19 @@ fn an_interrupt_rolls_back_what_was_already_done() {
     let mut installer = Installer::new().watching_interrupt(Arc::clone(&interrupted));
     let err = installer
         .execute(&mut steps, &ctx)
-        .expect_err("un'interruzione deve fermare l'esecuzione");
+        .expect_err("an interruption must stop the run");
     assert!(
         err.to_string().contains("interrupted"),
-        "il messaggio deve dire cosa è successo: {err}"
+        "the message must say what happened: {err}"
     );
 
     // the next step never started, and the previous two were undone in reverse
     // order — exactly as on a failure.
-    let azioni = log.lock().expect("log").clone();
+    let actions = log.lock().expect("log").clone();
     assert_eq!(
-        azioni,
+        actions,
         vec!["beta".to_string(), "alpha".to_string()],
-        "gli step già eseguiti vanno annullati dall'ultimo al primo: {azioni:?}"
+        "the steps already run are undone last to first: {actions:?}"
     );
 }
 
@@ -252,15 +252,15 @@ fn the_step_in_flight_is_allowed_to_finish() {
     // the proof it completed is that the rollback **undoes** it: an undo runs
     // only on a completed step. not sought in the manifest, where — rightly —
     // it is gone afterwards: the manifest says what remains, not what was done.
-    let azioni = log.lock().expect("log").clone();
+    let actions = log.lock().expect("log").clone();
     assert_eq!(
-        azioni,
+        actions,
         vec!["alpha".to_string()],
-        "lo step in corso va completato (e quindi annullato); beta non è mai partito"
+        "the step in progress is completed, and therefore undone; beta never started"
     );
     assert!(
         installer.state().completed.is_empty(),
-        "annullato alpha, sul sistema non resta nulla: il manifesto deve dirlo"
+        "with alpha undone nothing is left on the system: the manifest must say so"
     );
 }
 
@@ -279,7 +279,7 @@ fn without_an_interrupt_nothing_changes() {
     // without the flag wired.
     Installer::new()
         .execute(&mut steps, &ctx)
-        .expect("nessuna interruzione: l'esecuzione arriva in fondo");
+        .expect("no interruption: the run reaches the end");
 
     // and with a flag nobody raises.
     let mut steps: Vec<Box<dyn Step>> = vec![
@@ -289,7 +289,7 @@ fn without_an_interrupt_nothing_changes() {
     Installer::new()
         .watching_interrupt(Arc::new(AtomicBool::new(false)))
         .execute(&mut steps, &ctx)
-        .expect("flag mai alzato: nessun effetto");
+        .expect("the flag was never raised: no effect");
 }
 
 /// **A-R8-1.** after a failure the automatic rollback undoes the completed
@@ -319,7 +319,7 @@ fn a_rolled_back_step_is_re_executed_on_the_next_run() {
     let dopo_rollback = InstallState::load(&ctx.state_path).expect("load");
     assert!(
         dopo_rollback.completed.is_empty(),
-        "alpha è stato annullato: il manifesto non deve più elencarlo, trovato {:?}",
+        "alpha was undone: the manifest must no longer list it, found {:?}",
         dopo_rollback
             .completed
             .iter()
@@ -338,13 +338,13 @@ fn a_rolled_back_step_is_re_executed_on_the_next_run() {
     ];
     Installer::resuming_from(dopo_rollback)
         .execute(&mut steps, &ctx)
-        .expect("il secondo giro deve arrivare in fondo");
+        .expect("the second round must reach the end");
 
     assert_eq!(
         esecuzioni.load(Ordering::SeqCst),
         1,
-        "alpha era stato annullato: saltarlo lascerebbe l'installazione a costruire \
-         su artefatti che non esistono"
+        "alpha had been undone: skipping it would leave the installation building on \
+         artifacts that do not exist"
     );
 }
 
@@ -362,12 +362,12 @@ fn a_failed_undo_keeps_its_record() {
     ];
     let _ = Installer::new().execute(&mut steps, &ctx);
 
-    let stato = InstallState::load(&ctx.state_path).expect("load");
-    let nomi: Vec<&str> = stato.completed.iter().map(|r| r.name.as_str()).collect();
+    let state = InstallState::load(&ctx.state_path).expect("load");
+    let names: Vec<&str> = state.completed.iter().map(|r| r.name.as_str()).collect();
     assert_eq!(
-        nomi,
+        names,
         vec!["alpha"],
-        "l'undo di alpha è fallito: il residuo resta registrato"
+        "alpha's undo failed: the leftover stays recorded"
     );
 }
 
@@ -390,7 +390,7 @@ fn an_empty_manifest_is_removed_not_left_behind() {
 
     assert!(
         !ctx.state_path.exists(),
-        "annullato tutto, il manifesto non descrive più niente: va rimosso, non svuotato"
+        "with everything undone the manifest describes nothing: it is removed, not emptied"
     );
 }
 
@@ -409,11 +409,11 @@ fn a_manifest_with_residue_stays_on_disk() {
 
     assert!(
         ctx.state_path.exists(),
-        "c'è un residuo: il manifesto resta"
+        "there is a leftover: the manifest stays"
     );
-    let stato = InstallState::load(&ctx.state_path).expect("load");
+    let state = InstallState::load(&ctx.state_path).expect("load");
     assert_eq!(
-        stato
+        state
             .completed
             .iter()
             .map(|r| r.name.as_str())

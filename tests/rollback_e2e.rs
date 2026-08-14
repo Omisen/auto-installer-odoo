@@ -122,13 +122,13 @@ fn full_chain_failure_returns_to_virgin_state() {
     let mut installer = Installer::new();
     assert!(
         installer.execute(&mut steps, &ctx).is_err(),
-        "il fallimento innesca il rollback"
+        "the failure triggers the rollback"
     );
 
     assert_eq!(
         model.snapshot(),
         initial,
-        "dopo il rollback il sistema è tornato al vergine"
+        "after the rollback the system is virgin again"
     );
     // the user's `.bashrc` is byte for byte as before.
     assert_eq!(
@@ -159,7 +159,7 @@ fn mid_chain_failure_returns_to_virgin_state() {
     assert_eq!(
         model.snapshot(),
         initial,
-        "utente/deps/postgres/ruolo/DB creati devono sparire"
+        "the user, deps, postgres, role and DB we created must all go"
     );
 }
 
@@ -185,19 +185,16 @@ fn preexisting_resources_survive_rollback() {
     let result = installer.execute(&mut steps, &ctx);
     assert!(
         result.is_err(),
-        "l'hard-stop init deve fermare la catena su DB preesistente"
+        "the init hard stop must halt the chain on a pre-existing DB"
     );
 
     let final_state = model.snapshot();
     // everything is back as it was.
-    assert_eq!(
-        final_state, initial,
-        "le risorse preesistenti restano, le nostre spariscono"
-    );
+    assert_eq!(final_state, initial, "pre-existing resources stay, ours go");
     // explicit checks of the critical protections, at chain level:
     assert!(
         final_state.pg_dbs.contains("odoo"),
-        "il DB del cliente NON deve essere droppato"
+        "the customer's DB must NOT be dropped"
     );
     assert!(
         final_state.packages.contains("postgresql"),
@@ -205,7 +202,7 @@ fn preexisting_resources_survive_rollback() {
     );
     assert!(
         final_state.svc_active.contains("postgresql"),
-        "il servizio già attivo resta attivo (D4)"
+        "a service already active stays active (D4)"
     );
     assert!(
         final_state.paths.contains(&PathBuf::from(HOME)),
@@ -277,7 +274,7 @@ fn photo(slot: &std::sync::Arc<std::sync::Mutex<Option<ModelState>>>) -> ModelSt
     slot.lock()
         .ok()
         .and_then(|s| s.clone())
-        .expect("lo step spia deve aver girato")
+        .expect("the spy step must have run")
 }
 
 /// as [`ctx`], with the nginx phase enabled.
@@ -349,13 +346,13 @@ fn full_chain_with_nginx_failure_returns_to_virgin_state() {
     let final_state = model.snapshot();
     assert_eq!(
         final_state, initial,
-        "col rollback anche la fase Nginx torna al vergine"
+        "the rollback brings the nginx phase back to virgin too"
     );
     // explicit checks on each nginx artifact: a failing equality would not say
     // *which* one remained.
     assert!(
         !final_state.packages.contains("nginx"),
-        "nginx installato da noi va purgato con --aggressive-rollback"
+        "an nginx we installed is purged with --aggressive-rollback"
     );
     assert!(!final_state.paths.contains(&PathBuf::from(VHOST)), "vhost");
     assert!(
@@ -365,7 +362,7 @@ fn full_chain_with_nginx_failure_returns_to_virgin_state() {
     assert!(final_state.ufw_rules.is_empty(), "regole ufw del delta");
     assert!(
         !final_state.svc_active.contains("nginx") && !final_state.svc_enabled.contains("nginx"),
-        "servizio nginx avviato/abilitato da noi va fermato e disabilitato"
+        "an nginx service we started and enabled is stopped and disabled"
     );
 }
 
@@ -403,26 +400,26 @@ fn preexisting_default_site_is_restored_by_the_full_chain_rollback() {
     let mid = photo(&seen);
     assert!(
         !mid.symlinks.contains(&PathBuf::from(DEFAULT_SITE)),
-        "durante l'installazione il default site va rimosso (porta 80 liberata)"
+        "during the installation the default site is removed (port 80 freed)"
     );
     assert!(
         mid.symlinks.contains(&PathBuf::from(SITE_LINK)),
-        "il nostro sito è abilitato"
+        "our site is enabled"
     );
 
     // second half: the rollback stitched the customer's config back.
     let final_state = model.snapshot();
     assert!(
         final_state.symlinks.contains(&PathBuf::from(DEFAULT_SITE)),
-        "il default site del cliente deve essere ripristinato dal rollback"
+        "the customer's default site must be restored by the rollback"
     );
     assert!(
         final_state.packages.contains("nginx"),
-        "nginx preesistente NON va purgato, nemmeno con --aggressive-rollback"
+        "a pre-existing nginx is NOT purged, not even with --aggressive-rollback"
     );
     assert!(
         final_state.svc_active.contains("nginx") && final_state.svc_enabled.contains("nginx"),
-        "un nginx già attivo/abilitato resta tale (D4)"
+        "an nginx already active and enabled stays that way (D4)"
     );
     // putting the **files** back is not enough: nginx keeps serving what it has
     // in memory. left with our config loaded, the customer's site stays down
@@ -431,9 +428,9 @@ fn preexisting_default_site_is_restored_by_the_full_chain_rollback() {
     assert_eq!(
         final_state.nginx_loaded_sites,
         Some([PathBuf::from(DEFAULT_SITE)].into_iter().collect()),
-        "dopo il rollback nginx deve **servire** la config ripristinata, non la nostra"
+        "after the rollback nginx must **serve** the restored config, not ours"
     );
-    assert_eq!(final_state, initial, "stato finale == stato iniziale");
+    assert_eq!(final_state, initial, "final state equals initial state");
 }
 
 #[test]
@@ -459,20 +456,20 @@ fn only_our_ufw_delta_is_removed_by_the_full_chain_rollback() {
     let mid = photo(&seen);
     assert!(
         mid.ufw_rules.contains("443/tcp"),
-        "la regola del delta viene aperta durante l'installazione"
+        "the delta's rule is opened during the installation"
     );
 
     // second half: the rollback removes only what it opened.
     let final_state = model.snapshot();
     assert!(
         final_state.ufw_rules.contains("80/tcp"),
-        "la regola preesistente del cliente resta aperta"
+        "the customer's pre-existing rule stays open"
     );
     assert!(
         !final_state.ufw_rules.contains("443/tcp"),
-        "la regola aggiunta da noi (delta) viene rimossa"
+        "the rule we added (the delta) is removed"
     );
-    assert_eq!(final_state, initial, "stato finale == stato iniziale");
+    assert_eq!(final_state, initial, "final state equals initial state");
 }
 
 #[test]
@@ -489,7 +486,7 @@ fn full_chain_with_nginx_succeeds_and_leaves_the_expected_artifacts() {
     let mut installer = Installer::new();
     installer
         .execute(&mut steps, &ctx)
-        .expect("la catena completa con nginx deve arrivare in fondo");
+        .expect("the full chain with nginx must reach the end");
 
     let s = model.snapshot();
     assert!(s.packages.contains("nginx"));
@@ -502,8 +499,8 @@ fn full_chain_with_nginx_succeeds_and_leaves_the_expected_artifacts() {
     assert!(s.ufw_rules.contains("80/tcp") && s.ufw_rules.contains("443/tcp"));
     assert!(
         !s.symlinks.contains(&PathBuf::from(DEFAULT_SITE)),
-        "a installazione riuscita il default site resta rimosso: è la porta 80 \
-         che serve al nostro vhost"
+        "on a successful installation the default site stays removed: our vhost needs \
+         port 80"
     );
 }
 
@@ -519,14 +516,14 @@ fn nginx_steps_are_inert_in_the_full_chain_without_with_nginx() {
     let mut installer = Installer::new();
     installer
         .execute(&mut steps, &ctx)
-        .expect("catena senza nginx");
+        .expect("a chain without nginx");
 
     let s = model.snapshot();
-    assert!(!s.packages.contains("nginx"), "nessun pacchetto nginx");
-    assert!(!s.paths.contains(&PathBuf::from(VHOST)), "nessun vhost");
+    assert!(!s.packages.contains("nginx"), "no nginx package");
+    assert!(!s.paths.contains(&PathBuf::from(VHOST)), "no vhost");
     assert!(
         !s.symlinks.contains(&PathBuf::from(SITE_LINK)),
-        "nessun sito abilitato"
+        "no site enabled"
     );
     assert!(s.ufw_rules.is_empty(), "nessuna regola firewall");
     assert!(!s.svc_enabled.contains("nginx") && !s.svc_active.contains("nginx"));
@@ -559,7 +556,7 @@ impl Step for BreakDpkgThenFail {
     fn run(&mut self, _ctx: &Context) -> Result<(), StepError> {
         self.model.mutate(|s| s.dpkg_broken = true);
         Err(StepError::Precondition(
-            "step fallito lasciando dpkg in stato inconsistente".to_string(),
+            "a step failed leaving dpkg inconsistent".to_string(),
         ))
     }
     fn undo(&self, _ctx: &Context) -> Result<(), StepError> {
@@ -593,17 +590,17 @@ fn rollback_cleans_the_apt_delta_even_with_a_broken_dpkg() {
     for pkg in ["build-essential", "python3-dev", "libpq-dev"] {
         assert!(
             !final_state.packages.contains(pkg),
-            "'{pkg}' del delta doveva essere purgato: il rollback deve recuperare \
-             dpkg prima di arrendersi"
+            "'{pkg}' from the delta should have been purged: the rollback must recover dpkg \
+             before giving up"
         );
     }
     assert!(
         !final_state.dpkg_broken,
-        "il rollback deve lasciare dpkg in stato consistente"
+        "the rollback must leave dpkg consistent"
     );
     assert_eq!(
         final_state, initial,
-        "anche partendo da dpkg rotto il sistema torna al vergine"
+        "even starting from a broken dpkg the system comes back virgin"
     );
 }
 
@@ -621,7 +618,7 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
     init.pending_deps = WK_SYSTEM_DEPS.iter().map(|s| s.to_string()).collect();
     let model = SystemModel::new(init);
     let initial = model.snapshot();
-    assert!(initial.wk_version.is_none(), "si parte senza wkhtmltopdf");
+    assert!(initial.wk_version.is_none(), "we start without wkhtmltopdf");
 
     // a fake package whose hash is, by construction, the expected one.
     let bytes = b"contenuto .deb di prova".to_vec();
@@ -673,7 +670,7 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
     for dep in WK_SYSTEM_DEPS {
         assert!(
             mid.packages.contains(*dep),
-            "'{dep}' doveva essere installato come dipendenza del .deb"
+            "'{dep}' should have been installed as a dependency of the .deb"
         );
     }
 
@@ -682,13 +679,13 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
     let final_state = model.snapshot();
     assert!(
         !final_state.packages.contains("wkhtmltox"),
-        "wkhtmltopdf installato da noi va purgato nel rollback"
+        "a wkhtmltopdf we installed is purged by the rollback"
     );
     assert!(final_state.wk_version.is_none());
     for dep in WK_SYSTEM_DEPS {
         assert!(
             final_state.packages.contains(*dep),
-            "'{dep}' è una libreria di sistema: il rollback la lascia (D3)"
+            "'{dep}' is a system library: the rollback leaves it (D3)"
         );
     }
 }

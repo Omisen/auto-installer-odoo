@@ -60,7 +60,7 @@ fn rollback_removes_venv_then_sources_once() {
     let mut installer = Installer::new();
     assert!(
         installer.execute(&mut steps, &ctx).is_err(),
-        "lo step finale innesca il rollback"
+        "the final step triggers the rollback"
     );
 
     let ops = ops_of(&log);
@@ -71,14 +71,8 @@ fn rollback_removes_venv_then_sources_once() {
         .iter()
         .position(|o| matches!(o, Op::RemoveDirAll(p) if *p == repo_dir));
 
-    assert!(
-        rm_venv.is_some(),
-        "il venv creato da noi deve essere rimosso"
-    );
-    assert!(
-        rm_repo.is_some(),
-        "i sorgenti creati da noi devono essere rimossi"
-    );
+    assert!(rm_venv.is_some(), "the venv we created must be removed");
+    assert!(rm_repo.is_some(), "the sources we created must be removed");
     assert!(
         rm_venv < rm_repo,
         "l'undo del venv precede quello dei sorgenti (ordine inverso)"

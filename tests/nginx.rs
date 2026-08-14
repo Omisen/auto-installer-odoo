@@ -47,7 +47,10 @@ fn gating_all_steps_are_noop_without_nginx() {
             step.snapshot(&c).expect("snapshot");
             step.run(&c).expect("run");
             step.undo(&c).expect("undo");
-            assert!(ops_of(&log).is_empty(), "step inerte senza --with-nginx");
+            assert!(
+                ops_of(&log).is_empty(),
+                "an inert step without --with-nginx"
+            );
         }};
     }
 
@@ -86,7 +89,7 @@ fn default_site_removed_then_restored() {
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site())),
-        "undo deve ripristinare il default site: {ops:?}"
+        "the undo must restore the default site: {ops:?}"
     );
 }
 
@@ -113,7 +116,7 @@ fn absent_default_site_is_not_invented() {
     assert!(
         !ops.iter()
             .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site())),
-        "non inventiamo un default site che non c'era"
+        "we do not invent a default site that was not there"
     );
 }
 
@@ -139,19 +142,19 @@ fn firewall_undo_removes_only_the_delta() {
     let ops = ops_of(&log);
     assert!(
         ops.contains(&Op::UfwAllow("443/tcp".to_string())),
-        "apre solo il delta (443)"
+        "it opens the delta only (443)"
     );
     assert!(
         !ops.contains(&Op::UfwAllow("80/tcp".to_string())),
-        "80 c'era già: non riaperta"
+        "80 was already there: not reopened"
     );
     assert!(
         ops.contains(&Op::UfwDelete("443/tcp".to_string())),
-        "undo rimuove il delta"
+        "the undo removes the delta"
     );
     assert!(
         !ops.contains(&Op::UfwDelete("80/tcp".to_string())),
-        "MAI rimuovere una regola preesistente del cliente"
+        "NEVER remove a customer's pre-existing rule"
     );
 }
 
@@ -191,13 +194,13 @@ fn reload_fails_on_invalid_config() {
     step.snapshot(&c).expect("snapshot");
     assert!(
         step.run(&c).is_err(),
-        "non ricaricare una config che non passa nginx -t"
+        "never reload a config that fails nginx -t"
     );
     assert!(
         !ops_of(&log)
             .iter()
             .any(|o| matches!(o, Op::ServiceReload(_))),
-        "nessun reload di config rotta"
+        "no reload of a broken config"
     );
 }
 
@@ -225,7 +228,7 @@ fn reload_undo_does_not_reload_before_configs_are_restored() {
         !undo_ops
             .iter()
             .any(|o| matches!(o, Op::ServiceReload(_) | Op::ServiceStop(_))),
-        "un nginx preesistente resta attivo e non va ricaricato qui: {undo_ops:?}"
+        "a pre-existing nginx stays active and is not reloaded here: {undo_ops:?}"
     );
 }
 
@@ -251,11 +254,11 @@ fn install_undo_reloads_at_the_end_when_nginx_survives() {
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::ServiceReload(s) if s == "nginx")),
-        "nginx sopravvissuto va ricaricato per servire la config ripristinata: {ops:?}"
+        "a surviving nginx is reloaded to serve the restored config: {ops:?}"
     );
     assert!(
         !ops.iter().any(|o| matches!(o, Op::ServiceStop(_))),
-        "un nginx preesistente non va fermato"
+        "a pre-existing nginx is not stopped"
     );
 }
 
@@ -281,7 +284,7 @@ fn install_undo_does_not_reload_an_invalid_config() {
         !ops_of(&log)
             .iter()
             .any(|o| matches!(o, Op::ServiceReload(_))),
-        "config non valida → nessun reload (come nel run)"
+        "an invalid config means no reload, as in the run"
     );
 }
 
@@ -301,7 +304,7 @@ fn install_undo_does_not_purge_without_aggressive() {
     assert!(ops.iter().any(|o| matches!(o, Op::ServiceDisable(_))));
     assert!(
         !ops.iter().any(|o| matches!(o, Op::PkgRemove(_))),
-        "coerenza D3: no purge senza flag"
+        "D3 consistency: no purge without the flag"
     );
 }
 
@@ -309,7 +312,7 @@ fn install_undo_does_not_purge_without_aggressive() {
 fn vhost_rendering_has_no_residue() {
     let c = ctx(true, false);
     let vhost = render_vhost(&c);
-    assert!(!vhost.contains("{{"), "nessun placeholder residuo");
+    assert!(!vhost.contains("{{"), "no placeholder left");
     assert!(vhost.contains("127.0.0.1:8069"), "porta Odoo nel proxy");
     validate_vhost(&vhost).expect("vhost valido");
 }
@@ -350,7 +353,7 @@ fn a_non_standard_default_site_is_restored_to_its_own_target() {
         Some(DefaultSite::Symlink {
             target: cliente.clone()
         }),
-        "lo snapshot deve registrare il target, non solo l'esistenza"
+        "the snapshot must record the target, not just the existence"
     );
 
     step.run(&c).expect("run");
@@ -362,7 +365,7 @@ fn a_non_standard_default_site_is_restored_to_its_own_target() {
             o,
             Op::CreateSymlink { src, link } if *src == cliente && *link == default_site()
         )),
-        "l'undo deve ricreare il symlink verso il target ORIGINALE: {ops:?}"
+        "the undo must recreate the symlink towards the ORIGINAL target: {ops:?}"
     );
     assert!(
         !ops.iter().any(|o| matches!(
@@ -371,7 +374,7 @@ fn a_non_standard_default_site_is_restored_to_its_own_target() {
                 if *link == default_site()
                     && src.as_path() == Path::new("/etc/nginx/sites-available/default")
         )),
-        "nessun ripristino verso il target standard: la config del cliente non è quella: {ops:?}"
+        "no restore towards the standard target: that is not the customer's config: {ops:?}"
     );
 }
 
@@ -400,7 +403,7 @@ fn a_regular_default_site_is_moved_to_a_backup_never_deleted() {
     assert!(
         !ops.iter()
             .any(|o| matches!(o, Op::RemoveSymlink(p) if *p == default_site())),
-        "un file regolare non va MAI rimosso: {ops:?}"
+        "a regular file must NEVER be removed: {ops:?}"
     );
     let spostato = ops
         .iter()
@@ -408,14 +411,14 @@ fn a_regular_default_site_is_moved_to_a_backup_never_deleted() {
             Op::MoveFile { src, dst } if *src == default_site() => Some(dst.clone()),
             _ => None,
         })
-        .expect("il file va spostato in un backup");
+        .expect("the file is moved to a backup");
 
     // the backup cannot stay in the enabled directory, which nginx globs: it
     // would be loaded and the port would stay occupied — the same defect under
     // another name.
     assert!(
         !spostato.starts_with("/etc/nginx/sites-enabled"),
-        "il backup non deve restare dove nginx lo ricaricherebbe: {}",
+        "the backup must not stay where nginx would load it: {}",
         spostato.display()
     );
 
@@ -427,7 +430,7 @@ fn a_regular_default_site_is_moved_to_a_backup_never_deleted() {
             o,
             Op::MoveFile { src, dst } if *src == spostato && *dst == default_site()
         )),
-        "l'undo deve rimettere il file al suo posto: {ops:?}"
+        "the undo must put the file back: {ops:?}"
     );
 }
 
@@ -455,7 +458,7 @@ fn an_unknown_default_site_is_left_alone() {
             o,
             Op::RemoveSymlink(p) | Op::MoveFile { src: p, .. } if *p == default_site()
         )),
-        "su qualcosa che non sappiamo trattare non si agisce: {ops:?}"
+        "on something we do not know how to treat we do not act: {ops:?}"
     );
 }
 
@@ -475,13 +478,13 @@ fn a_pre_r11_snapshot_still_restores_the_default_site() {
     let (mock, log) = MockSystemOps::new(MockConfig::default());
     let mut step = NginxEnableSite::with_ops(Box::new(mock));
     step.rehydrate(&legacy)
-        .expect("uno stato pre-R11 resta leggibile");
+        .expect("a pre-R11 state stays readable");
 
     let snap = enable_site_snapshot(&step);
     assert!(snap.default_site_existed);
     assert_eq!(
         snap.default_site, None,
-        "il campo nuovo resta assente: è ciò che segnala uno stato vecchio"
+        "the new field stays absent: that is what marks an old state"
     );
 
     step.undo(&ctx(true, false)).expect("undo");
@@ -493,7 +496,7 @@ fn a_pre_r11_snapshot_still_restores_the_default_site() {
                 if *link == default_site()
                     && src.as_path() == Path::new("/etc/nginx/sites-available/default")
         )),
-        "senza la natura registrata si ricade sul target standard: {ops:?}"
+        "without the recorded nature it falls back to the standard target: {ops:?}"
     );
 }
 
@@ -514,8 +517,8 @@ fn opening_the_https_port_does_not_change_the_vhost() {
 
     assert_eq!(
         senza, con,
-        "il flag non deve toccare il vhost: TLS è compito di `certbot --nginx`, \
-         che il vhost lo riscrive da sé"
+        "the flag must not touch the vhost: TLS is `certbot --nginx`'s job, and it \
+         rewrites the vhost itself"
     );
 }
 
@@ -530,20 +533,20 @@ fn opening_the_https_port_does_not_change_the_vhost() {
 fn the_vhost_makes_no_tls_promises() {
     let reso = render_vhost(&ctx(true, true));
 
-    for bugia in [
+    for lie in [
         "listen 443",
         "ssl_certificate",
         "NGINX_CERT_PATH",
         "lib/nginx.sh",
     ] {
         assert!(
-            !reso.contains(bugia),
-            "il vhost non deve contenere '{bugia}': non configura TLS (A-V3-6)"
+            !reso.contains(lie),
+            "the vhost must not contain '{lie}': it configures no TLS (A-V3-6)"
         );
     }
     // and it stays a valid vhost, with no placeholder left.
-    validate_vhost(&reso).expect("nessun placeholder residuo");
-    assert!(reso.contains("listen 80"), "il vhost serve la porta 80");
+    validate_vhost(&reso).expect("no placeholder left");
+    assert!(reso.contains("listen 80"), "the vhost serves port 80");
 }
 
 /// the firewall is the only real effect, and it happens: the port opens.
@@ -563,7 +566,7 @@ fn opening_the_https_port_opens_443_on_the_firewall() {
 
     assert!(
         ops_of(&log).contains(&Op::UfwAllow("443/tcp".to_string())),
-        "l'unico effetto del flag deve esserci davvero"
+        "the flag's only effect must really be there"
     );
 }
 
@@ -595,8 +598,8 @@ fn port_80_is_opened_even_when_8080_is_already_allowed() {
     let ops = ops_of(&log);
     assert!(
         ops.contains(&Op::UfwAllow("80/tcp".to_string())),
-        "80/tcp non è presente solo perché lo è 8080/tcp: senza questa apertura \
-         nginx resta irraggiungibile e nulla lo segnala (A-V3-7): {ops:?}"
+        "80/tcp is not present merely because 8080/tcp is: without this opening nginx \
+         stays unreachable and nothing says so (A-V3-7): {ops:?}"
     );
 
     // and the converse holds: a genuinely present rule is not re-added.
@@ -604,7 +607,7 @@ fn port_80_is_opened_even_when_8080_is_already_allowed() {
     let ops = ops_of(&log);
     assert!(
         !ops.contains(&Op::UfwDelete("8080/tcp".to_string())),
-        "mai toccare una regola preesistente del cliente: {ops:?}"
+        "never touch a customer's pre-existing rule: {ops:?}"
     );
 }
 
@@ -621,12 +624,12 @@ fn the_vhost_logs_carry_the_version_in_their_name() {
 
     assert!(
         reso.contains("/var/log/nginx/odoo17.access.log"),
-        "il nome del log deve seguire la versione installata"
+        "the log name must follow the installed version"
     );
     assert!(reso.contains("/var/log/nginx/odoo17.error.log"));
     assert!(
         !reso.contains("odoo18"),
-        "nessun riferimento cablato a una versione diversa da quella installata"
+        "no hardcoded reference to a version other than the installed one"
     );
-    validate_vhost(&reso).expect("nessun placeholder residuo");
+    validate_vhost(&reso).expect("no placeholder left");
 }

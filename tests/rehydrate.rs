@@ -108,7 +108,7 @@ fn chain_from_factory(model: &SystemModel, names: &[&str]) -> Vec<Box<dyn Step>>
         .iter()
         .map(|name| {
             steps::step_by_name(name, &make_ops)
-                .unwrap_or_else(|| panic!("la factory deve conoscere lo step '{name}'"))
+                .unwrap_or_else(|| panic!("the factory must know step '{name}'"))
         })
         .collect()
 }
@@ -118,9 +118,9 @@ fn run_chain(steps: &mut [Box<dyn Step>], ctx: &Context) -> Vec<serde_json::Valu
     for step in steps.iter_mut() {
         let name = step.name().to_string();
         step.snapshot(ctx)
-            .unwrap_or_else(|e| panic!("snapshot di '{name}' fallito: {e}"));
+            .unwrap_or_else(|e| panic!("snapshot of '{name}' failed: {e}"));
         step.run(ctx)
-            .unwrap_or_else(|e| panic!("run di '{name}' fallito: {e}"));
+            .unwrap_or_else(|e| panic!("run of '{name}' failed: {e}"));
     }
     steps.iter().map(|s| s.snapshot_value()).collect()
 }
@@ -142,16 +142,16 @@ fn every_step_rehydrates_to_an_identical_snapshot() {
         let name = step.name();
         let make_ops = || -> Box<dyn SystemOps> { clean.boxed() };
         let mut fresh = steps::step_by_name(name, &make_ops)
-            .unwrap_or_else(|| panic!("factory senza '{name}'"));
+            .unwrap_or_else(|| panic!("factory without '{name}'"));
 
         fresh
             .rehydrate(original)
-            .unwrap_or_else(|e| panic!("rehydrate di '{name}' fallito: {e}"));
+            .unwrap_or_else(|e| panic!("rehydrate of '{name}' failed: {e}"));
 
         assert_eq!(
             &fresh.snapshot_value(),
             original,
-            "'{name}': snapshot_value dopo rehydrate deve essere identico all'originale"
+            "'{name}': snapshot_value after rehydrate must be identical to the original"
         );
     }
 }
@@ -167,10 +167,10 @@ fn a_corrupt_snapshot_fails_rehydration_instead_of_defaulting() {
 
     for name in ["create-database", "setup-postgres", "patch-bashrc"] {
         let mut step = steps::step_by_name(name, &make_ops).expect("factory");
-        let bogus = serde_json::json!({ "questo": "non è uno snapshot valido" });
+        let bogus = serde_json::json!({ "questo": "not a valid snapshot" });
         assert!(
             step.rehydrate(&bogus).is_err(),
-            "'{name}': uno snapshot non deserializzabile deve essere un errore"
+            "'{name}': a snapshot that cannot be deserialised must be an error"
         );
     }
 }
@@ -207,12 +207,12 @@ fn rehydrated_steps_undo_exactly_like_the_live_ones() {
 
     assert_eq!(
         undone_from_disk, undone_in_process,
-        "l'undo da step reidratati deve portare allo stesso stato dell'undo in-process"
+        "the undo from rehydrated steps must reach the same state as the in-process undo"
     );
     assert_eq!(
         undone_from_disk,
         fresh_state(),
-        "e quello stato è il sistema vergine"
+        "and that state is the virgin system"
     );
 }
 
@@ -236,12 +236,12 @@ fn rehydration_without_the_snapshot_would_undo_the_wrong_things() {
     assert_ne!(
         disk_model.snapshot(),
         fresh_state(),
-        "senza rehydrate il rollback non può funzionare: se questo assert cade, \
-         gli undo stanno agendo senza consultare il PreState"
+        "without rehydrate the rollback cannot work: if this assertion falls, the undos \
+         are acting without consulting the PreState"
     );
     assert!(
         disk_model.snapshot().users.contains("odoo"),
-        "senza il PreState reidratato l'utente creato da noi non viene rimosso"
+        "without the rehydrated PreState the user we created is not removed"
     );
 }
 
@@ -280,7 +280,7 @@ const FIELD_STATE: &str = r#"{
 }"#;
 
 fn field_state() -> InstallState {
-    serde_json::from_str(FIELD_STATE).expect("lo state file di campo deve restare leggibile")
+    serde_json::from_str(FIELD_STATE).expect("the state file from the field must stay readable")
 }
 
 #[test]
@@ -293,8 +293,8 @@ fn the_real_state_file_still_parses_and_has_no_config() {
     assert_eq!(state.completed[0].name, "prepare-opt-root");
     assert!(
         state.config.is_none(),
-        "gli state file pre-R4 non hanno la configurazione: il comando rollback \
-         deve poterlo distinguere"
+        "pre-R4 state files carry no configuration: the rollback command must be able to \
+         tell"
     );
 }
 
@@ -305,13 +305,13 @@ fn undo_from_field_state(model: &SystemModel, step_name: &str, ctx: &Context) {
         .completed
         .iter()
         .find(|r| r.name == step_name)
-        .unwrap_or_else(|| panic!("il fixture deve contenere '{step_name}'"));
+        .unwrap_or_else(|| panic!("the fixture must contain '{step_name}'"));
     let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
     let mut step = steps::step_by_name(step_name, &make_ops).expect("factory");
     step.rehydrate(&record.snapshot)
-        .unwrap_or_else(|e| panic!("rehydrate di '{step_name}' dal fixture: {e}"));
+        .unwrap_or_else(|e| panic!("rehydrate of '{step_name}' from the fixture: {e}"));
     step.undo(ctx)
-        .unwrap_or_else(|e| panic!("undo di '{step_name}': {e}"));
+        .unwrap_or_else(|e| panic!("undo of '{step_name}': {e}"));
 }
 
 #[test]
@@ -326,12 +326,15 @@ fn field_state_create_odoo_user_rehydrates_and_removes_the_user() {
     let s = model.snapshot();
     assert!(
         !s.users.contains("odoo"),
-        "user_prestate=CreatedByUs nel fixture → l'utente va rimosso"
+        "user_prestate=CreatedByUs in the fixture: the user must be removed"
     );
-    assert!(!s.groups.contains("odoo"), "e il gruppo dedicato con lui");
+    assert!(
+        !s.groups.contains("odoo"),
+        "and its dedicated group with it"
+    );
     assert!(
         s.paths.contains(&PathBuf::from(HOME)),
-        "la home NON è di questo step: userdel senza -r, la rimuove PrepareOptRoot"
+        "the home is NOT this step's: userdel without -r, PrepareOptRoot removes it"
     );
 }
 
@@ -348,12 +351,15 @@ fn field_state_apt_delta_purges_only_the_delta() {
 
     let s = model.snapshot();
     for pkg in ["python3-pip", "build-essential", "libpq-dev"] {
-        assert!(!s.packages.contains(pkg), "'{pkg}' è nel delta: va purgato");
+        assert!(
+            !s.packages.contains(pkg),
+            "'{pkg}' is in the delta: it must be purged"
+        );
     }
     for pkg in ["git", "curl"] {
         assert!(
             s.packages.contains(pkg),
-            "'{pkg}' era già installato prima di noi: NON va toccato"
+            "'{pkg}' was already installed before us: it must NOT be touched"
         );
     }
 }
@@ -375,16 +381,16 @@ fn field_state_postgres_rehydrates_all_three_axes() {
     let s = model.snapshot();
     assert!(
         !s.svc_active.contains("postgresql"),
-        "asse 'active' = CreatedByUs → il servizio va fermato"
+        "the 'active' axis is CreatedByUs: the service must be stopped"
     );
     assert!(
         !s.svc_enabled.contains("postgresql"),
-        "asse 'enabled' = CreatedByUs → il servizio va disabilitato"
+        "the 'enabled' axis is CreatedByUs: the service must be disabled"
     );
     assert!(
         s.packages.contains("postgresql"),
-        "asse 'installed' = CreatedByUs ma senza --aggressive-rollback il purge \
-         non si fa: stop+disable sono reversibili, il purge no (D3)"
+        "the 'installed' axis is CreatedByUs, but without --aggressive-rollback there is \
+         no purge: stop and disable are reversible, a purge is not (D3)"
     );
 }
 
@@ -408,6 +414,6 @@ fn field_state_preexisting_prepare_opt_root_is_a_noop() {
     step.undo(&ctx()).expect("undo");
     assert!(
         model.snapshot().paths.contains(&PathBuf::from(HOME)),
-        "/opt/odoo era Preexisting: l'undo non deve rimuoverlo"
+        "/opt/odoo was Preexisting: the undo must not remove it"
     );
 }

@@ -65,7 +65,7 @@ fn a_cache_we_created_is_removed_by_the_rollback() {
             user: "odoo".to_string(),
             path: home.path().join(".cache"),
         }),
-        "la cache va creata come utente odoo: chi ci scriverà è lui, non root. {:?}",
+        "the cache is created as the odoo user: they will write in it, not root. {:?}",
         ops_of(&log)
     );
     assert_eq!(snapshot_of(&step).prestate, PreState::CreatedByUs);
@@ -97,7 +97,7 @@ fn a_preexisting_cache_belongs_to_the_client_and_is_never_touched() {
     step.undo(&c).expect("undo");
     assert!(
         ops_of(&log).is_empty(),
-        "cache preesistente: né creata né rimossa. Trovato: {:?}",
+        "a pre-existing cache is neither created nor removed. found: {:?}",
         ops_of(&log)
     );
 }
@@ -124,7 +124,7 @@ fn the_verdict_crosses_the_disk_boundary() {
     assert_eq!(
         removed_paths(&ops_of(&log)),
         vec![home.path().join(".cache")],
-        "lo stato persistito deve bastare a sapere che la cache è nostra"
+        "the persisted state must suffice to know the cache is ours"
     );
 }
 
@@ -154,7 +154,7 @@ fn a_snapshot_pointing_outside_the_home_removes_nothing() {
 
     assert!(
         removed_paths(&ops_of(&log)).is_empty(),
-        "nessuna rimozione fuori dal perimetro della home: {:?}",
+        "no removal outside the home's perimeter: {:?}",
         ops_of(&log)
     );
 }
@@ -180,7 +180,7 @@ fn dry_run_mutates_nothing() {
 
     assert!(
         ops_of(&log).is_empty(),
-        "dry-run: nessuna operazione. Trovato: {:?}",
+        "dry run: no operation. found: {:?}",
         ops_of(&log)
     );
 }
@@ -191,13 +191,13 @@ fn the_cache_is_undone_after_everything_that_could_write_into_it() {
     // EARLY to be removed LATE — after the service is stopped and the venv is
     // gone, when nothing can recreate the cache we just deleted.
     let make_ops = invok::system_ops::backend_factory(Default::default())
-        .expect("la famiglia Debian ha un backend");
+        .expect("the Debian family has a backend");
     let names = invok::steps::canonical_step_names(&make_ops);
     let pos = |name: &str| {
         names
             .iter()
             .position(|n| n == name)
-            .unwrap_or_else(|| panic!("'{name}' deve essere nella sequenza canonica"))
+            .unwrap_or_else(|| panic!("'{name}' must be in the canonical sequence"))
     };
 
     let cache = pos("setup-cache-dir");
@@ -209,8 +209,8 @@ fn the_cache_is_undone_after_everything_that_could_write_into_it() {
     ] {
         assert!(
             cache < pos(later),
-            "setup-cache-dir deve precedere '{later}' nella sequenza, così il suo undo \
-             gira dopo quello di '{later}'"
+            "setup-cache-dir must precede '{later}' in the sequence, so its undo runs after \
+             '{later}'s"
         );
     }
 }

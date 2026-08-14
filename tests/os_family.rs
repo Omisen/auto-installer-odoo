@@ -78,7 +78,7 @@ fn id_like_does_not_admit_untested_derivatives() {
     );
     assert!(
         matches!(check_os_from(&rocky), Err(CheckError::UnsupportedOs { .. })),
-        "una derivata che dichiara ID_LIKE=fedora non deve entrare dalla finestra"
+        "a derivative declaring ID_LIKE=fedora must not slip in through the window"
     );
 }
 
@@ -119,13 +119,16 @@ fn fedora_is_accepted_from_its_minimum_version() {
         family: OsFamily::Fedora,
     };
 
-    assert!(validate_os(&fedora("40")).is_ok(), "40 è la soglia minima");
+    assert!(
+        validate_os(&fedora("40")).is_ok(),
+        "40 is the minimum threshold"
+    );
     assert!(validate_os(&fedora("41")).is_ok());
 
-    let err = validate_os(&fedora("39")).expect_err("sotto la soglia si rifiuta");
+    let err = validate_os(&fedora("39")).expect_err("below the threshold it is refused");
     assert!(
         matches!(err, CheckError::UnsupportedVersion { .. }),
-        "atteso UnsupportedVersion, trovato {err:?}"
+        "UnsupportedVersion expected, found {err:?}"
     );
 }
 
@@ -142,20 +145,20 @@ fn fedora_is_accepted_from_its_minimum_version() {
 fn only_a_fedora_newer_than_the_ci_one_is_flagged() {
     assert!(
         !is_newer_than_tested("fedora", "41"),
-        "la CI installa davvero su Fedora 41: avvisare qui sarebbe un allarme falso"
+        "the CI really installs on Fedora 41: warning here would be a false alarm"
     );
     assert!(
         !is_newer_than_tested("fedora", "44"),
-        "da M11 la CI installa davvero anche su Fedora 44: l'avviso sarebbe falso"
+        "since M11 the CI really installs on Fedora 44 too: the warning would be false"
     );
     assert!(
         !is_newer_than_tested("fedora", "40"),
-        "40 è la soglia minima e non è più recente della provata"
+        "40 is the minimum threshold and is no newer than the tested one"
     );
     assert!(
         is_newer_than_tested("fedora", "45"),
-        "una release oltre quella provata va segnalata: è l'informazione che serve \
-         quando i nomi dei pacchetti o il pin di wkhtmltopdf non tornano"
+        "a release past the tested one must be flagged: that is the information needed \
+         when the package names or the checksum pin do not add up"
     );
     assert!(is_newer_than_tested("fedora", "99"));
 }
@@ -194,9 +197,9 @@ fn to_context_propagates_the_recorded_family_not_the_default() {
     assert_eq!(
         ctx.os_family,
         OsFamily::Fedora,
-        "la famiglia del rollback si legge dal manifesto: se qui compare il default \
-         Debian, `to_context` ha smesso di propagarla e l'undo userebbe i comandi \
-         sbagliati in silenzio"
+        "the rollback's family is read from the manifest: if the default appears here, \
+         `to_context` stopped propagating it and the undo would silently use the wrong \
+         commands"
     );
 }
 
@@ -265,14 +268,14 @@ fn a_manifest_written_before_this_field_reads_as_debian() {
 }"#;
     std::fs::write(&path, legacy).expect("write");
 
-    let state = InstallState::load(&path).expect("un manifesto pre-2.3 deve restare leggibile");
+    let state = InstallState::load(&path).expect("a pre-2.3 manifest must stay readable");
     let config = state.config.expect("config presente");
     assert_eq!(
         config.os_family,
         OsFamily::Debian,
-        "senza il campo, la famiglia è Debian: è ciò che quell'installazione era"
+        "without the field the family is Debian: that is what such an installation was"
     );
-    assert_eq!(config.db_name, "citest", "il resto si legge come prima");
+    assert_eq!(config.db_name, "citest", "the rest reads as before");
 }
 
 // --- identity: resuming under another family is not resuming ----------------
@@ -292,13 +295,15 @@ fn resuming_with_a_different_family_is_refused_by_name() {
     let decision = start_decision(&state, &config_for(OsFamily::Fedora), false);
 
     match decision {
-        StartDecision::RefuseIdentityMismatch(differenze) => {
+        StartDecision::RefuseIdentityMismatch(differences) => {
             assert!(
-                differenze.iter().any(|(field, _, _)| *field == "OS family"),
-                "il rifiuto deve nominare il campo che non coincide, trovato: {differenze:?}"
+                differences
+                    .iter()
+                    .any(|(field, _, _)| *field == "OS family"),
+                "the refusal must name the field that does not match, found: {differences:?}"
             );
         }
-        altro => panic!("atteso un rifiuto per identità diversa, trovato {altro:?}"),
+        other => panic!("a refusal on a different identity was expected, found {other:?}"),
     }
 }
 
@@ -335,19 +340,19 @@ fn a_family_mismatch_warns_and_does_not_decide() {
     assert!(family_mismatch(OsFamily::Debian, None).is_none());
 
     // disagreement: a warning naming **both**, and which one we proceed with.
-    let avviso = family_mismatch(OsFamily::Debian, Some(OsFamily::Fedora))
-        .expect("una discordanza va detta");
+    let warning =
+        family_mismatch(OsFamily::Debian, Some(OsFamily::Fedora)).expect("a mismatch must be said");
     assert!(
-        avviso.contains("debian"),
-        "deve nominare il manifesto: {avviso}"
+        warning.contains("debian"),
+        "it must name the manifest: {warning}"
     );
     assert!(
-        avviso.contains("fedora"),
-        "deve nominare il sistema: {avviso}"
+        warning.contains("fedora"),
+        "it must name the system: {warning}"
     );
     assert!(
-        avviso.contains("proceeding with 'debian'"),
-        "deve dire che vince il manifesto, non il sistema: {avviso}"
+        warning.contains("proceeding with 'debian'"),
+        "it must say the manifest wins, not the system: {warning}"
     );
 }
 
@@ -365,5 +370,5 @@ fn the_id_for_the_warning_is_read_without_validating() {
     assert_eq!(os_id_from(&vecchia).as_deref(), Some("ubuntu"));
 
     // a missing file gives no answer, and therefore no warning.
-    assert_eq!(os_id_from(&dir.path().join("assente")), None);
+    assert_eq!(os_id_from(&dir.path().join("absent")), None);
 }
