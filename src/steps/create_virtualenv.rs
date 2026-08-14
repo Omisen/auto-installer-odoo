@@ -1,9 +1,9 @@
-//! [`CreateVirtualenv`] (9b): crea il virtualenv Python in `<install_dir>/sandbox`.
+//! [`CreateVirtualenv`]: creates the Python virtualenv in
+//! `<install_dir>/sandbox`.
 //!
-//! Tutte le operazioni come utente **odoo** (privilegio minimo). Il suo undo
-//! (`rm -rf sandbox`) copre anche i pacchetti pip di
+//! everything runs as the **odoo** user. its undo also covers
 //! [`InstallPythonRequirements`](crate::steps::install_python_requirements):
-//! rimuovendo il venv spariscono tutti i pacchetti al suo interno.
+//! removing the venv removes every package inside it.
 
 use tracing::{info, warn};
 
@@ -16,7 +16,7 @@ use crate::system_ops::SystemOps;
 
 const VENV_SUBDIR: &str = "sandbox";
 
-/// Crea il virtualenv (reversibile).
+/// creates the virtualenv, reversibly.
 pub struct CreateVirtualenv {
     ops: Box<dyn SystemOps>,
     prestate: PreState,
@@ -35,15 +35,15 @@ impl CreateVirtualenv {
     }
 }
 
-/// Dove va cercato `ensurepip` su questa famiglia.
+/// where `ensurepip` is expected to come from, on this family.
 ///
-/// La **domanda** della precondizione è la stessa per tutti — «il sistema sa
-/// creare un virtualenv?», risolta in `import ensurepip` (A-R6-1) — ma il
-/// suggerimento no: su Debian/Ubuntu manca un pacchetto da installare, su Fedora
-/// `ensurepip` è nella libreria standard e un'assenza significa un'altra cosa.
-/// Dare il consiglio sbagliato manda a cercare un pacchetto che non esiste.
+/// the precondition's **question** is the same everywhere — can this system
+/// create a virtualenv, answered by `import ensurepip` (A-R6-1) — but the
+/// suggestion is not: on one family a package is missing, on the other
+/// `ensurepip` is in the stdlib and an absence means something else. the wrong
+/// advice sends people looking for a package that does not exist.
 ///
-/// Pura, e verificabile per entrambe le famiglie senza averle sotto mano.
+/// pure, and checkable for both families without having either at hand.
 pub fn missing_ensurepip_hint(family: OsFamily) -> &'static str {
     match family {
         OsFamily::Debian => {
@@ -87,22 +87,15 @@ impl Step for CreateVirtualenv {
             return Ok(());
         }
 
-        // python3-venv deve esserci (installato dalle dipendenze di Fase 4).
+        // the question is "can this system create a virtualenv?", answered by
+        // `import ensurepip` — not by the presence of the `venv` module, which
+        // is in the stdlib and always there. while this asked about the wrong
+        // module it could not fail, and the failure arrived later as a raw
+        // Python error with a half-built `sandbox` (A-R6-1).
         //
-        // La domanda è "il sistema sa creare un virtualenv?", e si risolve in
-        // `import ensurepip` — non nella presenza del modulo `venv`, che è nella
-        // stdlib e c'è sempre. Vedi
-        // [`SystemOps::python_venv_available`](crate::system_ops::SystemOps::python_venv_available):
-        // finché questa precondizione chiedeva del modulo sbagliato non poteva
-        // fallire, e un sistema senza `python3-venv` arrivava fino al
-        // `python3 -m venv`, che si ferma a metà lasciando una `sandbox`
-        // incompleta (senza `bin/python`) e un errore grezzo di Python (A-R6-1).
-        //
-        // L'interprete è quello del piano (M11), non `python3` cablato: su una
-        // distribuzione il cui Python di sistema è più recente dei pin di Odoo
-        // il venv nasce altrove, e chiedere di `ensurepip` a un interprete
-        // diverso da quello che si userà è la solita risposta giusta alla
-        // domanda sbagliata.
+        // the interpreter is the planned one (M11), not a hardcoded `python3`:
+        // asking `ensurepip` of an interpreter other than the one we will use
+        // is the right answer to the wrong question.
         let python = &ctx.python.command;
         if !self.ops.python_venv_available(python) {
             return Err(StepError::Precondition(format!(
@@ -129,7 +122,7 @@ impl Step for CreateVirtualenv {
             info!("undo (dry-run): rm -rf del virtualenv");
             return Ok(());
         }
-        // rm -rf del venv: rimuove anche tutti i pacchetti pip (undo di 9c).
+        // removing the venv removes every pip package inside it.
         let venv = Self::venv_dir(ctx);
         if let Err(e) = self.ops.remove_dir_all(&venv) {
             warn!(error = %e, "undo: rm -rf virtualenv fallito, proseguo (best-effort)");

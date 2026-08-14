@@ -1,42 +1,40 @@
 # =============================================================================
-# .github/workflows/integration.yml
-# Test di INTEGRAZIONE REALE: l'installer viene eseguito davvero (R5, audit B4).
+# the REAL integration test: the installer is actually run.
 #
-# Perché esiste, in una riga: i mock provano la *logica*, non l'*integrazione
-# col sistema*. La prima prova reale su Multipass ha trovato due bug ALTA in un
-# solo giro — A-RT-1 (`dpkg -i` non risolve le dipendenze: l'installazione
-# falliva su OGNI sistema minimale) e A-RT-2 (il purge del rollback falliva su
-# dpkg rotto, lasciando 24 pacchetti) — con 148 test mock verdi. Questo workflow
-# automatizza quella prova.
+# why it exists, in one line: mocks prove the *logic*, not the *integration with
+# the system*. the first real VM session found two high-severity bugs in a single
+# round — an install command that did not resolve dependencies, and a rollback
+# purge that failed on a broken dpkg — with the whole mock suite green. this
+# workflow automates that session.
 #
-# Rapporto con gli altri workflow:
-#   test.yml     → CI di qualità (fmt/clippy/test/build su mock, senza root),
-#                  su OGNI push/PR. È il gate rapido e resta INVARIATO: il test
-#                  reale non deve rallentare il ciclo di sviluppo.
-#   release.yml  → binari su tag. Invariato.
-#   questo       → lento (decine di minuti) e privilegiato. Su richiesta e sui
-#                  soli rami principali.
+# how it relates to the others:
+#   test.yml     quality CI on mocks, without root, on EVERY push and PR. the
+#                fast gate, and it stays UNCHANGED: the real test must not slow
+#                the development cycle down.
+#   release.yml  binaries on a tag. unchanged.
+#   this one     slow (tens of minutes) and privileged. on request, and on the
+#                main branches only.
 #
-# DISTRUTTIVO: crea utenti, installa pacchetti, tocca PostgreSQL e systemd.
-# Gira solo su runner e container effimeri, che GitHub distrugge a fine job.
+# DESTRUCTIVE: it creates users, installs packages, touches PostgreSQL and
+# systemd. it runs only on ephemeral runners and containers.
 # =============================================================================
 
 name: Integration (real install)
 
 on:
-  # Lancio manuale dalla UI: la via normale per validare un cambiamento prima
-  # di taggare una release.
+  # manual dispatch: the normal way to validate a change before tagging a
+  # release.
   workflow_dispatch:
-  # Solo i rami principali. NON su ogni feature branch: sono 4 job da decine di
-  # minuti ciascuno, e il feedback rapido è compito di test.yml.
+  # main branches only, not every feature branch: several jobs of tens of
+  # minutes each, and fast feedback is test.yml's job.
   push:
     branches: [main, dev]
 
 permissions:
   contents: read
 
-# Un'integrazione alla volta per ref: sono job lunghi e i runner sono effimeri,
-# quindi conviene cancellare quella superata invece di accodarla.
+# one integration at a time per ref: long jobs on ephemeral runners, so
+# cancelling the superseded one beats queueing it.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -47,21 +45,21 @@ env:
 
 jobs:
   # ---------------------------------------------------------------------------
-  # Il test completo: installazione reale, verifica che Odoo risponda, poi
-  # `invok rollback` e verifica che il sistema sia tornato pulito.
+  # the full test: real installation, Odoo answering, then the rollback and a
+  # clean system.
   #
-  # Gira sui runner GitHub **nativi**, non in container, per una ragione
-  # precisa: sono VM vere con systemd come PID 1. In un container Docker
-  # standard `systemctl` non funziona, e senza systemd non si può provare né
-  # l'avvio del servizio né che il rollback lo rimuova — cioè metà del ciclo di
-  # vita. I runner sono effimeri: sporcarli è esattamente ciò che vogliamo.
+  # it runs on the **native** runners and not in a container, for a precise
+  # reason: they are real VMs with systemd as PID 1. in a standard container the
+  # service manager does not operate, and without it neither the service's start
+  # nor its removal can be proved — half the lifecycle. the runners are
+  # ephemeral: dirtying them is exactly what we want.
   # ---------------------------------------------------------------------------
   native:
     name: install + rollback (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60 # `pip install` compila gevent: è la parte lenta
+    timeout-minutes: 60 # pip compiles gevent: that is the slow part
     strategy:
-      fail-fast: false # un OS che fallisce non deve nascondere gli altri
+      fail-fast: false # one failing OS must not hide the others
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04]
 
@@ -78,21 +76,18 @@ jobs:
       - name: Build release
         run: cargo build --release --locked
 
-      # Contesto utile a leggere un fallimento: cosa c'era già sulla macchina.
-      # I runner GitHub NON sono minimali (git, curl, build-essential e
-      # PostgreSQL sono preinstallati), il che rende questo job anche un test
-      # dello scenario "macchina cliente non vergine": il delta apt sarà
-      # piccolo e le risorse preesistenti dovranno sopravvivere al rollback.
-      # L'indice apt dei runner GitHub è stantìo: l'immagine viene costruita
-      # giorni prima e nessuno esegue `apt-get update` all'avvio. Dalla R6-hotfix
-      # l'installer lo aggiorna da sé (nel run di bootstrap-prerequisites), quindi
-      # questo passo è **ridondante per il prodotto** — resta per due ragioni:
-      # rende esplicito lo stato dell'ambiente di test, e sposta il costo di rete
-      # fuori dal cronometro dell'installazione.
+      # context for reading a failure: what was already on the machine. these
+      # runners are NOT minimal, which makes this job also a test of the
+      # "non-virgin customer machine" scenario — a small delta, and pre-existing
+      # resources that must survive the rollback.
+      # a hosted runner's package index is stale: the image is built days
+      # earlier and nobody refreshes it at boot. since R6-hotfix the installer
+      # refreshes it itself, so this step is **redundant for the product** — it
+      # stays to make the test environment's state explicit and to move the
+      # network cost out of the installation's clock.
       #
-      # Nota: NON deve mascherare il fix. La copertura del caso "indice stantìo"
-      # vive nei test su mock (`bootstrap_updates_the_index_so_the_next_step_sees_
-      # the_candidates`), che non dipendono da come è tarato il runner.
+      # it must NOT mask the fix: the stale-index case is covered by mock tests,
+      # which do not depend on how the runner is tuned.
       - name: Indice apt aggiornato (ambiente di test esplicito)
         run: sudo apt-get update
 
@@ -108,11 +103,10 @@ jobs:
           MODE: full
         run: bash scripts/ci/integration-test.sh
 
-      # Il log su file. Da A-V3-2 vive in /var/log/invok.log e non
-      # dipende più da una directory che l'installer deve ancora creare: nasce
-      # quindi anche alla **prima** installazione su macchina pulita, che è il
-      # caso in cui A-R5-2 lasciava senza post-mortem. Lo stderr resta comunque
-      # nel log del job.
+      # the log file. since A-V3-2 it lives outside the perimeter and no longer
+      # depends on a directory the installer has yet to create, so it appears on
+      # a **first** installation too — the case A-R5-2 left without a
+      # post-mortem.
       - name: Log dell'installer, se presente
         if: always()
         run: sudo cp /var/log/invok.log "installer-${{ matrix.os }}.log" || true
@@ -126,10 +120,10 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # Binario statico per i job in container: musl gira su qualunque distro,
-  # quindi lo stesso eseguibile va bene su Debian 11 e 12 senza compilare Rust
-  # dentro ogni container. È anche il binario che release.yml consiglia ai
-  # clienti: provarlo qui significa provare l'artefatto che spediamo davvero.
+  # a static binary for the container jobs: it runs on any distribution, so one
+  # executable serves every image without compiling Rust inside each. it is also
+  # the binary the release recommends to customers, so testing it here means
+  # testing the artifact we actually ship.
   # ---------------------------------------------------------------------------
   build-musl:
     name: build statico (musl)
@@ -152,29 +146,25 @@ jobs:
           if-no-files-found: error
 
   # ---------------------------------------------------------------------------
-  # Sonda di portabilità su Debian, in container.
+  # the portability probe, in a container.
   #
-  # Limite dichiarato: in un container Docker standard systemd non è PID 1,
-  # quindi `systemctl` esiste come binario ma non opera. L'installazione si
-  # ferma per costruzione a `setup-postgres`, che è il primo step a chiedere un
-  # servizio. Non è un test del ciclo di vita completo — quello è il job
-  # `native` — ma copre esattamente la superficie che i runner Ubuntu non
-  # possono coprire e che l'audit segnala come fragile:
+  # declared limit: in a standard container the service manager exists as a
+  # binary but does not operate, so the installation stops by construction at the
+  # first step that needs a service. not a full lifecycle test — that is the
+  # native job — but it covers exactly the surface the hosted runners cannot:
   #
-  #   A5.1  nomi dei pacchetti apt su una distro diversa (`libtiff5-dev`,
-  #         `libjpeg8-dev`, `node-less` cambiano o scompaiono fra release). È il
-  #         job che ha trovato il problema in R5 e che ora ne verifica il fix:
-  #         dalla R6 la lista è di *gruppi di alternative* risolti a runtime, e
-  #         su Debian il gruppo deve risolversi al nome che esiste lì. Se la
-  #         risoluzione sbagliasse, `install-system-dependencies` tornerebbe a
-  #         fallire esattamente qui;
-  #   A5.2  mappatura codename → pin wkhtmltopdf, con `bookworm` e `bullseye`
-  #         che hanno pin diretti (i runner Ubuntu esercitano solo `jammy` e il
-  #         fallback `noble → jammy`);
-  #   A-RT-1/2  su immagini davvero minimali, dove le dipendenze di sistema del
-  #         `.deb` non ci sono e dpkg può restare rotto.
+  #   A5.1      package names on a different distribution, which change or
+  #             disappear between releases. this is the job that found the
+  #             problem and now verifies its fix: the list is groups of
+  #             alternatives resolved at runtime, and here the group must resolve
+  #             to the name that exists;
+  #   A5.2      the codename-to-checksum-pin mapping, with the entries the hosted
+  #             runners never exercise;
+  #   A-RT-1/2  on genuinely minimal images, where the package's system
+  #             dependencies are absent and dpkg can stay broken.
   #
-  # E la parte che conta di più: comunque vada, il sistema deve restare pulito.
+  # and the part that matters most: whatever happens, the system must stay
+  # clean.
   # ---------------------------------------------------------------------------
   container:
     name: sonda portabilità (${{ matrix.image }})
@@ -187,19 +177,19 @@ jobs:
         image: ["debian:12", "debian:11"]
     container:
       image: ${{ matrix.image }}
-      # L'installer va lanciato via sudo da un utente normale (check_sudo_user):
-      # gli step girano da root e creano l'utente `tester` più sotto.
+      # the installer is launched through sudo by a normal user, as the caller
+      # check demands; the steps then run as root.
       options: --user root
 
     steps:
-      # Il container è nudo: servono sudo (l'installer lo esige), git (per
-      # checkout), jq (le asserzioni leggono il file di stato) e il pacchetto
-      # systemd, che fornisce il binario `systemctl` richiesto da
-      # check_commands. Il binario c'è, l'init no: è il limite dichiarato sopra.
-      # L'`apt-get update` qui c'era già dal primo giorno (il container è nudo,
-      # senza indice non si installa nemmeno `sudo`) — ed è la ragione per cui i
-      # job Debian passavano mentre Ubuntu falliva: A5.1-bis si vedeva solo dove
-      # nessuno aggiornava l'indice prima dell'installer.
+      # the container is bare: sudo (the installer demands it), git (checkout),
+      # jq (the assertions read the state file) and the systemd package, which
+      # provides the binary the command check requires. the binary is there, the
+      # init is not — the limit declared above.
+      #
+      # the index refresh here dates from day one (nothing installs without it),
+      # and it is why these jobs passed while the hosted ones failed: A5.1-bis
+      # showed only where nobody refreshed the index before the installer.
       - name: Prerequisiti del container
         run: |
           set -eux
@@ -227,8 +217,8 @@ jobs:
           set -eux
           chmod +x bin/invok
           bin/invok --help >/dev/null
-          # Il workspace è di root: l'installer gira come `tester` via sudo e
-          # deve poter leggere config e script.
+          # the workspace belongs to root: the installer runs as the unprivileged
+          # user and must be able to read the config and the scripts.
           chown -R tester:tester "$GITHUB_WORKSPACE"
 
       - name: Sonda di portabilità (installazione reale + pulizia)
@@ -250,50 +240,43 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # Fedora: il ciclo di vita completo, con systemd come PID 1.
+  # the other family: the full lifecycle, with systemd as PID 1.
   #
-  # GitHub non offre runner Fedora, e il job `container:` qui sopra non basta —
-  # lì systemd non è PID 1, quindi l'installazione si fermerebbe per costruzione
-  # a `setup-postgres`. Su Fedora quel limite morderebbe **più forte** che su
-  # Debian: si fermerebbe *prima* dell'init del cluster, cioè proprio la
-  # divergenza più rischiosa di tutto il lavoro multi-distro (M3).
+  # there are no hosted runners for it, and the container job above is not
+  # enough — there the installation would stop by construction before the cluster
+  # init, which is the riskiest divergence of the whole multi-distro work (M3).
   #
-  # Da qui la scelta: un container avviato a mano con `/usr/sbin/init` come
-  # comando, `--privileged` e i cgroup dell'host, così systemd fa PID 1 davvero
-  # e il ciclo installazione → servizio attivo → rollback diventa verificabile.
+  # hence the choice: a container started by hand with the init as its command,
+  # privileged and sharing the host's cgroups, so systemd really is PID 1 and the
+  # install-service-rollback cycle becomes verifiable.
   #
-  # **L'immagine base `fedora:N` NON contiene systemd** — verificato al primo
-  # tentativo, che è morto con `stat /usr/sbin/init: no such file or directory`.
-  # Le immagini Fedora sono minimali: `/usr/sbin/init` è un symlink fornito dal
-  # pacchetto `systemd`, che lì non c'è. Serve quindi costruire un'immagine
-  # intermedia — ed è anche il posto giusto per i prerequisiti del test, che così
-  # non vanno reinstallati a ogni esecuzione degli step.
+  # **the base image does NOT contain systemd** — found on the first attempt,
+  # which died on a missing init. the images are minimal, and the init is a
+  # symlink the systemd package provides. so an intermediate image is built,
+  # which is also the right place for the test's prerequisites.
   #
-  # **Se systemd non si alza**, il job fallisce esplicitamente invece di
-  # degradare a sonda in silenzio: un job che passa senza aver provato ciò per
-  # cui esiste è peggio di un job assente (la lezione di R7).
+  # **if systemd does not come up**, the job fails explicitly instead of quietly
+  # degrading to a probe: a job that passes without having tested what it exists
+  # for is worse than no job (R7's lesson).
   # ---------------------------------------------------------------------------
   fedora:
     name: install + rollback (${{ matrix.image }}, ${{ matrix.scenario }})
     needs: build-musl
     runs-on: ubuntu-latest
     timeout-minutes: 45
-    # Nessuna voce tollerata in rosso: da M11 tutte e tre sono bloccanti, ed è
-    # ciò che rende vera la costante `NEWEST_TESTED_FEDORA` (un test la lega
-    # alla matrice).
+    # no entry tolerated in red: all of them block, which is what makes the
+    # "newest tested" constant true (a test ties it to this matrix).
     strategy:
       fail-fast: false
       matrix:
-        # Due scenari, non uno. Lo scenario `nginx` è l'unico modo di esercitare
-        # `Firewalld`: sui runner e nella VM di sviluppo `firewall-cmd` non c'è,
-        # quindi le sue cinque operazioni sono vissute finora solo sui mock — la
-        # stessa situazione di B-V3-7 per nginx su Debian, e in questo progetto
-        # è dove i difetti sopravvivono.
+        # two scenarios, not one. the nginx one is the only way to exercise this
+        # family's firewall boundary: the tool is absent from the runners and the
+        # development VM, so its operations have so far lived only on mocks —
+        # the same situation as B-V3-7, and where defects survive here.
         #
-        # `configs/ci-nginx.env` è lo stesso file che usa il job Debian: un test
-        # garantisce che differisca da `ci.env` solo per WITH_NGINX e
-        # NGINX_SERVER_NAME, così un rosso che compare solo qui è attribuibile a
-        # nginx e a nient'altro.
+        # the config is the same file the other job uses: a test guarantees it
+        # differs from the base one in two keys only, so a red appearing only
+        # here is attributable to nginx and nothing else.
         include:
           - image: "fedora:41"
             scenario: base
@@ -303,23 +286,21 @@ jobs:
             scenario: nginx
             env_file: configs/ci-nginx.env
             firewalld: "yes"
-            # Lo scenario DICHIARA di volere il firewall: se non fosse attivo,
-            # le verifiche su A-V3-7 salterebbero e il job passerebbe senza aver
-            # provato ciò per cui esiste. Con questo, si ferma e lo dice.
+            # the scenario DECLARES it wants the firewall: inactive, the A-V3-7
+            # checks would skip and the job would pass without testing what it
+            # exists for. with this it stops and says so.
             fw_required: "1"
-          # Fedora 44: la release il cui `python3` di sistema è **3.14**, che i
-          # pin di Odoo 18 non coprono. Bloccante da M11, e non per ottimismo:
-          # è l'unica voce della matrice che esercita la scelta dell'interprete
-          # alternativo. `fedora:41` copre il ramo opposto — Python di sistema
-          # 3.13, coperto dai pin, nessun interprete in più da installare — e i
-          # due insieme sono i due rami di `choose_python`.
+          # the release whose system Python the Odoo pins do not cover. blocking
+          # since M11, and not out of optimism: it is the only matrix entry that
+          # exercises the alternative-interpreter choice, while the other covers
+          # the opposite branch — a system Python the pins do cover, nothing extra
+          # to install. together they are the two branches of the decision.
           #
-          # Era una sonda tollerata in rosso finché la domanda era aperta. Ora la
-          # risposta c'è (VM Fedora 44: con `python3.13` l'intero
-          # `requirements.txt` si installa), quindi un rosso qui è un difetto e
-          # deve fermare tutto: un rosso che ci si aspetta di vedere insegna a
-          # ignorare i rossi (A-V3-10), e tenere «tollerata» una release che
-          # dichiariamo supportata sarebbe la stessa bugia al contrario.
+          # it was a probe tolerated in red while the question was open. the
+          # answer exists now (on a real VM the whole requirements file installs
+          # with the alternative interpreter), so a red here is a defect and must
+          # stop everything: an expected red teaches people to ignore reds
+          # (A-V3-10).
           - image: "fedora:44"
             scenario: base
             env_file: configs/ci.env
@@ -338,88 +319,80 @@ jobs:
       - name: Immagine con systemd e i prerequisiti del test
         run: |
           set -eux
-          # Heredoc QUOTATO: senza le virgolette bash interpreterebbe i `\` di
-          # continuazione e unirebbe le righe del Dockerfile. `${{ matrix.image }}`
-          # lo sostituisce GitHub prima che bash veda lo script, quindi il
-          # quoting non gli toglie nulla.
+          # a QUOTED heredoc: unquoted, bash would interpret the continuation
+          # backslashes and join the Dockerfile's lines. the matrix value is
+          # substituted before bash sees the script, so the quoting costs it
+          # nothing.
           cat > Dockerfile.ci <<'DOCKERFILE'
           FROM FEDORA_IMAGE
-          # systemd: senza, /usr/sbin/init non esiste e il container non parte.
-          # Gli altri sono prerequisiti del TEST, non dell'installer: sudo (che
-          # l'installer esige), git (clone dei sorgenti), jq (le asserzioni
-          # leggono il manifesto), procps-ng (`ps`).
+          # systemd: without it the init does not exist and the container does
+          # not start. the others are prerequisites of the TEST and not of the
+          # installer: sudo (which it demands), git (cloning), jq (the assertions
+          # read the manifest) and the process tools.
           #
-          # `firewalld` + `nftables` + `dbus-broker`: su una Fedora vera firewalld
-          # è preinstallato, quindi averlo nell'immagine è fedele e non uno
-          # sconto. Viene AVVIATO solo nello scenario `nginx` — è lì che
-          # `nginx-firewall` ha qualcosa da fare. `nftables` è il backend e il
-          # bus di sistema è il canale su cui `firewall-cmd` parla col demone:
-          # senza uno dei due firewalld parte e poi non risponde, che è il modo
-          # peggiore di fallire.
+          # the firewall, its backend and the message bus: on a real machine of
+          # this family the firewall is preinstalled, so having it in the image is
+          # faithful and not a shortcut. it is STARTED only in the nginx scenario.
+          # the bus is how the firewall client talks to its daemon: without either
+          # one the daemon starts and then does not answer, the worst way to fail.
           #
-          # `dbus-broker` e non `dbus-daemon`, ed è la correzione del rosso della
-          # sonda Fedora 44 (M7). Il bus di sistema **non serve solo a firewalld**:
-          # `postgresql-setup --initdb` lascia root al primo comando (`runuser -l
-          # postgres`) e solo DOPO chiede a systemd dov'è il PGDATA — da root
-          # `systemctl` userebbe il socket privato `/run/systemd/private` e non
-          # chiederebbe niente a nessuno, da utente non privilegiato deve passare
-          # dal bus. Senza bus quelle `systemctl show` falliscono e lo script muore
-          # con «no db datadir (PGDATA) found», che manda a cercare `--datadir`,
-          # cioè lontano dalla causa.
+          # the bus implementation matters, and it is the fix for a probe's red
+          # (M7). the bus is **not only the firewall's**: the cluster init drops
+          # root before asking systemd where the data directory is, and an
+          # unprivileged query must go through the bus. without it those queries
+          # fail and the script dies with a message that sends the reader to the
+          # wrong option, far from the cause.
           #
-          # `dbus-broker` è l'implementazione **di default di Fedora** ed è quella
-          # che il preset abilita; `dbus-daemon` è l'alternativa, e installarla con
-          # i weak deps disattivati lasciava l'immagine con il pacchetto ma senza
-          # un bus attivo. Lo scenario `nginx` non se n'era accorto perché
-          # `systemctl start firewalld` il bus se lo tira dietro; lo scenario base
-          # non lo avvia mai, ed è lì che la sonda è morta.
+          # the DEFAULT implementation is used and not the alternative: installing
+          # the alternative with weak dependencies off left the image with the
+          # package but no running bus. the nginx scenario had not noticed,
+          # because starting the firewall pulls the bus in; the base scenario
+          # never starts it, and that is where the probe died.
           #
-          # `diffutils` porta `cmp`/`diff`: senza, il confronto byte-per-byte
-          # del manifesto (A-V3-1) non può eseguire — e `cmp` assente esce
-          # non-zero esattamente come `cmp` che trova una differenza.
+          # the diff tools: without them the manifest's byte-for-byte comparison
+          # (A-V3-1) cannot run — and an absent tool exits non-zero exactly like
+          # one that finds a difference.
           #
-          # `iproute` porta `ss`, e non è un dettaglio: senza, il preflight
-          # sulle porte scrive «ss/netstat/lsof assenti: assumo libera» e
-          # **non può fallire**. È la firma ricorrente di questo progetto
-          # comparsa nell'ambiente di test invece che nel codice: il rifiuto
-          # della seconda installazione (A-R9-1) sta proprio nell'ORDINE fra il
-          # controllo sulle porte e la lettura del manifesto, e con `ss` assente
-          # quel test non distingue l'ordine corretto da quello rotto.
+          # the network tools, and this is not a detail: without them the port
+          # preflight writes "no tool available: assuming free" and **cannot
+          # fail**. this project's recurring signature, appearing in the test
+          # environment instead of in the code: the refusal of a second
+          # installation (A-R9-1) lives in the ORDER between the port check and
+          # the manifest read, and without those tools the test cannot tell the
+          # correct order from the broken one.
           RUN dnf -y install --setopt=install_weak_deps=False \
                 systemd sudo git jq procps-ng iproute diffutils authselect \
                 firewalld nftables dbus-broker \
            && dnf clean all
-          # Il bus si ABILITA a mano invece di fidarsi del preset: in
-          # un'immagine container i preset sono applicati dagli scriptlet rpm, e
-          # dare per scontato che l'abbiano fatto è ciò che ha lasciato la sonda
-          # senza bus. `dbus.socket` è di norma già abilitata (o statica): la si
-          # tocca solo se risulta `disabled`, così un cambio di packaging non fa
-          # fallire il build per una differenza che non conta.
+          # the bus socket is ENABLED by hand instead of trusting the preset: in
+          # a container image presets are applied by packaging scriptlets, and
+          # assuming they did is what left the probe without a bus. it is normally
+          # already enabled or static, so it is touched only when reported
+          # disabled.
           RUN systemctl enable dbus-broker.service \
            && { systemctl is-enabled dbus.socket >/dev/null 2>&1 \
                 || systemctl enable dbus.socket ; }
-          # Unit che in un container non hanno senso e fallirebbero, portando
-          # systemd a `degraded` per rumore invece che per una ragione vera.
+          # units that make no sense in a container and would fail, leaving the
+          # manager degraded for noise instead of for a real reason.
           RUN systemctl mask \
                 systemd-remount-fs.service \
                 dev-hugepages.mount \
                 sys-fs-fuse-connections.mount \
                 console-getty.service \
                 getty.target
-          # PAM in un container Fedora, due cose che mancano.
+          # PAM in a container of this family: two things are missing.
           #
-          # 1) `/etc/pam.d/sudo` include `system-auth`, che su Fedora è un
-          #    symlink gestito da `authselect`. In un'immagine container
-          #    authselect non è mai stato inizializzato, quindi quel link non
-          #    risolve: PAM non trova i moduli e l'account management fallisce
-          #    con «Authentication service cannot retrieve authentication info».
-          #    È la causa vera dei due giri precedenti — e non si vedeva dalla
-          #    configurazione di sudo, che era corretta.
+          # 1) the sudo stack includes a shared configuration that is a symlink
+          #    managed by a profile tool. in a container image that tool was never
+          #    initialised, so the link does not resolve: PAM finds no modules and
+          #    account management fails with a message about not retrieving
+          #    authentication info. the real cause of two previous rounds — and it
+          #    was invisible from sudo's own configuration, which was correct.
           #
-          #    Si applica un profilo; se `authselect` non è utilizzabile, si
-          #    scrive a mano una configurazione minima basata su `pam_unix`. Il
-          #    `test -e` segue il symlink, quindi risponde `false` proprio nel
-          #    caso che ci interessa: link presente ma rotto.
+          #    a profile is applied; if the tool is unusable, a minimal
+          #    configuration is written by hand. the existence test follows the
+          #    symlink, so it answers false in exactly the case that matters:
+          #    present but broken.
           RUN authselect select minimal --force 2>/dev/null \
            || authselect select local --force 2>/dev/null \
            || authselect select sssd --force 2>/dev/null \
@@ -432,37 +405,37 @@ jobs:
                 'password required   pam_deny.so' \
                 'session  required   pam_unix.so' \
                 > /etc/pam.d/system-auth
-          # 1-bis) Anche con `system-auth` risolto, `pam_unix` in account
-          #    management continua a rispondere «cannot retrieve authentication
-          #    info»: legge `/etc/shadow` e in questo container non ci riesce.
+          # 1b) even with that resolved, the Unix module keeps answering the
+          #    same way in account management: it reads the shadow file and
+          #    cannot.
           #
-          #    Qui si smette di inseguire la causa e si cambia la domanda.
-          #    **`sudo` è infrastruttura del test, non il suo oggetto**: serve a
-          #    lanciare l'installer come una persona lo lancerebbe, e la sua
-          #    catena PAM non è ciò che stiamo verificando. In un'immagine
-          #    container non è configurabile in modo affidabile — tre tentativi
-          #    lo hanno mostrato — quindi la si sostituisce con una permissiva.
+          #    here we stop chasing the cause and change the question. **sudo is
+          #    the test's infrastructure, not its subject**: it launches the
+          #    installer the way a person would, and its PAM chain is not what we
+          #    are verifying. in a container image it is not reliably
+          #    configurable — three attempts showed as much — so it is replaced
+          #    with a permissive one.
           #
-          #    **Cosa si perde, dichiarato**: questo job non prova più che `sudo`
-          #    funzioni su una Fedora vera. Quella prova esiste altrove ed è più
-          #    forte — l'installazione manuale su VM Fedora 41, dove `sudo` è
-          #    quello della distribuzione. Il container copre ciò che la VM non
-          #    può dare: la ripetibilità a ogni push.
+          #    **what is lost, declared**: this job no longer proves that sudo
+          #    works on a real machine of this family. that proof exists elsewhere
+          #    and is stronger — the manual VM installation, where sudo is the
+          #    distribution's. the container covers what the VM cannot give:
+          #    repeatability on every push.
           #
-          #    Il container è usa-e-getta, privilegiato e senza rete esposta:
-          #    una catena PAM permissiva qui non apre nulla che non fosse già
-          #    aperto da `--privileged`.
+          #    the container is throwaway, privileged and without exposed
+          #    networking: a permissive chain here opens nothing that privilege
+          #    had not already opened.
           RUN printf '%s\n' \
                 '#%PAM-1.0' \
-                '# Sostituita nel container di CI: vedi il commento nel workflow.' \
+                '# replaced in the CI container: see the comment in the workflow.' \
                 'auth       sufficient   pam_permit.so' \
                 'account    sufficient   pam_permit.so' \
                 'session    optional     pam_keyinit.so revoke' \
                 'session    required     pam_limits.so' \
                 'session    sufficient   pam_permit.so' \
                 > /etc/pam.d/sudo
-          # 2) `pam_faillock` vuole la propria directory di stato, che
-          #    `systemd-tmpfiles` creerebbe ma non prima che PAM ne abbia bisogno.
+          # 2) the lockout module wants its own state directory, which the
+          #    tmpfiles service would create but not before PAM needs it.
           RUN mkdir -p /run/faillock /var/run/faillock
           CMD ["/usr/sbin/init"]
           DOCKERFILE
@@ -482,10 +455,9 @@ jobs:
             -w /work \
             invok-fedora:ci
 
-          # systemd ci mette qualche secondo ad arrivare a regime. `degraded` va
-          # bene: in un container alcune unit non partono (e non ci servono), ma
-          # il gestore dei servizi funziona — che è tutto ciò che l'installer
-          # chiede.
+          # systemd takes a few seconds to settle. degraded is fine: in a
+          # container some units do not start (and we do not need them), but the
+          # service manager works — all the installer asks.
           for _ in $(seq 1 30); do
             stato="$(docker exec fedora-test systemctl is-system-running 2>/dev/null || true)"
             case "$stato" in running|degraded) break ;; esac
@@ -507,22 +479,21 @@ jobs:
         run: |
           set -eux
           docker exec fedora-test useradd -m -s /bin/bash tester
-          # Una password vera: `useradd` da solo lascia l'account **bloccato**
-          # (`!` in /etc/shadow), e su alcune configurazioni PAM l'account
-          # management di un account bloccato non passa nemmeno con NOPASSWD.
+          # a real password: creating the user alone leaves the account
+          # **locked**, and under some PAM configurations a locked account fails
+          # account management even with a passwordless sudo rule.
           docker exec fedora-test bash -c "echo 'tester:tester' | chpasswd"
           docker exec fedora-test bash -c "echo 'tester ALL=(ALL) NOPASSWD:ALL' > /etc/sudoers.d/tester"
           docker exec fedora-test chmod 440 /etc/sudoers.d/tester
           docker exec fedora-test mkdir -p /run/faillock
           docker exec fedora-test chown -R tester:tester /work
 
-      # Prima di lanciare mezz'ora di installazione, si verifica che il
-      # prerequisito più banale funzioni. Al primo giro `sudo` falliva per PAM e
-      # il job se n'è accorto **dopo**, da un exit code 1 dell'installer: la
-      # diagnosi era a due passi di distanza dalla causa.
+      # before launching half an hour of installation, the most trivial
+      # prerequisite is checked. on the first round sudo failed on PAM and the
+      # job noticed **afterwards**, from the installer's exit code: the diagnosis
+      # was two steps away from the cause.
       #
-      # Se qui fallisce, si stampa ciò che serve a capirlo invece di lasciare il
-      # prossimo a indovinare.
+      # when this fails, what is needed to understand it is printed.
       - name: sudo funziona? (prerequisito, non l'oggetto del test)
         run: |
           if docker exec -u tester fedora-test sudo -n true; then
@@ -547,30 +518,28 @@ jobs:
           ' || true
           exit 1
 
-      # Il secondo prerequisito, e la ragione per cui è ASSERITO invece che
-      # dato per scontato dall'immagine.
+      # the second prerequisite, and why it is ASSERTED instead of assumed from
+      # the image.
       #
-      # `postgresql-setup --initdb` chiede a systemd dov'è il PGDATA **dopo**
-      # aver lasciato root (`runuser -l postgres`), quindi la domanda vera non è
-      # «systemd è PID 1?» ma «un utente non privilegiato riesce a interrogare
-      # systemd?» — che è ciò che si chiede qui, nella stessa forma in cui serve.
+      # the cluster init asks systemd where the data directory is **after**
+      # dropping root, so the real question is not "is systemd PID 1?" but "can
+      # an unprivileged user query systemd?" — which is what is asked here, in
+      # the form in which it matters.
       #
-      # Le due cose divergono, e la sonda Fedora 44 (M7) è caduta esattamente
-      # nella loro differenza: systemd era PID 1, il bus di sistema no. Il
-      # ripiego di `postgresql-setup` per i container («Support for containers»,
-      # 8.10) non l'ha salvata perché è gated su «systemd NON è PID 1»: un
-      # container con systemd ma senza bus cade nel buco fra i due casi previsti.
-      # Il sintomo era `no db datadir (PGDATA) found`, cioè un messaggio che
-      # manda a cercare `--datadir` mentre la causa è il bus.
+      # the two diverge, and a probe (M7) fell exactly in their difference:
+      # systemd was PID 1, the bus was not. the init tool's container fallback
+      # did not save it, being gated on systemd NOT being PID 1: a container with
+      # systemd but no bus falls in the hole between the two foreseen cases. the
+      # symptom was a message about a missing data directory, sending the reader
+      # to the wrong option while the cause was the bus.
       #
-      # Stessa scelta del check `sudo -n true` qui sopra: un prerequisito si
-      # verifica dove lo si può nominare, non lo si scopre otto step dopo
-      # travestito da errore dell'installer.
+      # the same choice as the sudo check above: a prerequisite is verified where
+      # it can be named, not discovered eight steps later disguised as an
+      # installer error.
       #
-      # `systemctl show` su una unit inesistente esce comunque 0 (stampa i
-      # default): quindi qui un fallimento significa **il bus**, non `dbus.service`
-      # — che è esattamente ciò che si vuole misurare, e il motivo per cui la unit
-      # interrogata non conta.
+      # querying a non-existent unit still exits zero (it prints the defaults), so
+      # a failure here means **the bus** and not the unit — exactly what we want
+      # to measure.
       - name: Il bus di sistema risponde a un utente non privilegiato?
         run: |
           if docker exec -u tester fedora-test systemctl show -p Environment dbus.service >/dev/null 2>&1; then
@@ -590,17 +559,16 @@ jobs:
           ' || true
           exit 1
 
-      # Firewalld ATTIVO, con la trappola deliberata. È l'analogo esatto di ciò
-      # che R17 ha fatto per `ufw` su Debian, e serve alla stessa asserzione:
-      # `8080/tcp` già aperta CONTIENE la stringa `80/tcp`, quindi un confronto
-      # per sottostringa concluderebbe che la porta 80 è già aperta. Da lì la
-      # regola non entrerebbe nel delta, il `run` non la aprirebbe, e nginx
-      # resterebbe irraggiungibile **senza alcun errore** (A-V3-7).
+      # the firewall ACTIVE, with the deliberate trap — the exact analogue of
+      # what R17 did on the other family, for the same assertion: an already-open
+      # similar rule CONTAINS the string of the one we want, so a substring
+      # comparison would conclude port 80 is already open. the rule would not
+      # enter the delta, the run would not open it, and nginx would stay
+      # unreachable **with no error at all** (A-V3-7).
       #
-      # `Firewalld::rule_exists` legge il PERMANENTE, quindi la trappola si
-      # mette permanente e si ricarica: una porta aperta solo a runtime
-      # sparirebbe e il test non chiederebbe la stessa cosa che chiede la
-      # produzione.
+      # the boundary reads the PERMANENT set, so the trap is set permanently and
+      # reloaded: a runtime-only rule would vanish and the test would not ask
+      # what production asks.
       - name: Firewalld attivo, con 8080/tcp già aperta (trappola per A-V3-7)
         if: matrix.firewalld == 'yes'
         run: |
@@ -612,11 +580,9 @@ jobs:
             sleep 2
           done
 
-          # Un firewalld che non si alza va DETTO, non aggirato: se lo scenario
-          # saltasse in silenzio le verifiche sul firewall, questo job
-          # prometterebbe una copertura che non ha — ed è esattamente il difetto
-          # che R7 ha trovato nella CI (un test che asseriva il residuo come
-          # atteso è peggio di un test assente).
+          # a firewall that does not come up must be SAID, not worked around: a
+          # scenario that silently skipped those checks would promise coverage it
+          # does not have — exactly the defect R7 found in the CI.
           if ! docker exec fedora-test firewall-cmd --state; then
             echo "::error::firewalld non è partito nel container: lo scenario nginx non eserciterebbe Firewalld, che è la sola ragione per cui esiste"
             docker exec fedora-test systemctl status firewalld --no-pager -l || true
@@ -655,21 +621,20 @@ jobs:
         run: docker rm -f fedora-test || true
 
   # ---------------------------------------------------------------------------
-  # La fase Nginx, che nessuna esecuzione reale aveva mai toccato (B-V3-7).
+  # the nginx phase, which no real run had ever touched (B-V3-7).
   #
-  # `configs/ci.env` ha `WITH_NGINX="false"`: i cinque step nginx uscivano al
-  # primo `if` in ogni installazione reale mai fatta. Il vhost non veniva mai
-  # scritto né validato da `nginx -t`, il default site mai rimosso né
-  # ripristinato. Due fasi intere — A-V3-5 (il ripristino fedele del default
-  # site) e A-V3-6 (il vhost che non promette TLS) — vivevano solo su mock.
+  # the base config disables it, so those steps exited at the first condition in
+  # every real installation ever done. the vhost was never written or validated,
+  # the default site never removed or restored. two whole remediations lived only
+  # on mocks.
   #
-  # In questo progetto i difetti sono stati trovati quasi sempre da una macchina
-  # vera; l'unico difetto nginx mai emerso (A1.4) l'ha trovato un test end-to-end
-  # e non una rilettura. Questo job chiude l'ultima zona non osservata.
+  # here defects have almost always been found by a real machine; the only nginx
+  # defect ever surfaced came from an end-to-end test and not from a re-reading.
+  # this job closes the last unobserved area.
   #
-  # Un solo OS: la fase nginx non ha differenze fra jammy e noble (nessun nome di
-  # pacchetto condizionale, nessun pin per codename), quindi un secondo runner
-  # costerebbe quaranta minuti per ripetere le stesse asserzioni.
+  # one OS only: the nginx phase has no differences between the two releases —
+  # no conditional package name, no per-codename pin — so a second runner would
+  # cost forty minutes to repeat the same assertions.
   # ---------------------------------------------------------------------------
   nginx:
     name: install + rollback con Nginx (default site ${{ matrix.default_site }})
@@ -677,13 +642,14 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      # Le DUE nature del default site (A-V3-5). Un ciclo installazione+rollback
-      # ne esercita una sola, e sono trattate da rami diversi:
-      #   symlink       → si rimuove e si ricrea verso il target REGISTRATO;
-      #   regular-file  → si sposta in un backup e l'undo lo rimette.
-      # Il secondo è quello grave — l'unico punto dell'audit in cui si *perde*
-      # configurazione del cliente — e finché non girava era coperto solo da
-      # mock. In matrice i due job vanno in parallelo: il wall-clock non cambia.
+      # the TWO natures of the default site (A-V3-5). one install-and-rollback
+      # cycle exercises a single one, and different branches handle them:
+      #   symlink       removed and recreated towards the REGISTERED target;
+      #   regular file  moved to a backup the undo puts back.
+      # the second is the serious one — the audit's only point where customer
+      # configuration is *lost* — and until this ran it was covered by mocks
+      # alone. in a matrix the two go in parallel, so the wall clock is the
+      # same.
       matrix:
         default_site: [symlink, regular-file]
     steps:
@@ -702,24 +668,24 @@ jobs:
       - name: Indice apt aggiornato (ambiente di test esplicito)
         run: sudo apt-get update
 
-      # Il default site dev'esserci **davvero**: è l'artefatto di terzi che il
-      # rollback deve rimettere a posto (A-V3-5), e senza di esso metà delle
-      # asserzioni non avrebbe nulla da osservare. Sui runner nginx è
-      # preinstallato ma la configurazione varia: lo si mette in uno stato noto.
+      # the default site must **really** be there: it is the third-party artifact
+      # the rollback must restore (A-V3-5), and without it half the assertions
+      # would have nothing to observe. nginx is preinstalled on the runners but
+      # its configuration varies, so it is put into a known state.
       - name: Nginx attivo con il default site (${{ matrix.default_site }})
         run: |
           sudo apt-get install -y nginx
           sudo rm -f /etc/nginx/sites-enabled/default
 
           if [ "${{ matrix.default_site }}" = "symlink" ]; then
-            # Il caso della distribuzione: un link a sites-available/default.
+            # the distribution's case: a link to the available default.
             sudo ln -sfn /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
           else
-            # Il caso che perde dati: un amministratore che ha scritto il file
-            # direttamente in sites-enabled. `symlink_exists` rispondeva `true`
-            # anche qui e `remove_symlink` è `fs::remove_file`: il contenuto
-            # veniva distrutto e l'undo restituiva un symlink al default della
-            # distro. Il marcatore serve a provare che torni **quel** file.
+            # the data-losing case: an administrator who wrote the file directly
+            # in the enabled directory. the existence check answered true here
+            # too and the removal is a plain file removal, so the contents were
+            # destroyed and the undo returned a symlink to the distro default.
+            # the marker proves **that** file comes back.
             sudo cp /etc/nginx/sites-available/default /etc/nginx/sites-enabled/default
             printf '\n# marcatore-del-cliente-%s\n' "$GITHUB_RUN_ID" | sudo tee -a /etc/nginx/sites-enabled/default >/dev/null
             sudo sha256sum /etc/nginx/sites-enabled/default | sudo tee /tmp/default-site.sha256
@@ -728,19 +694,19 @@ jobs:
           sudo systemctl restart nginx
           echo "default site:"; ls -l /etc/nginx/sites-enabled/
 
-      # ufw ATTIVO: è l'unico modo di esercitare `nginx-firewall`, che sui runner
-      # esce sempre subito perché ufw è installato ma inattivo — A-V3-7 non era
-      # mai stato provato in campo.
+      # the firewall ACTIVE: the only way to exercise its step, which on a runner
+      # always exits at once because the tool is installed but inactive — A-V3-7
+      # had never been tested in the field.
       #
-      # La regola `8080/tcp` è una **trappola deliberata**: con il confronto per
-      # sottostringa di prima, `"80/tcp"` risultava presente perché contenuto in
-      # `"8080/tcp"`, la porta 80 non entrava nel delta e non veniva aperta. Il
-      # sintomo sarebbe stato «Odoo non risponde sulla 80», non un errore.
+      # the extra rule is a **deliberate trap**: with the old substring
+      # comparison the port we want looked present because it is contained in
+      # that one, so it never entered the delta and was never opened. the symptom
+      # would have been "Odoo does not answer", not an error.
       - name: ufw attivo, con la trappola 8080/tcp (A-V3-7)
         run: |
           sudo apt-get install -y ufw
-          # Prima le regole, poi l'enable: `--force` mette default deny in
-          # ingresso, e senza queste il runner si chiuderebbe fuori da sé.
+          # rules first, then enable: forcing it on sets default-deny inbound,
+          # and without these the runner would lock itself out.
           sudo ufw allow OpenSSH || sudo ufw allow 22/tcp
           sudo ufw allow 8080/tcp
           sudo ufw --force enable
@@ -750,15 +716,15 @@ jobs:
         env:
           MODE: full
           ENV_FILE: configs/ci-nginx.env
-          # Questo job ATTIVA ufw da sé nello step precedente: trovarlo inattivo
-          # non sarebbe una circostanza della macchina ma un difetto del job, e
-          # saltare in silenzio le verifiche lascerebbe A-V3-7 scoperto proprio
-          # nello scenario scritto per esercitarlo.
+          # this job ENABLES the firewall itself in the previous step: finding it
+          # inactive would not be a circumstance of the machine but a defect of
+          # the job, and silently skipping the checks would leave A-V3-7 uncovered
+          # in the very scenario written to exercise it.
           FW_REQUIRED: "1"
         run: bash scripts/ci/integration-test.sh
 
-      # Il file del cliente dev'essere tornato **identico**, non "di solito
-      # giusto": è la differenza fra ripristinare e rimpiazzare.
+      # the customer's file must have come back **identical**, not "usually
+      # right": the difference between restoring and replacing.
       - name: Il default site regolare è tornato byte-per-byte
         if: matrix.default_site == 'regular-file'
         run: |
@@ -785,19 +751,19 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # L'utente `odoo` già presente sulla macchina (B-V3-7, chiude A-V3-4).
+  # the system user already present on the machine (B-V3-7, closes A-V3-4).
   #
-  # È la precondizione del finding, e i runner non ce l'hanno mai avuta: la
-  # correzione della R10 — `PrepareOptRoot` che consegna la home a un utente già
-  # esistente — non era quindi mai stata eseguita davvero.
+  # the finding's precondition, which the runners never had: R10's fix — the
+  # first step handing the home to an already-existing user — had therefore never
+  # really run.
   #
-  # Due scenari, in quest'ordine, perché il primo lascia il sistema come serve al
-  # secondo dopo una sola pulizia:
-  #   1. utente presente + /opt/odoo preesistente di root → l'installazione deve
-  #      RIFIUTARSI con una precondizione esplicita, prima di mutare;
-  #   2. utente presente + /opt/odoo assente → l'installazione riesce, e la home
-  #      creata da noi viene consegnata all'utente. Il rollback la rimuove ma
-  #      **lascia l'utente**, che non è nostro.
+  # two scenarios, in this order, because the first leaves the system as the
+  # second needs it after a single cleanup:
+  #   1. user present, perimeter directory pre-existing and root-owned: the
+  #      installation must REFUSE with an explicit precondition, before mutating;
+  #   2. user present, directory absent: the installation succeeds and the home
+  #      we create is handed over. the rollback removes it but **leaves the
+  #      user**, who is not ours.
   # ---------------------------------------------------------------------------
   preexisting-user:
     name: utente odoo preesistente (ubuntu-24.04)
@@ -825,10 +791,10 @@ jobs:
           id odoo
           test ! -d /opt/odoo && echo "/opt/odoo non esiste: corretto per lo scenario 2"
 
-      # Scenario 1: la home c'è, è di root, e non l'abbiamo creata noi. Non la
-      # chowniamo (non è nostra) e l'installazione si deve fermare PRIMA di
-      # mutare, dicendo perché. Senza questa precondizione l'errore arrivava tre
-      # step dopo, come `mkdir: Permission denied`.
+      # scenario 1: the home is there, root-owned, and not ours. we do not chown
+      # it, and the installation must stop BEFORE mutating, saying why. without
+      # this precondition the error arrived three steps later as a permission
+      # denial.
       - name: Scenario 1 — home root-owned preesistente → rifiuto esplicito
         run: |
           sudo mkdir -p /opt/odoo
@@ -843,13 +809,13 @@ jobs:
           grep -qi "root" refuse.log     || { echo "::error::il messaggio non dice di chi è la home"; exit 1; }
           grep -q "chown"  refuse.log    || { echo "::error::il messaggio non dice cosa fare"; exit 1; }
 
-          # Precondizione, non undo: nessun artefatto creato.
+          # a precondition, not an undo: no artifact was created.
           #
-          # NON si pretende che il manifesto sia assente: la precondizione vive
-          # nello snapshot del secondo step, e il primo (`prepare-opt-root`) è
-          # già passato — senza mutare, perché la directory era preesistente — e
-          # il motore ha persistito quel record. Che il file esista è corretto;
-          # a contare è che non descriva nulla di creato da noi.
+          # the manifest is NOT required to be absent: the precondition lives in
+          # the second step's snapshot, and the first has already passed —
+          # without mutating, the directory being pre-existing — and the engine
+          # persisted that record. the file existing is correct; what counts is
+          # that it describes nothing we created.
           [ -z "$(sudo ls -A /opt/odoo)" ] || { echo "::error::ha mutato /opt/odoo prima di rifiutare"; exit 1; }
           test ! -d /opt/odoo/odoo18 || { echo "::error::ha creato la install dir"; exit 1; }
           test ! -f /etc/systemd/system/odoo18.service || { echo "::error::ha installato l'unit"; exit 1; }
@@ -863,25 +829,26 @@ jobs:
           fi
           echo "✔ rifiutata prima di mutare, con un messaggio che dice cosa fare"
 
-          # Si consuma il manifesto parziale con il comando previsto, invece di
-          # cancellarlo a mano: altrimenti lo scenario 2 lo troverebbe e
-          # partirebbe come **resume**, saltando `prepare-opt-root` — cioè
-          # proprio lo step che deve creare e consegnare la home.
+          # the partial manifest is consumed with the intended command instead of
+          # deleted by hand: otherwise scenario 2 would find it and start as a
+          # **resume**, skipping the very step that must create and hand over the
+          # home.
           sudo ./target/release/invok rollback --yes || true
           sudo rmdir /opt/odoo
           sudo test ! -e /var/lib/invok/state.json \
             || { echo "::error::il manifesto parziale non è stato consumato"; exit 1; }
 
-      # Scenario 2: la home la creiamo noi, e va consegnata subito all'utente che
-      # esiste già — altrimenti `setup-cache-dir` muore su un `mkdir` come odoo.
+      # scenario 2: we create the home, and it must be handed over at once to
+      # the already-existing user, or a later step dies creating a directory as
+      # them.
       - name: Scenario 2 — installazione, consegna della home, rollback
         env:
           MODE: full
         run: bash scripts/ci/integration-test.sh
 
-      # La verifica specifica di A-V3-4 vive qui e non nello script: lo script
-      # controlla lo stato finale, questo controlla che l'utente preesistente sia
-      # sopravvissuto a un rollback che ha rimosso tutto il resto.
+      # A-V3-4's specific check lives here and not in the script: the script
+      # checks the final state, this checks that the pre-existing user survived a
+      # rollback that removed everything else.
       - name: L'utente preesistente è sopravvissuto
         run: |
           id odoo || { echo "::error::il rollback ha rimosso un utente che non aveva creato"; exit 1; }
@@ -901,18 +868,17 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
-  # Ctrl-C a metà installazione (B-V3-5).
+  # Ctrl-C halfway through an installation (B-V3-5).
   #
-  # Fino alla R18 l'azione di default di SIGINT valeva anche per noi: il processo
-  # moriva all'istante e il rollback in-process non partiva mai. Era l'unico
-  # scenario che nessun test poteva riprodurre — su mock si può alzare un flag,
-  # ma non si può provare che un segnale reale non uccida il processo prima che
-  # il flag venga letto.
+  # until R18 the signal's default action applied to us too: the process died at
+  # once and the in-process rollback never started. the only scenario no test
+  # could reproduce — on mocks a flag can be raised, but one cannot prove that a
+  # real signal does not kill the process before the flag is read.
   #
-  # Il momento dell'interruzione non è casuale: si aspetta che il manifesto
-  # registri `create-database`. Da lì c'è un artefatto vero e costoso da
-  # annullare — un database — quindi «il sistema è tornato pulito» significa
-  # qualcosa. Un `sleep` fisso avrebbe colpito un punto diverso a ogni giro.
+  # the moment of interruption is not arbitrary: it waits for the manifest to
+  # record the database step. from there a real and expensive artifact exists, so
+  # "the system came back clean" means something. a fixed sleep would hit a
+  # different point every round.
   # ---------------------------------------------------------------------------
   interrupt:
     name: Ctrl-C a metà installazione (ubuntu-24.04)
@@ -940,7 +906,7 @@ jobs:
           sudo ./target/release/invok --config configs/ci.env > install.log 2>&1 &
           shell_pid=$!
 
-          # Si aspetta un artefatto REALE nel manifesto, non un tempo.
+          # it waits for a REAL artifact in the manifest, not for a duration.
           manifesto=/var/lib/invok/state.json
           for _ in $(seq 1 240); do
             if sudo test -f "$manifesto" && \
@@ -955,26 +921,23 @@ jobs:
             sleep 2
           done
 
-          # UN solo segnale, e all'installer soltanto.
+          # ONE signal, and to the installer only.
           #
-          # `pkill -f 'invok --config'` matcherebbe **due** processi —
-          # il `sudo` e l'installer — quindi l'installer riceverebbe SIGINT due
-          # volte in rapida successione. Ma il secondo SIGINT è, per progetto,
-          # la via d'uscita d'emergenza: esce subito con 130 e NON annulla
-          # niente. Il test proverebbe la funzionalità sbagliata, e fallirebbe
-          # dicendo il vero («il processo è stato ucciso»).
+          # matching on the command line would match **two** processes — the sudo
+          # and the installer — so the installer would receive the signal twice in
+          # quick succession. but the second one is, by design, the emergency exit:
+          # it leaves at once and undoes NOTHING. the test would exercise the wrong
+          # feature and fail while telling the truth.
           #
-          # `-x` matcha il nome esatto del processo (`invok`), non la
-          # riga di comando: `sudo` non viene toccato. In un terminale vero il
-          # problema non si pone — Ctrl-C consegna al process group una volta
-          # sola, e sudo senza pty non rilancia il segnale.
+          # matching the exact process name leaves the sudo untouched. in a real
+          # terminal the problem does not arise: Ctrl-C is delivered to the process
+          # group once, and sudo without a pty does not forward it.
           sudo pkill -INT -x invok \
             || { echo "::error::nessun processo invok da interrompere"; ps -ef | grep -i odoo; exit 1; }
 
-          # Gli si dà il tempo di annullare: il rollback fa dropdb, purge apt,
-          # rimozioni. Non è istantaneo, ed è giusto così. Si aspetta la fine
-          # dell'INSTALLER, non del `sudo` che lo avvolge: sono due processi e
-          # possono terminare in momenti diversi.
+          # it is given time to undo: the rollback drops the database, purges
+          # packages, removes files. not instantaneous, and rightly so. we wait
+          # for the INSTALLER to end and not for the sudo wrapping it.
           for _ in $(seq 1 300); do
             pgrep -x invok >/dev/null 2>&1 || break
             sleep 2
@@ -984,19 +947,19 @@ jobs:
             sudo pkill -KILL -x invok || true
             cat install.log; exit 1
           fi
-          # `sudo` esce subito dopo il figlio; se restasse appeso, non è un
-          # problema del prodotto ma lascerebbe il job in attesa.
+          # sudo exits right after its child; were it to hang, that is not the
+          # product's problem but it would leave the job waiting.
           wait "$shell_pid" 2>/dev/null || true
 
           echo "--- ultime righe del log ---"; tail -n 40 install.log
 
-      # La prova vera: il segnale non ha ucciso il processo, e l'installer ha
-      # annullato da sé. Se il rollback non fosse partito, gli artefatti
-      # sarebbero ancora tutti qui.
+      # the real proof: the signal did not kill the process and the installer
+      # undid its own work. had the rollback not started, the artifacts would all
+      # still be here.
       - name: Il sistema è tornato pulito da solo
         run: |
-          # Il log per intero PRIMA di giudicare: un'asserzione che fallisce
-          # senza mostrare l'evidenza costringe il prossimo a indovinare.
+          # the whole log BEFORE judging: an assertion that fails without showing
+          # the evidence forces the next reader to guess.
           echo "::group::install.log"; cat install.log; echo "::endgroup::"
 
           if ! grep -qi "interrot" install.log; then
@@ -1005,7 +968,7 @@ jobs:
           fi
 
           fallito=0
-          check() { # descrizione, comando che deve FALLIRE
+          check() { # description, then a command that must FAIL
             if eval "$2" >/dev/null 2>&1; then
               echo "::error::$1"; fallito=1
             else
@@ -1016,10 +979,10 @@ jobs:
           check "/opt/odoo non è rimasta"            "test -d /opt/odoo"
           check "l'unit systemd non è rimasta"       "test -f /etc/systemd/system/odoo18.service"
 
-          # Il database si verifica SOLO se PostgreSQL risponde. Se il rollback
-          # l'ha rifermato — perché l'avevamo avviato noi — un `psql` che
-          # fallisce non dimostra che il database non c'è: dimostra che non
-          # possiamo saperlo. Dichiararlo è meglio di un ✔ che non ha guardato.
+          # the database is checked ONLY if PostgreSQL answers. if the rollback
+          # stopped it again — because we had started it — a failing query does
+          # not prove the database is gone: it proves we cannot know. saying so
+          # beats a tick that looked at nothing.
           if sudo -u postgres psql -tAc 'select 1' >/dev/null 2>&1; then
             check "il database citest non è rimasto" \
               "sudo -u postgres psql -tAc \"select 1 from pg_database where datname='citest'\" | grep -q 1"

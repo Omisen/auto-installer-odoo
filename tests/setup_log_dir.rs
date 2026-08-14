@@ -1,4 +1,4 @@
-//! Test di [`SetupLogDir`] (Fase 3): disabilitato → no-op; abilitato → crea/rimuove.
+//! [`SetupLogDir`]: disabled means no-op; enabled creates and removes.
 
 mod common;
 
@@ -43,7 +43,7 @@ fn disabled_logfile_is_full_noop() {
 
 #[test]
 fn created_by_us_creates_and_removes() {
-    // Dir del logfile inesistente → la creiamo, poi la rimuoviamo (vuota).
+    // missing log directory: created, then removed while empty.
     let cfg = MockConfig {
         path_exists: false,
         dir_empty: true,
@@ -76,7 +76,7 @@ fn created_by_us_creates_and_removes() {
 
 #[test]
 fn preexisting_dir_is_not_touched() {
-    // Dir già esistente: nessuna creazione, e undo non la rimuove.
+    // already there: nothing created, and the undo leaves it.
     let cfg = MockConfig {
         path_exists: true,
         ..Default::default()
@@ -98,7 +98,7 @@ fn preexisting_dir_is_not_touched() {
 
 #[test]
 fn undo_does_not_remove_non_empty_dir() {
-    // Creata da noi ma non vuota (log già scritti) → undo non rimuove.
+    // ours but not empty, because logs were written: the undo leaves it.
     let cfg = MockConfig {
         path_exists: false,
         dir_empty: false,

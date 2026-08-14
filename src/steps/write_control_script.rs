@@ -1,8 +1,8 @@
-//! [`WriteControlScript`] (14a): installa il comando helper `odoo`.
+//! [`WriteControlScript`]: installs the `odoo` helper command.
 //!
-//! Gli artefatti appartengono a **`SUDO_USER`** (chi ha lanciato `sudo`), non a
-//! `odoo` né a root, e sono installati **solo per quell'utente** (`~/.local/bin`,
-//! non `/usr/local/bin`) — scelta di sicurezza del Bash originale, da preservare.
+//! the artifacts belong to **`SUDO_USER`**, not to `odoo` nor to root, and are
+//! installed **for that user only** rather than globally — a security choice
+//! from the original Bash, preserved.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -14,7 +14,7 @@ use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
 use crate::system_ops::SystemOps;
 
-/// Template dello script di controllo (segnaposto sostituiti senza `format!`).
+/// the control script's template; placeholders are substituted by hand.
 const CONTROL_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env bash
 
 set -euo pipefail
@@ -54,11 +54,11 @@ const SCRIPT_MODE: u32 = 0o755;
 pub struct ControlScriptSnapshot {
     pub script: PreState,
     pub symlink: PreState,
-    /// Le directory esistevano prima di noi? (rimozione solo se create da noi).
+    /// did the directories exist before us? only ours are removed.
     pub scripts_dir_existed: bool,
     pub localbin_dir_existed: bool,
-    /// Backup di uno script **preesistente**, se ce n'era uno da mettere da
-    /// parte prima di riscriverlo (A-V3-9). `None` in ogni altro caso.
+    /// backup of a **pre-existing** script, when there was one to set aside
+    /// before rewriting (A-V3-9).
     #[serde(default)]
     pub script_backup: Option<String>,
 }
@@ -76,7 +76,11 @@ impl WriteControlScript {
         }
     }
 
-    /// Risolve `(SUDO_USER, home)` o un errore chiaro.
+    /// resolves `(SUDO_USER, home)`.
+    ///
+    /// # errors
+    ///
+    /// [`StepError::Precondition`] when `SUDO_USER` is absent or has no home.
     fn user_and_home(&self, ctx: &Context) -> Result<(String, std::path::PathBuf), StepError> {
         let user = ctx.sudo_user.clone().ok_or_else(|| {
             StepError::Precondition(
@@ -90,7 +94,7 @@ impl WriteControlScript {
     }
 }
 
-/// Genera il contenuto dello script di controllo.
+/// builds the control script's contents.
 pub fn control_script_content(service: &str, os_user: &str) -> String {
     CONTROL_SCRIPT_TEMPLATE
         .replace("__SERVICE__", service)
@@ -146,24 +150,19 @@ impl Step for WriteControlScript {
             return Ok(());
         }
 
-        // Directory create come l'utente installatore.
+        // directories created as the installing user.
         self.ops.mkdir_p_as_user(&user, &scripts_dir)?;
         self.ops.mkdir_p_as_user(&user, &localbin)?;
 
-        // Lo script si riscrive **sempre** (A-V3-9).
+        // the script is **always** rewritten (A-V3-9): its contents are ours
+        // and carry the service name, so skipping it because "it exists" left
+        // the helper driving the **old** service after reinstalling another
+        // version — discovered only when `odoo restart` did the wrong thing.
         //
-        // Il suo contenuto è generato da noi e porta dentro il nome del servizio:
-        // saltarlo perché "esiste già" significava che, reinstallando una
-        // versione diversa di Odoo, l'helper `odoo` continuava a pilotare il
-        // servizio **vecchio** — `SERVICE_NAME=odoo17` mentre gira `odoo18` — e
-        // l'utente lo scopriva solo quando `odoo restart` non faceva quello che
-        // doveva. Il `PreState` qui non protegge un contenuto altrui: protegge
-        // la *decisione di rimuoverlo all'undo*, ed è per quello che resta.
-        //
-        // Se però quel file c'era già, non lo si distrugge: si mette da parte e
-        // l'undo lo rimette. Stesso trattamento del vhost nginx e dell'odoo.conf
-        // — un file preesistente con quel nome potrebbe essere di qualcun altro,
-        // e non abbiamo modo di saperlo.
+        // the `PreState` here does not protect somebody else's contents but the
+        // *decision to remove it in the undo*. an existing file is still set
+        // aside rather than destroyed, and the undo puts it back — the same
+        // treatment as the nginx vhost and `odoo.conf`.
         if self.snap.script == PreState::Preexisting && self.snap.script_backup.is_none() {
             let backup = format!("{}.bak.{}", script.display(), unix_timestamp());
             self.ops.copy_file(&script, std::path::Path::new(&backup))?;
@@ -178,13 +177,13 @@ impl Step for WriteControlScript {
             self.snap.script = PreState::CreatedByUs;
         }
 
-        // Symlink (se non già nostro).
+        // the symlink, unless it is already ours.
         if self.snap.symlink != PreState::Preexisting {
             self.ops.create_symlink(&script, &symlink)?;
             self.snap.symlink = PreState::CreatedByUs;
         }
 
-        // Tutto appartiene a SUDO_USER (non odoo, non root).
+        // everything belongs to SUDO_USER, not to `odoo` nor root.
         self.ops.chown_to_user(&script, &user)?;
         self.ops.chown_to_user(&symlink, &user)?;
         self.ops.chown_to_user(&scripts_dir, &user)?;
@@ -203,20 +202,20 @@ impl Step for WriteControlScript {
             return Ok(());
         }
 
-        // Rimuovi solo ciò che abbiamo creato noi.
+        // remove only what we created.
         if self.snap.symlink == PreState::CreatedByUs {
             if let Err(e) = self.ops.remove_symlink(&symlink) {
                 warn!(error = %e, "undo: rimozione symlink fallita, proseguo (best-effort)");
             }
         }
         match (&self.snap.script, &self.snap.script_backup) {
-            // Nostro: si rimuove.
+            // ours: removed.
             (PreState::CreatedByUs, _) => {
                 if let Err(e) = self.ops.remove_file(&script) {
                     warn!(error = %e, "undo: rimozione script fallita, proseguo (best-effort)");
                 }
             }
-            // C'era già e l'abbiamo riscritto: torna quello di prima.
+            // it was there and we rewrote it: the original comes back.
             (PreState::Preexisting, Some(backup)) => {
                 let backup_path = std::path::Path::new(backup);
                 if self.ops.path_exists(backup_path) {
@@ -232,7 +231,7 @@ impl Step for WriteControlScript {
             _ => {}
         }
 
-        // Directory: rimuovi solo se create da noi e vuote.
+        // directories go only if we created them and they are empty.
         if !self.snap.scripts_dir_existed {
             remove_if_empty(self.ops.as_ref(), &scripts_dir);
         }
@@ -253,7 +252,7 @@ impl Step for WriteControlScript {
     }
 }
 
-/// Rimuove una directory solo se vuota (best-effort).
+/// removes a directory only if empty, best-effort.
 fn remove_if_empty(ops: &dyn SystemOps, dir: &std::path::Path) {
     match ops.dir_is_empty(dir) {
         Ok(true) => {

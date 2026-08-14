@@ -1,11 +1,11 @@
-//! Le convenzioni della famiglia Debian (Debian e Ubuntu).
+//! the Debian family's conventions, covering Debian and Ubuntu.
 
 use std::path::PathBuf;
 
 use super::{ufw::Ufw, Distro, Firewall, NginxLayout};
 use crate::error::StepError;
 
-/// Debian/Ubuntu: firewall `ufw`.
+/// Debian and Ubuntu: `ufw` firewall.
 #[derive(Debug, Default)]
 pub struct Debian {
     firewall: Ufw,
@@ -22,14 +22,14 @@ impl Distro for Debian {
         &self.firewall
     }
 
-    /// Il modello `sites-available` + `sites-enabled` con il symlink, e un
-    /// default site che è un file a sé.
+    /// the `sites-available` + `sites-enabled` model with a symlink, and a
+    /// default site that is a file of its own.
     fn nginx_layout(&self) -> NginxLayout {
         NginxLayout {
             vhost_dir: PathBuf::from("/etc/nginx/sites-available"),
-            // `nginx.conf` include `sites-enabled/*`: **ogni** file, non solo i
-            // `.conf`. Nessuna estensione richiesta — ed è anche la ragione per
-            // cui il backup del default site non può restare lì dentro.
+            // `nginx.conf` includes `sites-enabled/*`: **every** file, not only
+            // `.conf` ones. no extension needed — and the reason the default
+            // site's backup cannot stay in there.
             vhost_extension: "",
             enabled_dir: Some(PathBuf::from("/etc/nginx/sites-enabled")),
             default_site: Some(PathBuf::from("/etc/nginx/sites-enabled/default")),
@@ -38,21 +38,21 @@ impl Distro for Debian {
         }
     }
 
-    /// `None`: su questa famiglia SELinux non è in uso (AppArmor non richiede
-    /// nulla di equivalente per il proxy verso un servizio locale).
+    /// `None`: SELinux is not in use here, and AppArmor needs no equivalent for
+    /// proxying to a local service.
     fn selinux(&self) -> Option<&dyn super::Selinux> {
         None
     }
 
-    /// `None`: il postinst del pacchetto `postgresql` chiama `pg_createcluster` e
-    /// avvia il servizio. Non c'è nulla da inizializzare, e non c'è nessun
-    /// artefatto in più da registrare.
+    /// `None`: the `postgresql` postinst runs `pg_createcluster` and starts the
+    /// service, so there is nothing to initialise and no extra artifact to
+    /// record.
     fn postgres_data_dir(&self) -> Option<PathBuf> {
         None
     }
 
-    /// No-op, e non per pigrizia: su questa famiglia il cluster **esiste già**
-    /// quando il pacchetto è installato. Vedi [`Self::postgres_data_dir`].
+    /// a no-op, and not out of laziness: here the cluster **already exists**
+    /// once the package is installed.
     fn init_postgres_cluster(&self) -> Result<(), StepError> {
         Ok(())
     }

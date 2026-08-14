@@ -1,18 +1,17 @@
-//! [`ProgressReporter`]: astrazione del progresso, observer del motore.
+//! [`ProgressReporter`]: the engine's progress observer.
 //!
-//! Il motore ([`crate::engine::Installer`]) notifica gli eventi (start/done/
-//! failed per ogni step, e undo durante il rollback) **senza dipendere da
-//! `indicatif`**: dipende da questo trait. `indicatif` ne è solo
-//! un'implementazione ([`IndicatifReporter`]), selezionata in `main` quando c'è
-//! un TTY; altrimenti si usa [`LogReporter`] o [`NoopReporter`].
+//! [`crate::engine::Installer`] reports step and undo events **without
+//! depending on `indicatif`**: it depends on this trait. `indicatif` is just
+//! one implementation, picked by `main` when there is a TTY; otherwise
+//! [`LogReporter`] or [`NoopReporter`].
 
 use std::sync::Once;
 
 use indicatif::{ProgressBar, ProgressStyle};
 use tracing::{info, warn};
 
-/// Observer del progresso. Metodi con default vuoto: un reporter implementa solo
-/// ciò che gli serve.
+/// progress observer. every method defaults to a no-op, so a reporter
+/// implements only what it needs.
 pub trait ProgressReporter {
     fn step_start(&self, _name: &str, _index: usize, _total: usize) {}
     fn step_done(&self, _name: &str) {}
@@ -22,12 +21,12 @@ pub trait ProgressReporter {
     fn undo_done(&self, _name: &str) {}
 }
 
-/// Nessun output (no-TTY silenzioso, o quando il progresso non serve).
+/// no output at all.
 #[derive(Debug, Default)]
 pub struct NoopReporter;
 impl ProgressReporter for NoopReporter {}
 
-/// Solo `tracing` — per no-TTY o output su file.
+/// `tracing` only, for no-TTY runs or output redirected to a file.
 #[derive(Debug, Default)]
 pub struct LogReporter;
 
@@ -49,7 +48,7 @@ impl ProgressReporter for LogReporter {
     }
 }
 
-/// Progress bar / spinner con `indicatif` (TTY interattivo).
+/// progress bar and spinner, for an interactive TTY.
 pub struct IndicatifReporter {
     bar: ProgressBar,
     ticking: Once,
@@ -68,14 +67,12 @@ impl IndicatifReporter {
         }
     }
 
-    /// Avvia il ticker al **primo evento**, non alla costruzione.
+    /// starts the ticker on the **first event**, not at construction.
     ///
-    /// `enable_steady_tick` fa partire un thread che ridisegna la barra su
-    /// stderr; `inquire` scrive sullo stesso stream, quindi una barra viva
-    /// mentre l'utente risponde a un prompt gli cancella la riga e l'eco della
-    /// risposta finisce altrove. Costruire il reporter non deve prendere
-    /// possesso del terminale: lo prende il primo step, quando le domande sono
-    /// finite per costruzione.
+    /// `enable_steady_tick` redraws the bar on stderr, the same stream
+    /// `inquire` writes to: a live bar during a prompt erases the user's line.
+    /// the terminal is claimed by the first step, when the questions are over
+    /// by construction.
     fn ensure_ticking(&self) {
         self.ticking.call_once(|| {
             self.bar

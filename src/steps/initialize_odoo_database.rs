@@ -1,26 +1,21 @@
-//! [`InitializeOdooDatabase`]: inizializza lo schema base di Odoo nel database.
+//! [`InitializeOdooDatabase`]: initialises Odoo's base schema.
 //!
-//! # Protezione critica: hard-stop su init di un DB preesistente
+//! # critical protection: a hard stop on a pre-existing database
 //!
-//! Gemella dell'anti-drop di Fase 5. Le due regole insieme garantiscono che un
-//! DB con dati reali del cliente non venga né **cancellato** né **alterato**:
+//! the twin of the anti-drop rule. together they guarantee that a database
+//! holding a customer's real data is neither **deleted** nor **written into**.
 //!
-//! - anti-drop (Fase 5): non distruggere dati altrui;
-//! - hard-stop (qui): non **scrivere** in dati altrui.
+//! the installer REFUSES to initialise a database it did not create: writing
+//! the schema into a pre-existing one has no clean undo, so the defence is not
+//! to do it at all. "is the database ours?" arrives from `CreateDatabase`
+//! through [`Context::db_created_by_us`], defaulting to refuse.
 //!
-//! L'installer RIFIUTA di eseguire `-i base` su un database che non ha creato
-//! lui. Scrivere lo schema Odoo dentro un DB preesistente non ha undo pulito,
-//! quindi la difesa è **non farlo affatto**. L'informazione "il DB è nostro?"
-//! arriva da `CreateDatabase` via [`Context::db_created_by_us`] (default `false`
-//! = rifiuta).
+//! # C2 — a non-atomic init, and a no-op undo
 //!
-//! # C2 — init non atomico, undo no-op
-//!
-//! L'init non è atomico: se muore a metà, il DB resta in stato intermedio. Ma
-//! non si tenta alcuna riparazione incrementale: poiché l'init gira **solo** su
-//! DB `CreatedByUs`, la pulizia dello schema è coperta dal `dropdb` di
-//! `CreateDatabase` (che gira dopo, in ordine inverso). Quindi l'undo qui è un
-//! **NO-OP documentato**: si butta e si ricrea il DB pulito.
+//! the init is not atomic, but no incremental repair is attempted: since it
+//! runs **only** on databases of ours, cleaning the schema up is covered by the
+//! `dropdb` that runs after it in the reverse order. the database is thrown
+//! away and recreated clean.
 
 use std::sync::atomic::Ordering;
 
@@ -35,7 +30,7 @@ use crate::system_ops::SystemOps;
 const VENV_SUBDIR: &str = "sandbox";
 const REPO_SUBDIR: &str = "odoo";
 
-/// Inizializza lo schema base di Odoo (solo su DB nostro).
+/// initialises Odoo's base schema, only on a database of ours.
 pub struct InitializeOdooDatabase {
     ops: Box<dyn SystemOps>,
     prestate: PreState,
@@ -70,24 +65,20 @@ impl Step for InitializeOdooDatabase {
     }
 
     fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError> {
-        // Schema già presente? → nulla da fare (idempotente), indipendentemente
-        // da chi possiede il DB.
+        // schema already there means nothing to do, whoever owns the database.
         if self.ops.pg_db_initialized(&ctx.db_name)? {
             self.prestate = PreState::Preexisting;
             info!(db = %ctx.db_name, "snapshot: schema Odoo già presente");
             return Ok(());
         }
 
-        // Schema assente. HARD-STOP se il DB non è nostro: non si scrive lo
-        // schema Odoo in un database preesistente del cliente.
+        // schema absent. HARD STOP when the database is not ours.
         //
-        // Il comportamento resta invariato — l'hard-stop è la protezione
-        // corretta, e l'installer *non* può distinguere da solo "residuo nostro"
-        // da "database del cliente": in questa esecuzione il DB esiste e basta.
-        // Ma l'utente può, e da R4 ha anche lo strumento: se il residuo viene da
-        // un'installazione precedente non completata, il suo file di stato è
-        // ancora sul disco e `invok rollback` lo consuma, rimuovendo
-        // esattamente ciò che quella run aveva creato — e nient'altro (A3.3).
+        // the installer cannot itself tell "our leftover" from "the customer's
+        // database": in this run it simply exists. the user can, and has the
+        // tool — if the leftover came from an interrupted installation, its
+        // state file is still on disk and `invok rollback` consumes it,
+        // removing exactly what that run created (A3.3).
         if !ctx.db_created_by_us.load(Ordering::SeqCst) {
             return Err(StepError::Precondition(format!(
                 "Il database '{db}' esisteva già prima dell'installazione; \
@@ -104,7 +95,7 @@ impl Step for InitializeOdooDatabase {
             )));
         }
 
-        // DB nostro, schema assente → procederemo.
+        // ours, and empty: we will proceed.
         self.prestate = PreState::Untracked;
         info!(db = %ctx.db_name, "snapshot: DB nostro, schema da inizializzare");
         Ok(())
@@ -120,7 +111,7 @@ impl Step for InitializeOdooDatabase {
             return Ok(());
         }
 
-        // Init come utente odoo (non root).
+        // initialise as the `odoo` user, not root.
         self.ops.odoo_init_base(
             &ctx.odoo_user,
             &Self::python_bin(ctx),
@@ -129,7 +120,7 @@ impl Step for InitializeOdooDatabase {
             &ctx.db_name,
         )?;
 
-        // Verifica post-init: lo schema deve ora essere presente.
+        // post-init check: the schema must now be there.
         if !self.ops.pg_db_initialized(&ctx.db_name)? {
             return Err(StepError::Precondition(format!(
                 "inizializzazione del database '{}' fallita: schema base non rilevato",
@@ -143,9 +134,8 @@ impl Step for InitializeOdooDatabase {
     }
 
     fn undo(&self, _ctx: &Context) -> Result<(), StepError> {
-        // NO-OP deliberato (C2): l'init gira solo su DB CreatedByUs; la pulizia
-        // dello schema è coperta dal dropdb di CreateDatabase, che gira dopo in
-        // ordine inverso. Nessuna riparazione incrementale di uno stato a metà.
+        // a deliberate no-op (C2): the init runs only on databases of ours, and
+        // the `dropdb` that follows covers the schema.
         info!(
             "undo NO-OP: lo schema vive in un DB CreatedByUs; la sua rimozione è \
              coperta dall'undo di CreateDatabase (dropdb dell'intero DB)"
@@ -157,10 +147,9 @@ impl Step for InitializeOdooDatabase {
         serde_json::to_value(&self.prestate).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Reidratato per simmetria, benché l'`undo` sia un NO-OP: il contratto
-    /// `snapshot_value` ⇄ `rehydrate` vale per tutti gli step, così l'invariante
-    /// è verificabile uniformemente e un futuro undo non nascerà con uno stato
-    /// vuoto senza che nessuno se ne accorga.
+    /// rehydrated for symmetry even though the undo is a no-op: the contract
+    /// holds for every step, so a future undo cannot be born with empty state
+    /// and nobody noticing.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let prestate = decode_snapshot(self.name(), snapshot)?;
         self.prestate = prestate;

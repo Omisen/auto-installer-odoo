@@ -1,4 +1,4 @@
-//! Test di [`SetupSystemd`] (Fase 8): tre assi (D4) + ordine undo + rendering.
+//! [`SetupSystemd`]: the three axes (D4), the undo's order, and rendering.
 
 mod common;
 
@@ -39,7 +39,7 @@ fn all_absent_installs_then_undo_in_order() {
 
     let ops = ops_of(&log);
 
-    // run: installa + enable + start.
+    // run: install, enable, start.
     assert!(has(&ops, |o| matches!(o, Op::CreatePrivateFile(_))));
     assert!(has(
         &ops,
@@ -52,11 +52,11 @@ fn all_absent_installs_then_undo_in_order() {
     assert!(has(&ops, |o| matches!(o, Op::ServiceEnable(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceStart(_))));
 
-    // undo: ordine stop → disable → rm → reload.
+    // undo, in order: stop → disable → rm → reload.
     let stop = pos(&ops, |o| matches!(o, Op::ServiceStop(_))).expect("stop");
     let disable = pos(&ops, |o| matches!(o, Op::ServiceDisable(_))).expect("disable");
     let rm = pos(&ops, |o| matches!(o, Op::RemoveFile(_))).expect("rm");
-    // l'ultimo daemon-reload è quello dell'undo.
+    // the last daemon-reload is the undo's.
     let reload = ops
         .iter()
         .rposition(|o| matches!(o, Op::DaemonReload))
@@ -82,7 +82,8 @@ fn d4_active_already_running_not_stopped() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    // Già attivo → restart in run (non start), e undo NON ferma (D4).
+    // already running: the run restarts rather than starts, and the undo leaves
+    // it (D4).
     assert!(has(&ops, |o| matches!(o, Op::ServiceRestart(_))));
     assert!(
         !has(&ops, |o| matches!(o, Op::ServiceStop(_))),
@@ -140,31 +141,30 @@ fn rendering_has_no_residue_and_keeps_hardening() {
     assert!(!unit.contains("{{"), "nessun placeholder residuo");
     validate_unit(&unit).expect("unit valido");
 
-    // Hardening preservato.
+    // hardening preserved.
     assert!(unit.contains("User=odoo"));
     assert!(unit.contains("Group=odoo"));
     assert!(unit.contains("NoNewPrivileges=true"));
     assert!(unit.contains("PrivateTmp=true"));
     assert!(unit.contains("RuntimeDirectory=odoo"));
     assert!(unit.contains("Requires=postgresql.service"));
-    // Percorsi renderizzati.
+    // paths rendered.
     assert!(unit.contains("/opt/odoo/odoo18/sandbox/bin/python3"));
     assert!(unit.contains("/opt/odoo/odoo18/odoo/odoo-bin"));
     assert!(unit.contains("/opt/odoo/odoo18/odoo18.conf"));
 }
 
-/// A-V3-13: l'intestazione «Security hardening» copriva una direttiva **inerte**.
+/// A-V3-13: the "Security hardening" heading covered an **inert** directive.
 ///
-/// `PermissionsStartOnly=true` è deprecata da systemd 231 (2016) e viene
-/// ignorata con un warning; serviva a far girare gli `ExecStartPre` come root, e
-/// di `ExecStartPre` non ce n'è nessuno. Sotto quel titolo non c'era quindi
-/// nulla che facesse hardening.
+/// `PermissionsStartOnly=true` is deprecated since systemd 231 and ignored with
+/// a warning; it made `ExecStartPre` commands run as root, and there are none.
+/// nothing under that heading was hardening anything.
 #[test]
 fn the_unit_makes_no_hollow_hardening_promises() {
     let unit = render_unit(&ctx());
 
-    // Si guardano le righe **attive**, non il testo: il commento che spiega
-    // perché la direttiva è stata tolta la nomina, ed è giusto che lo faccia.
+    // the **active** lines, not the text: the comment explaining why the
+    // directive was removed names it, rightly.
     let attive: Vec<&str> = unit
         .lines()
         .map(str::trim)
@@ -175,7 +175,8 @@ fn the_unit_makes_no_hollow_hardening_promises() {
         "direttiva deprecata e ignorata da systemd: non deve essere attiva"
     );
 
-    // Le direttive che spostano l'ago davvero, per un processo che gira da rete.
+    // the directives that actually move the needle for a network-facing
+    // process.
     for direttiva in [
         "ProtectSystem=full",
         "ProtectHome=true",
@@ -189,9 +190,8 @@ fn the_unit_makes_no_hollow_hardening_promises() {
         assert!(unit.contains(direttiva), "manca {direttiva}");
     }
 
-    // AF_UNIX non è opzionale: è il socket di PostgreSQL. Senza, il servizio
-    // parte e non riesce a collegarsi al database — un fallimento che
-    // sembrerebbe tutt'altro.
+    // AF_UNIX is not optional: it is PostgreSQL's socket. without it the
+    // service starts and cannot reach the database.
     let famiglie = attive
         .iter()
         .find(|l| l.starts_with("RestrictAddressFamilies="))
@@ -203,9 +203,8 @@ fn the_unit_makes_no_hollow_hardening_promises() {
         );
     }
 
-    // `strict` è deliberatamente escluso: richiederebbe un elenco esatto di
-    // ReadWritePaths, e sbagliarne uno rompe il servizio su una macchina
-    // cliente. Se un giorno lo si vuole, va insieme a quell'elenco.
+    // `strict` is deliberately excluded: it needs an exact `ReadWritePaths`
+    // list, and getting one wrong breaks the service on a customer machine.
     assert!(
         !attive.iter().any(|l| l.starts_with("ProtectSystem=strict")),
         "ProtectSystem=strict senza ReadWritePaths impedirebbe a Odoo di scrivere"

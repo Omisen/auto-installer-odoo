@@ -1,25 +1,20 @@
-//! M2 — la garanzia che le protezioni critiche **non dipendono dalla famiglia**.
+//! M2: the guarantee that the critical protections **do not depend on the
+//! family**.
 //!
-//! Il design del supporto multi-distro promette che anti-drop del database,
-//! hard-stop sull'init, cura del `.bashrc` e regola del filestore restino
-//! intatte sotto entrambi i backend. Fino a M1 quella promessa era un'analisi:
-//! quegli step non chiamano il gestore di pacchetti, quindi non possono
-//! dipenderne. Con due famiglie vere diventa **verificabile**, ed è quello che
-//! fa questo file.
+//! the multi-distro design promises the database anti-drop, the init hard stop,
+//! the `.bashrc` care and the filestore rule stay intact under both backends.
+//! that promise used to be an analysis — those steps do not call the package
+//! manager, so they cannot depend on it. with two real families it becomes
+//! **checkable**.
 //!
-//! # Perché non basta l'analisi
+//! analysis is not enough because nothing stops someone reading the family
+//! inside a protected step "just for a log" and then branching on it. that
+//! defect would be invisible in every step test, which runs on one family, and
+//! would surface in the field as "the rollback did not drop the database".
 //!
-//! Perché niente impedisce a qualcuno, domani, di leggere `ctx.os_family` dentro
-//! `create-database` «solo per un log» e poi di ramificarci sopra. Il difetto
-//! non sarebbe visibile in nessun test degli step — che girano su una famiglia
-//! sola — e comparirebbe in campo come «su Fedora il rollback non ha droppato il
-//! database». Questo test fallisce prima.
-//!
-//! # Cosa si confronta
-//!
-//! La **sequenza di operazioni** che arriva al sistema e lo **snapshot
-//! persistito**: sono le due cose da cui dipendono, rispettivamente, ciò che
-//! viene fatto e ciò che l'undo potrà disfare.
+//! what is compared: the **sequence of operations** reaching the system, and
+//! the **persisted snapshot** — respectively what is done and what the undo
+//! will be able to undo.
 
 mod common;
 
@@ -49,22 +44,20 @@ fn cfg(family: OsFamily) -> MockConfig {
     }
 }
 
-/// Sostituisce i suffissi **casuali** dei file temporanei con un segnaposto.
+/// replaces the **random** suffixes of temporary files with a placeholder.
 ///
-/// I temporanei hanno un nome imprevedibile per costruzione (A-V3-3/R9: un nome
-/// fisso scritto nel sorgente è noto a chiunque), quindi due esecuzioni dello
-/// stesso step differiscono sempre lì. Senza questa normalizzazione il confronto
-/// fra famiglie fallirebbe per una ragione che non c'entra nulla — ed è successo
-/// alla prima esecuzione di questo test, il che è anche la prova che il confronto
-/// guarda davvero i valori e non solo la forma.
+/// temporaries are unpredictable by construction (A-V3-3), so two runs of the
+/// same step always differ there. without this the cross-family comparison
+/// would fail for an unrelated reason — as it did on this test's first run,
+/// which is also proof that the comparison looks at values and not just shape.
 fn senza_suffissi_casuali(op: &Op) -> String {
     let reso = format!("{op:?}");
     let mut out = String::with_capacity(reso.len());
     let mut hex = String::new();
 
     let scarica = |out: &mut String, hex: &mut String| {
-        // Il suffisso di `private_temp_path` è una corsa di cifre esadecimali
-        // lunga e senza separatori: una parola normale non lo è.
+        // the suffix is a long unbroken run of hex digits; a normal word is
+        // not.
         if hex.len() >= 12 {
             out.push_str("<rnd>");
         } else {
@@ -85,8 +78,8 @@ fn senza_suffissi_casuali(op: &Op) -> String {
     out
 }
 
-/// Esegue snapshot → run → undo di uno step, per una famiglia, e restituisce
-/// ciò che il sistema ha visto e ciò che è stato persistito.
+/// runs one step's full cycle for one family, returning what the system saw and
+/// what was persisted.
 fn esegui<S: Step>(
     costruisci: impl Fn(Box<dyn invok::system_ops::SystemOps>) -> S,
     family: OsFamily,
@@ -95,8 +88,8 @@ fn esegui<S: Step>(
     let c = ctx(family);
     let mut step = costruisci(Box::new(ops));
 
-    // Gli errori non si propagano: alcuni step falliscono per configurazione del
-    // mock, e ciò che conta è che falliscano **allo stesso modo** su entrambe.
+    // errors are not propagated: some steps fail by mock configuration, and
+    // what matters is that they fail **the same way** on both.
     let _ = step.snapshot(&c);
     let _ = step.run(&c);
     let _ = step.undo(&c);
@@ -105,7 +98,7 @@ fn esegui<S: Step>(
     (ops, step.snapshot_value())
 }
 
-/// Il cuore: uno step deve fare **le stesse cose** su entrambe le famiglie.
+/// the heart: a step must do **the same things** on both families.
 fn indifferente_alla_famiglia<S: Step>(
     nome: &str,
     costruisci: impl Fn(Box<dyn invok::system_ops::SystemOps>) -> S,
@@ -126,31 +119,31 @@ fn indifferente_alla_famiglia<S: Step>(
     );
 }
 
-/// **Le quattro protezioni critiche**, più gli step che le circondano.
+/// **the four critical protections**, plus the steps around them.
 ///
-/// L'elenco è la parte che conta: ogni voce è uno step che il design dichiara
-/// distro-indipendente. Aggiungere qui uno step nuovo è il modo di dichiarare
-/// che anche lui lo è — e di scoprire subito se non lo è.
+/// the list is the part that matters: each entry is a step the design declares
+/// distro-independent. adding one here is how you declare it so — and find out
+/// at once if it is not.
 #[test]
 fn the_critical_protections_do_not_depend_on_the_family() {
     use invok::steps::*;
 
-    // anti-drop del database: il verdetto è `PreState`, il comando è `dropdb`.
+    // the database anti-drop: the verdict is the `PreState`.
     indifferente_alla_famiglia("create-database", |o| {
         create_database::CreateDatabase::with_ops(o)
     });
-    // hard-stop sull'init: precondizione su `db_created_by_us`.
+    // the init hard stop: a precondition on the shared verdict.
     indifferente_alla_famiglia("initialize-odoo-database", |o| {
         initialize_odoo_database::InitializeOdooDatabase::with_ops(o)
     });
-    // cura del `.bashrc`: filesystem puro, backup e riga singola.
+    // the `.bashrc` care: pure filesystem, a backup and a single line.
     indifferente_alla_famiglia("patch-bashrc", patch_bashrc::PatchBashrc::with_ops);
-    // filestore: doppia condizione (creato da noi **e** database nostro).
+    // the filestore: a double condition, ours **and** our database.
     indifferente_alla_famiglia("setup-data-dir", |o| {
         setup_data_dir::SetupDataDir::with_ops(o)
     });
 
-    // Il ruolo PostgreSQL e il resto del perimetro reversibile.
+    // the PostgreSQL role and the rest of the reversible perimeter.
     indifferente_alla_famiglia("create-db-role", |o| {
         create_db_role::CreateDbRole::with_ops(o)
     });
@@ -184,12 +177,11 @@ fn the_critical_protections_do_not_depend_on_the_family() {
     });
 }
 
-/// Il contrappeso: gli step che **devono** dipendere dalla famiglia lo fanno
-/// davvero.
+/// the counterweight: the steps that **must** depend on the family really do.
 ///
-/// Senza questo, il test sopra passerebbe anche se il supporto multi-distro non
-/// funzionasse affatto — «tutti gli step si comportano uguale» è il risultato
-/// che si otterrebbe se la famiglia non arrivasse mai a destinazione.
+/// without this, the test above would pass even if multi-distro support did not
+/// work at all — "every step behaves the same" is exactly what you get when the
+/// family never reaches its destination.
 #[test]
 fn the_packaging_steps_do_depend_on_the_family() {
     use invok::steps::apt_packages::AptPackagesStep;
@@ -226,8 +218,8 @@ fn the_packaging_steps_do_depend_on_the_family() {
     );
 }
 
-/// Su Fedora il delta **non** contiene doppioni, anche se due bisogni cadono
-/// sullo stesso pacchetto (A-MD-1 nella sua forma strutturale).
+/// the delta contains **no** duplicates even where two needs fall on the same
+/// package (A-MD-1 in structural form).
 #[test]
 fn the_fedora_delta_has_no_duplicates() {
     use invok::steps::apt_packages::AptPackagesStep;
@@ -237,7 +229,7 @@ fn the_fedora_delta_has_no_duplicates() {
         OsFamily::Fedora,
     );
 
-    // I pacchetti passati a `install`, estratti dalla riga resa dell'operazione.
+    // the packages handed to the install, taken from the rendered operation.
     let riga = ops
         .iter()
         .find(|o| o.starts_with("PkgInstall"))

@@ -1,59 +1,41 @@
-//! Interruzione dall'esterno: Ctrl-C e `kill` gestiti invece che subiti (B-V3-5).
+//! Ctrl-C and `kill` handled rather than suffered (B-V3-5).
 //!
-//! # Il problema, e perché è più piccolo di quanto sembri
+//! # why the handler is tiny
 //!
-//! Fino alla R18 l'azione di default di `SIGINT` valeva anche per noi: un Ctrl-C
-//! **uccideva il processo all'istante**, quindi il rollback in-process non
-//! partiva mai e il sistema restava a metà. Al suo posto R4 aveva messo un
-//! avviso stampato prima delle mutazioni, che indirizzava a
-//! `invok rollback` — utile, ma scorreva via nel log molto prima di
-//! servire.
+//! the signal reaches the **whole process group**, so `apt`, `git` and `pip`
+//! die anyway; the child command comes back failed and the engine already
+//! rolls back for that case. we only need to *survive*, so the handler raises
+//! a flag and nothing else. before R18 the default action killed us outright
+//! and the in-process rollback never ran.
 //!
-//! Il punto che rende la correzione semplice: **il segnale va a tutto il process
-//! group**, quindi lo ricevono anche i figli — `apt`, `git`, `pip`. Quelli
-//! muoiono comunque. A noi basta *sopravvivere*: il comando figlio risulta
-//! fallito, e per quel caso il motore ha già il rollback. L'handler non deve
-//! quindi fare niente di complicato — alza un flag, e basta.
+//! no `unsafe`: `signal_hook` wraps the async-signal-safe part behind a safe
+//! API, and it was already in the tree as a transitive dependency of
+//! `crossterm`. zero new dependencies, no `unsafe` in a program running as
+//! root.
 //!
-//! # Perché nessun `unsafe`
+//! # the second Ctrl-C really exits
 //!
-//! Un handler scritto a mano dev'essere async-signal-safe, e in Rust si scrive
-//! con `unsafe`. `signal_hook` incapsula quella parte dietro un'API safe, ed è
-//! già nell'albero delle dipendenze (transitiva di `crossterm`, via `inquire`):
-//! usarlo costa **zero** dipendenze nuove e toglie l'`unsafe` da un programma
-//! che gira come root.
+//! `register_conditional_shutdown` exits with 130 **when the flag is already
+//! raised**. registered first, it sees the flag still false on the first
+//! signal and lets the run proceed — so the registration order is part of the
+//! behaviour, not a detail. the system is then genuinely left half-done, by
+//! the user's choice, and `invok rollback` cleans it up.
 //!
-//! # Il secondo Ctrl-C esce davvero
+//! # sending the signal from a script
 //!
-//! Chi preme Ctrl-C una seconda volta vuole andarsene, e un rollback può durare
-//! minuti. `register_conditional_shutdown` esce con 130 (la convenzione shell
-//! per «terminato da SIGINT») **se il flag è già alzato**: registrato per primo,
-//! vede il flag ancora falso al primo segnale e lascia proseguire. L'ordine di
-//! registrazione è quindi parte del comportamento, non un dettaglio.
-//!
-//! In quel caso il sistema resta a metà per davvero — ed è una scelta
-//! dell'utente, non un difetto: il manifesto è sul disco e
-//! `invok rollback` lo ripulisce.
-//!
-//! ## Attenzione a *come* si manda il segnale da script
-//!
-//! «Due Ctrl-C» significa **due segnali ricevuti**, non «due pressioni di
-//! tasti». Da un terminale la distinzione non si nota: Ctrl-C consegna al
-//! process group una volta sola, e `sudo` senza pty non rilancia il segnale.
-//! Ma un `sudo pkill -INT -f invok` colpisce **due** processi — il
-//! `sudo` e l'installer — e l'installer si vede arrivare due segnali in rapida
-//! successione: uscita immediata, nessun annullamento. L'opposto di ciò che chi
-//! ha lanciato quel comando voleva.
-//!
-//! Da script si manda un segnale al **solo** installer:
+//! "two Ctrl-C" means **two signals received**, not two keypresses. from a
+//! terminal the distinction never shows: Ctrl-C reaches the process group
+//! once, and `sudo` without a pty does not forward it. but
+//! `sudo pkill -INT -f invok` hits **two** processes — the `sudo` and the
+//! installer — so the installer sees two signals in quick succession and takes
+//! the emergency exit instead of rolling back. use the exact name:
 //!
 //! ```text
-//! sudo pkill -INT -x invok    # -x: nome esatto del processo
+//! sudo pkill -INT -x invok
 //! ```
 //!
-//! Non è un'ipotesi: è successo alla prima esecuzione del job di CI che verifica
-//! proprio questa funzionalità, che con `-f` provava la via d'uscita
-//! d'emergenza credendo di provare l'annullamento.
+//! not hypothetical: the CI job that exercises this feature failed its first
+//! run for exactly that reason.
 
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -62,26 +44,25 @@ use tracing::warn;
 
 use crate::error::StepError;
 
-/// Codice d'uscita convenzionale per «terminato da SIGINT» (128 + 2).
+/// conventional exit code for "terminated by SIGINT" (128 + 2).
 const EXIT_SIGINT: i32 = 130;
 
-/// Registra gli handler e ritorna il flag che il motore osserva.
+/// registers the handlers and returns the flag the engine watches.
 ///
-/// Copre `SIGINT` (Ctrl-C) e `SIGTERM` (`kill`, `systemctl stop`, spegnimento):
-/// sono due modi diversi di chiedere la stessa cosa, e trattarne solo uno
-/// lascerebbe scoperto proprio il caso non presidiato — la macchina che si
-/// spegne mentre l'installazione è in corso.
+/// covers `SIGINT` and `SIGTERM`: two ways of asking the same thing, and
+/// handling only one would leave the unattended case — a machine shutting down
+/// mid-installation — uncovered.
 ///
-/// Un fallimento nella registrazione **non** è fatale: si prosegue senza la
-/// gestione, che è esattamente com'era prima. Impedire un'installazione perché
-/// non si è potuto installare un handler sarebbe sproporzionato.
+/// a registration failure is **not** fatal: the run proceeds without handling,
+/// exactly as before. refusing to install because a handler could not be
+/// registered would be disproportionate.
 pub fn install() -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
 
     for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
-        // L'ordine conta: prima l'uscita condizionata (che agisce solo se il
-        // flag è GIÀ alzato, quindi dalla seconda volta in poi), poi quella che
-        // lo alza. Invertendoli, il primo Ctrl-C ucciderebbe il processo.
+        // order matters: the conditional exit first (it acts only once the flag
+        // is already raised), then the one that raises it. inverted, the first
+        // Ctrl-C would kill the process.
         if let Err(e) =
             signal_hook::flag::register_conditional_shutdown(signal, EXIT_SIGINT, Arc::clone(&flag))
         {
@@ -100,12 +81,12 @@ pub fn install() -> Arc<AtomicBool> {
     flag
 }
 
-/// Errore da usare quando l'esecuzione si ferma per un'interruzione.
+/// the error used when a run stops on an interruption.
 ///
-/// È un `StepError::Precondition` e non una variante propria per una ragione:
-/// non è un difetto di uno step, è una decisione presa da fuori. Il messaggio
-/// dice cosa è successo **e cosa è stato fatto di conseguenza**, perché la
-/// domanda che si fa chi ha appena premuto Ctrl-C è «e adesso il sistema com'è?».
+/// a `StepError::Precondition` rather than its own variant: this is not a
+/// step's defect but a decision taken from outside. the message says what
+/// happened **and what was done about it**, because that is what whoever just
+/// pressed Ctrl-C wants to know.
 pub fn interrupted_error() -> StepError {
     StepError::Precondition(
         "installazione interrotta su richiesta (Ctrl-C o segnale di terminazione).\n\

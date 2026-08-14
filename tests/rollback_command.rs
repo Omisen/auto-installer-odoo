@@ -1,13 +1,11 @@
-//! Il comando `rollback` (R4): rollback a partire dallo stato **persistito**.
+//! the `rollback` command: undoing from the **persisted** state.
 //!
-//! Il rollback in-process è già coperto da `tests/rollback_e2e.rs`. Qui si prova
-//! l'altra metà — quella che finora non esisteva: il processo che annulla
-//! un'installazione **che non ha eseguito**, ricostruendo gli step dal file di
-//! stato. È lo scenario del Ctrl-C in campo, e quello della disinstallazione a
-//! posteriori.
+//! the in-process rollback is covered elsewhere. here is the other half: a
+//! process undoing an installation **it never ran**, rebuilding the steps from
+//! the state file. the field's Ctrl-C scenario, and the after-the-fact
+//! uninstall.
 //!
-//! Tutto gira su `SystemModel`: nessun comando reale, nessuna esecuzione del
-//! binario.
+//! everything runs on the model: no real command, no binary executed.
 
 mod common;
 
@@ -34,8 +32,8 @@ const BASHRC: &str = "/home/alice/.bashrc";
 const BASHRC_ORIG: &str = "alias ll='ls -la'\nexport EDITOR=vim\n";
 const UNIT: &str = "/etc/systemd/system/odoo18.service";
 
-/// Catena reale ricostruibile dalla factory (stesse esclusioni di
-/// `tests/rehydrate.rs`: fs diretto, temp reale, download reale).
+/// the real chain the factory can rebuild, with the same exclusions as the
+/// rehydration tests: direct filesystem, real temporaries, real downloads.
 const CHAIN: &[&str] = &[
     "create-odoo-user",
     "bootstrap-prerequisites",
@@ -101,15 +99,13 @@ fn chain_from_factory(model: &SystemModel, names: &[&str]) -> Vec<Box<dyn Step>>
         .collect()
 }
 
-/// Esegue un'installazione che **riesce** e lascia il file di stato sul disco.
+/// runs an installation that **succeeds** and leaves the state file on disk.
 ///
-/// Non chiama `mark_finished`: il file resta quindi come lo troverebbe un
-/// `invok rollback` dopo un'**interruzione**. Il caso "installazione
-/// conclusa e poi disinstallata" ha il suo test dedicato
-/// (`a_successful_installation_leaves_a_state_that_can_still_be_rolled_back`).
-/// La sequenza canonica non dipende dalla famiglia (una sola per tutte), ma per
-/// costruirla serve comunque una fabbrica di `ops`: qui quella di produzione,
-/// che nei costruttori non esegue alcun comando.
+/// it does not mark the state finished, so the file looks as a rollback would
+/// find it after an **interruption**; the finished case has its own test. the
+/// canonical sequence does not depend on the family, but building it still
+/// needs an ops factory: the production one, which runs no command in its
+/// constructors.
 fn canonical_len() -> usize {
     let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
@@ -123,7 +119,7 @@ fn install(model: &SystemModel, names: &[&str], ctx: &Context) {
         .expect("la catena deve arrivare in fondo");
 }
 
-/// Esegue il rollback dal file di stato su disco, su un modello dato.
+/// runs the rollback from the state file on disk, against a given model.
 fn rollback_from_disk(
     model: &SystemModel,
     state_path: &std::path::Path,
@@ -141,15 +137,14 @@ fn rollback_from_disk(
     (state, report)
 }
 
-// --- La factory copre la sequenza canonica ----------------------------------
+// --- the factory covers the canonical sequence ------------------------------
 
 #[test]
 fn the_factory_covers_the_whole_canonical_sequence() {
-    // Il rollback da disco può ricostruire solo ciò che la factory conosce. Uno
-    // step aggiunto a `build_steps` e dimenticato in `step_by_name` non
-    // romperebbe nulla in installazione: si scoprirebbe mesi dopo, su una
-    // macchina cliente, come "quel pezzo non è stato rimosso". Questo test lo
-    // fa fallire subito.
+    // the disk rollback can only rebuild what the factory knows. a step added
+    // to the sequence and forgotten in the factory breaks nothing during an
+    // installation: it would surface months later on a customer machine as
+    // "that piece was not removed".
     let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
     for name in steps::canonical_step_names(&make_ops) {
@@ -168,7 +163,7 @@ fn the_factory_rejects_an_unknown_name() {
     assert!(steps::step_by_name("passo-inventato", &make_ops).is_none());
 }
 
-// --- Rollback da stato completo ---------------------------------------------
+// --- rollback from a complete state -----------------------------------------
 
 #[test]
 fn rollback_from_a_complete_state_returns_the_system_to_virgin() {
@@ -184,9 +179,9 @@ fn rollback_from_a_complete_state_returns_the_system_to_virgin() {
         "l'installazione ha mutato il sistema"
     );
 
-    // Il rollback gira su un processo **diverso**: modello nuovo, costruito
-    // dallo stato che l'installazione ha lasciato, e step ricostruiti dal solo
-    // file JSON. Nessun oggetto sopravvive fra le due fasi.
+    // the rollback runs in a **different** process: a fresh model built from
+    // the state the installation left, and steps rebuilt from the JSON alone.
+    // no object survives between the two phases.
     let rollback_model = SystemModel::new(after_install);
     let (state, report) = rollback_from_disk(&rollback_model, &state_path, false, true);
 
@@ -225,25 +220,23 @@ fn the_undo_order_is_the_reverse_of_the_execution_order() {
     let expected: Vec<&str> = CHAIN.iter().rev().copied().collect();
     assert_eq!(plan, expected, "invariante 2: undo in ordine inverso");
 
-    // E il report rispetta quell'ordine (è ciò che l'utente vede).
+    // and the report respects that order, which is what the user sees.
     let (_, report) = rollback_from_disk(&model, &state_path, true, false);
     let executed: Vec<&str> = report.outcomes.iter().map(|o| o.name.as_str()).collect();
     assert_eq!(executed, expected);
 }
 
-// --- Rollback da stato parziale (lo scenario Ctrl-C) ------------------------
+// --- rollback from a partial state (the Ctrl-C scenario) --------------------
 
 #[test]
 fn rollback_from_a_partial_state_undoes_exactly_those_steps() {
-    // Interruzione a metà: l'installazione arriva al quinto step e il processo
-    // muore. Il file di stato che resta sul disco è esattamente quello che il
-    // motore aveva scritto fin lì — cinque record, non tredici.
+    // interrupted halfway: the state left on disk is exactly what the engine
+    // had written so far, five records and not the whole chain.
     let dir = tempfile::tempdir().expect("tempdir");
     let state_path = dir.path().join("state.json");
 
-    // Un artefatto **del cliente** che un undo successivo toccherebbe se
-    // girasse: l'unit systemd. `setup-systemd` non è fra gli step completati,
-    // quindi il suo undo non deve nemmeno essere tentato.
+    // a **customer** artifact a later undo would touch if it ran: its step is
+    // not among the completed ones, so that undo must not even be attempted.
     let mut init = fresh_state();
     init.paths.insert(PathBuf::from(UNIT));
     let model = SystemModel::new(init);
@@ -282,12 +275,12 @@ fn rollback_from_a_partial_state_undoes_exactly_those_steps() {
     );
 }
 
-// --- Stato assente ----------------------------------------------------------
+// --- no state ---------------------------------------------------------------
 
 #[test]
 fn a_missing_state_file_is_not_an_error() {
-    // Condizione normale: macchina pulita, o rollback già eseguito. Deve
-    // risolversi in "niente da fare", non in un errore né in un panic.
+    // a normal condition — clean machine, or a rollback already done. it must
+    // resolve to "nothing to do", not an error and not a panic.
     let dir = tempfile::tempdir().expect("tempdir");
     let missing = dir.path().join("non-esiste.json");
 
@@ -324,19 +317,18 @@ fn a_dry_run_rollback_mutates_nothing() {
         after_install,
         "--dry-run: il sistema non deve cambiare di un byte"
     );
-    // Il piano è comunque completo: il dry-run serve a mostrare *cosa* farebbe.
+    // the plan is still complete: a dry run exists to show *what* it would do.
     assert_eq!(report.outcomes.len(), CHAIN.len());
     assert_eq!(rollback::undo_plan(&state).len(), CHAIN.len());
 }
 
-// --- Best-effort e report dei residui (A1.3) --------------------------------
+// --- best-effort, and the leftovers report (A1.3) ---------------------------
 
 #[test]
 fn a_failing_undo_does_not_block_the_others_and_ends_up_in_the_report() {
-    // Invariante 3 anche da disco. Qui la home di `alice` non è più risolvibile
-    // (utente rimosso nel frattempo): gli step che scrivono nella sua home non
-    // possono annullare, ma tutto il resto deve essere ripulito lo stesso — e
-    // ciò che è rimasto deve finire nel report, non solo in un warning.
+    // invariant 3 from disk too. a user's home is no longer resolvable, so the
+    // steps writing there cannot undo — but everything else must still be
+    // cleaned, and what remains must reach the report, not just a warning.
     let dir = tempfile::tempdir().expect("tempdir");
     let state_path = dir.path().join("state.json");
     let model = SystemModel::new(fresh_state());
@@ -362,7 +354,7 @@ fn a_failing_undo_does_not_block_the_others_and_ends_up_in_the_report() {
         );
     }
 
-    // Best-effort: il resto è stato ripulito comunque.
+    // best-effort: the rest was cleaned anyway.
     let s = rollback_model.snapshot();
     assert!(!s.users.contains("odoo"), "l'utente odoo è stato rimosso");
     assert!(!s.pg_dbs.contains("odoo"), "il database è stato droppato");
@@ -378,8 +370,8 @@ fn a_failing_undo_does_not_block_the_others_and_ends_up_in_the_report() {
 
 #[test]
 fn an_unknown_step_name_is_reported_instead_of_aborting_the_rollback() {
-    // Stato scritto da una versione con step che questo binario non conosce.
-    // Non è un motivo per rinunciare a ripulire tutto il resto.
+    // a state written by a version with steps this binary does not know. not a
+    // reason to give up on everything else.
     let model = SystemModel::new({
         let mut s = fresh_state();
         s.users.insert("odoo".to_string());
@@ -423,9 +415,9 @@ fn an_unknown_step_name_is_reported_instead_of_aborting_the_rollback() {
 
 #[test]
 fn a_corrupt_snapshot_skips_the_undo_and_is_reported() {
-    // Fail-closed: uno snapshot illeggibile NON deve far girare l'undo con uno
-    // stato di default. Su `create-database` uno stato inventato potrebbe
-    // significare droppare un database del cliente.
+    // fail-closed: an unreadable snapshot must NOT run the undo with a default
+    // state. on the database step an invented state could mean dropping a
+    // customer's data.
     let mut init = fresh_state();
     init.pg_dbs.insert("odoo".to_string());
     let model = SystemModel::new(init);
@@ -453,7 +445,7 @@ fn a_corrupt_snapshot_skips_the_undo_and_is_reported() {
     );
 }
 
-// --- Protezione anti-drop attraverso il disco -------------------------------
+// --- the anti-drop protection, through the disk -----------------------------
 
 fn config_fixture() -> InstallConfig {
     InstallConfig::from_context(&ctx(PathBuf::from("/dev/null")))
@@ -461,9 +453,9 @@ fn config_fixture() -> InstallConfig {
 
 #[test]
 fn a_preexisting_database_is_not_dropped_by_a_rollback_from_disk() {
-    // La protezione critica, esercitata dove è più insidiosa: il rollback gira
-    // in un processo che non ha mai visto quel database "prima". L'unica cosa
-    // che lo salva è il `PreState` riletto dal disco.
+    // the critical protection where it is most treacherous: the rollback runs
+    // in a process that never saw that database "before". the only thing saving
+    // it is the `PreState` read back from disk.
     let mut init = fresh_state();
     init.pg_dbs.insert("odoo".to_string()); // dati reali del cliente
     init.pg_roles.insert("odoo".to_string());
@@ -501,9 +493,9 @@ fn a_preexisting_database_is_not_dropped_by_a_rollback_from_disk() {
 
 #[test]
 fn the_preexisting_marker_survives_the_full_disk_roundtrip() {
-    // Stessa protezione, ma col percorso completo: installazione reale su un
-    // sistema dove il database esiste già → snapshot → file su disco →
-    // rilettura → undo. Nessun valore scritto a mano.
+    // the same protection along the full path: a real installation on a system
+    // where the database already exists, snapshot, file, re-read, undo. no
+    // value written by hand.
     let dir = tempfile::tempdir().expect("tempdir");
     let state_path = dir.path().join("state.json");
     let mut init = fresh_state();
@@ -543,12 +535,12 @@ fn the_preexisting_marker_survives_the_full_disk_roundtrip() {
     );
 }
 
-// --- Contenuto del file di stato --------------------------------------------
+// --- the state file's contents ----------------------------------------------
 
 #[test]
 fn the_state_file_carries_the_config_and_no_passwords() {
-    // La configurazione persistita è ciò che dà al rollback l'identità degli
-    // artefatti. Le password no: nessun undo le usa, quindi non vengono scritte.
+    // the persisted config is what gives the rollback the artifacts' identity.
+    // passwords are not: no undo uses them, so they are never written.
     let dir = tempfile::tempdir().expect("tempdir");
     let state_path = dir.path().join("state.json");
     let model = SystemModel::new(fresh_state());
@@ -588,8 +580,8 @@ fn install_status_recognises_a_complete_installation() {
             })
             .collect(),
         config: Some(config_fixture()),
-        // Deliberatamente `false`: qui si prova il **ripiego** sul conteggio,
-        // che copre gli stati scritti prima che il flag esistesse.
+        // deliberately false: this exercises the **fallback** on the count,
+        // which covers states written before the flag existed.
         finished: false,
     };
     assert_eq!(
@@ -600,17 +592,13 @@ fn install_status_recognises_a_complete_installation() {
     );
 }
 
-// --- A-R5-1: il manifesto di disinstallazione sopravvive al successo --------
+// --- A-R5-1: the uninstall manifest survives success ------------------------
 
 #[test]
 fn a_successful_installation_leaves_a_state_that_can_still_be_rolled_back() {
-    // Il caso d'uso principale del comando: disinstallare un'istanza
-    // **funzionante**. Fino a R5 era impossibile — `main` cancellava lo stato a
-    // successo avvenuto, e `invok rollback` rispondeva "nessuna
-    // installazione da annullare" su un sistema pieno di artefatti nostri.
-    //
-    // Qui l'installazione arriva in fondo, viene marcata conclusa, e il rollback
-    // riparte da quel file: il sistema deve tornare vergine.
+    // the command's main use: uninstalling a **working** instance. until R5
+    // that was impossible — the state was cleared on success, and the command
+    // answered "nothing to undo" on a system full of our artifacts.
     let dir = tempfile::tempdir().expect("tempdir");
     let state_path = dir.path().join("state.json");
     let model = SystemModel::new(fresh_state());
@@ -626,7 +614,7 @@ fn a_successful_installation_leaves_a_state_that_can_still_be_rolled_back() {
         .mark_finished(&c)
         .expect("marcatura di fine installazione");
 
-    // Lo stato è ancora lì, e si dichiara completo.
+    // the state is still there, and declares itself complete.
     let state = InstallState::load(&state_path).expect("lo stato deve sopravvivere al successo");
     assert!(state.finished, "l'installazione riuscita marca lo stato");
     assert_eq!(
@@ -636,7 +624,7 @@ fn a_successful_installation_leaves_a_state_that_can_still_be_rolled_back() {
          quella canonica ma l'installazione è comunque completa"
     );
 
-    // E il rollback lo consuma: disinstallazione di un'istanza funzionante.
+    // and the rollback consumes it.
     let rollback_model = SystemModel::new(model.snapshot());
     let (_, report) = rollback_from_disk(&rollback_model, &state_path, false, true);
     assert!(report.is_clean(), "residui: {:?}", report.residue());
@@ -649,7 +637,7 @@ fn a_successful_installation_leaves_a_state_that_can_still_be_rolled_back() {
 
 #[test]
 fn marking_finished_writes_nothing_in_dry_run() {
-    // Una preview non lascia artefatti, nemmeno il manifesto.
+    // a preview leaves no artifacts, the manifest included.
     let dir = tempfile::tempdir().expect("tempdir");
     let state_path = dir.path().join("state.json");
     let mut c = ctx(state_path.clone());
@@ -662,30 +650,29 @@ fn marking_finished_writes_nothing_in_dry_run() {
     );
 }
 
-// --- Conferma e retrocompatibilità della CLI --------------------------------
+// --- confirmation, and the CLI's compatibility ------------------------------
 
 #[test]
 fn the_confirmation_gate_protects_a_destructive_operation() {
     use ConfirmationGate::*;
-    // Interattivo, senza --yes → si chiede.
+    // interactive without the flag: ask.
     assert_eq!(rollback::confirmation_gate(false, false, true), Ask);
-    // Non interattivo, senza --yes → si rifiuta: uno script non deve poter
-    // disinstallare per default.
+    // non-interactive without it: refuse — a script must not uninstall by
+    // default.
     assert_eq!(
         rollback::confirmation_gate(false, false, false),
         RefuseNonInteractive
     );
-    // --yes è una conferma esplicita, con o senza terminale.
+    // the flag is an explicit confirmation, terminal or not.
     assert_eq!(rollback::confirmation_gate(false, true, false), Proceed);
     assert_eq!(rollback::confirmation_gate(false, true, true), Proceed);
-    // --dry-run non muta nulla: non c'è nulla da confermare.
+    // a dry run mutates nothing, so there is nothing to confirm.
     assert_eq!(rollback::confirmation_gate(true, false, false), Proceed);
 }
 
 #[test]
 fn the_bare_command_still_installs() {
-    // Retrocompatibilità: l'uso storico non cambia. Nessun sottocomando e le
-    // stesse opzioni di prima.
+    // compatibility: no subcommand and the same options as before.
     let cli = Cli::parse_from(["invok"]);
     assert!(cli.command.is_none(), "nessun sottocomando = installazione");
 
@@ -706,8 +693,8 @@ fn the_bare_command_still_installs() {
     assert!(!cli.force, "--force è disattivo se non passato");
 }
 
-/// `--force` è la via d'uscita esplicita dal rifiuto su manifesto esistente
-/// (A-V3-1), e non deve aver spostato nulla del parsing preesistente.
+/// the force flag is the explicit way out of the refusal on an existing
+/// manifest (A-V3-1), and must not have disturbed any existing parsing.
 #[test]
 fn force_is_an_install_flag_and_defaults_to_off() {
     let cli = Cli::parse_from(["invok", "--force"]);
@@ -749,7 +736,7 @@ fn rollback_and_its_uninstall_alias_parse_with_their_options() {
     );
     assert!(args.dry_run && args.yes && args.aggressive_rollback);
 
-    // L'alias `uninstall` è lo stesso comando.
+    // the alias is the same command.
     let cli = Cli::parse_from(["invok", "uninstall", "--yes"]);
     let Some(Command::Rollback(args)) = &cli.command else {
         panic!("l'alias uninstall deve mappare su rollback");
@@ -757,14 +744,13 @@ fn rollback_and_its_uninstall_alias_parse_with_their_options() {
     assert!(args.yes);
 }
 
-// --- A3.3: il messaggio di hard-stop indica il comando reale ----------------
+// --- A3.3: the hard-stop message names the real command ---------------------
 
 #[test]
 fn the_init_hard_stop_points_at_the_rollback_command() {
-    // R0 aveva messo "la rimozione automatica arriverà col comando rollback (in
-    // arrivo)". Il comando ora esiste: il messaggio deve nominarlo per quello
-    // che è, altrimenti l'utente resta bloccato con in mano un suggerimento
-    // scaduto.
+    // the message used to promise a command that did not exist yet. it does
+    // now, and must be named for what it is or the reader is left holding an
+    // expired hint.
     let mut init = fresh_state();
     init.pg_dbs.insert("odoo".to_string()); // DB preesistente, schema assente
     let model = SystemModel::new(init);
@@ -791,17 +777,17 @@ fn the_init_hard_stop_points_at_the_rollback_command() {
     );
 }
 
-/// A-V3-6: il flag è stato rinominato in ciò che fa, ma il nome storico resta
-/// accettato — vive negli script e nei `.env` dei clienti, e romperli per una
-/// questione di nomi sarebbe un danno maggiore del difetto.
+/// A-V3-6: the flag was renamed to what it does, but the historical name stays
+/// accepted — it lives in customers' scripts and `.env` files, and breaking
+/// those over a name would be worse than the defect.
 #[test]
 fn the_https_port_flag_keeps_its_historical_alias() {
     let nuovo = Cli::parse_from(["invok", "--with-nginx", "--open-https-port"]);
     assert!(nuovo.open_https_port);
 
-    // `try_parse_from` e non `parse_from`: se l'alias sparisse, `parse_from`
-    // chiamerebbe `exit(2)` e il test morirebbe senza dire perché — un guardiano
-    // che fallisce senza spiegarsi costringe il prossimo a indagare da zero.
+    // the fallible parse, not the exiting one: if the alias vanished the test
+    // would die without saying why — a guard that fails without explaining
+    // itself forces the next reader to investigate from scratch.
     let storico = Cli::try_parse_from(["invok", "--with-nginx", "--enable-ssl"])
         .expect("`--enable-ssl` deve continuare a essere accettato: è il nome con cui il flag è nato, e vive negli script dei clienti");
     assert!(storico.open_https_port);
@@ -810,13 +796,13 @@ fn the_https_port_flag_keeps_its_historical_alias() {
     assert!(!assente.open_https_port);
 }
 
-/// A-V3-10: la barra di progresso deve avanzare **anche** sugli step che non si
-/// possono annullare.
+/// A-V3-10: the progress bar must advance **even** on steps that cannot be
+/// undone.
 ///
-/// I due rami che rinunciano — step sconosciuto a questo binario, snapshot
-/// illeggibile — segnalavano l'inizio e non la fine: il progresso restava fermo
-/// proprio nello scenario degradato, che è l'unico in cui l'utente la guarda. Un
-/// rollback che sta procedendo sembrava bloccato.
+/// the two branches that give up — unknown step, unreadable snapshot —
+/// signalled the start and not the end, so progress froze in the degraded
+/// scenario, the only one where the user watches it. a rollback in progress
+/// looked stuck.
 #[test]
 fn the_progress_advances_even_on_steps_that_cannot_be_undone() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -825,12 +811,12 @@ fn the_progress_advances_even_on_steps_that_cannot_be_undone() {
 
     let mut state = InstallState::default();
     state.set_config(InstallConfig::from_context(&ctx(state_path.clone())));
-    // Uno step che questo binario non conosce…
+    // a step this binary does not know…
     state.record(StepRecord {
         name: "passo-di-una-versione-futura".to_string(),
         snapshot: serde_json::Value::Null,
     });
-    // …e uno il cui snapshot è illeggibile.
+    // …and one whose snapshot is unreadable.
     state.record(StepRecord {
         name: "create-database".to_string(),
         snapshot: serde_json::json!({"non": "un PreState"}),
@@ -853,33 +839,30 @@ fn the_progress_advances_even_on_steps_that_cannot_be_undone() {
         );
     }
 
-    // Il report resta onesto: nessuno dei due è stato annullato.
+    // the report stays honest: neither was undone.
     assert!(!report.is_clean(), "due step non annullati vanno riportati");
 }
 
-// --- A-MD-2: il report verifica la PROMESSA, non solo gli esiti -------------
+// --- A-MD-2: the report checks the PROMISE, not only the outcomes -----------
 //
-// Questi tre usano `MockSystemOps` e non `SystemModel`, e la ragione è un
-// dettaglio scoperto scrivendoli: `PrepareOptRoot::undo` interroga il
-// filesystem **reale** (`dir.exists()`, `fs::read_dir`) invece di passare da
-// `SystemOps`. Sotto modello quello step vede quindi la macchina che esegue i
-// test, non lo stato modellato — e un test costruito sul modello proverebbe
-// qualcosa di diverso da ciò che crede. Con il mock il controllo del report
-// (`ops.path_exists`) e la risposta sono coerenti.
+// these three use the mock rather than the model, for a detail found while
+// writing them: one step's undo queries the **real** filesystem instead of
+// going through `SystemOps`. under the model it would see the machine running
+// the tests, not the modelled state, and the test would prove something other
+// than it believes.
 
-/// **Il difetto, osservato in campo su Fedora.** Il rollback ha dichiarato
-/// «nessun residuo: il sistema è tornato allo stato precedente» mentre
-/// `/opt/odoo` era ancora lì.
+/// **the defect, observed in the field.** the rollback declared "no leftovers:
+/// the system is back to its previous state" while the perimeter directory was
+/// still there.
 ///
-/// Nessun undo era fallito, e nemmeno poteva: `PrepareOptRoot` davanti a una
-/// directory **non vuota** rinuncia — correttamente, mai un `rm -rf` su roba di
-/// altri — e restituisce `Ok`. Il verdetto sugli esiti era vero; la promessa che
-/// l'utente legge no.
+/// no undo had failed, nor could it: faced with a **non-empty** directory the
+/// step gives up — correctly, never a blind removal of other people's things —
+/// and returns success. the verdict on outcomes was true; the promise the user
+/// reads was not.
 ///
-/// È la lezione di R7 rovesciata: lì un test di CI asseriva il residuo come
-/// atteso, qui è il report all'utente a dichiarare pulito ciò che non lo è. In
-/// entrambi i casi l'asserzione da scrivere per prima è quella sulla
-/// **promessa** — `/opt/odoo` non deve esistere — non quella sul **meccanismo**.
+/// R7's lesson reversed: there a CI test asserted the leftover as expected,
+/// here the report calls clean what is not. in both cases the assertion to
+/// write first is the one about the **promise**, not the **mechanism**.
 #[test]
 fn a_surviving_home_is_reported_even_when_every_undo_succeeded() {
     let report = rollback_con_home(true);
@@ -900,8 +883,8 @@ fn a_surviving_home_is_reported_even_when_every_undo_succeeded() {
     );
 }
 
-/// Quando la home sparisce davvero, non si segnala nulla: un allarme garantito
-/// insegna a ignorare gli allarmi.
+/// when the directory really goes, nothing is reported: a guaranteed alarm
+/// teaches people to ignore alarms.
 #[test]
 fn a_home_that_is_gone_is_not_reported() {
     let report = rollback_con_home(false);
@@ -913,8 +896,8 @@ fn a_home_that_is_gone_is_not_reported() {
     assert!(!report.has_anything_to_report());
 }
 
-/// In `--dry-run` la home c'è **per costruzione** — nessun undo ha rimosso nulla
-/// — quindi segnalarla sarebbe un allarme sempre acceso.
+/// in a dry run the directory is there **by construction**, so reporting it
+/// would be an alarm permanently on.
 #[test]
 fn the_dry_run_does_not_cry_wolf_about_the_home() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -926,8 +909,8 @@ fn the_dry_run_does_not_cry_wolf_about_the_home() {
     assert_eq!(report.home_left_behind, None);
 }
 
-/// Esegue un rollback minimo (un solo step) su un mock che dichiara la home
-/// presente o assente.
+/// runs a minimal rollback on a mock that declares the directory present or
+/// absent.
 fn rollback_con_home(home_esiste: bool) -> rollback::RollbackReport {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx(dir.path().join("state.json"));
@@ -954,20 +937,17 @@ fn rollback_su_mock(ctx: &invok::context::Context, home_esiste: bool) -> rollbac
     rollback::rollback_from_state(&state, ctx, &make_ops, &NoopReporter)
 }
 
-// --- A-V3-16: l'installer sa dire chi è ---------------------------------------
+// --- A-V3-16: the installer can say who it is -------------------------------
 
-/// `-V` e `--installer-version` stampano la versione **dell'installer** ed
-/// escono, senza toccare `--version`, che qui è la versione di Odoo.
+/// the short and long installer-version flags print the **installer's** version
+/// and exit, leaving `--version` — Odoo's version — alone.
 ///
-/// Il difetto è stato trovato installando il `.rpm` della 2.3.0 su una Fedora
-/// vera: `invok --version` rispondeva *«a value is required»*, e non
-/// esisteva alcun modo di chiedere al binario la propria versione. La
-/// tentazione — rinominare il flag — è la stessa che R12 ha scartato: si
-/// mantiene ciò che è in campo e si aggiunge la via che manca.
+/// found by installing a real package on a real machine: asking for the version
+/// answered *"a value is required"*, and there was no way to ask the binary its
+/// own. the temptation to rename the flag is the one R12 discarded: keep what
+/// is in the field and add the missing way.
 ///
-/// `try_parse_from` e non `parse_from`: un'azione `Version` fa uscire il
-/// processo, e con `parse_from` il test morirebbe senza spiegarsi (la lezione di
-/// R12 sull'alias `--enable-ssl`).
+/// the fallible parse, since a version action exits the process.
 #[test]
 fn the_installer_can_be_asked_its_own_version() {
     use clap::error::ErrorKind;
@@ -987,12 +967,11 @@ fn the_installer_can_be_asked_its_own_version() {
     }
 }
 
-/// E `--version 18` continua a essere la versione di **Odoo**.
+/// and the plain version flag still means **Odoo's** version.
 ///
-/// È la metà che rende la correzione non-distruttiva: script, `.env` e job di CI
-/// in campo passano `--version`, e se cambiasse significato smetterebbero di
-/// installare la release che chiedono — in silenzio, perché installerebbero
-/// comunque *qualcosa*.
+/// the half that makes the fix non-destructive: scripts and CI jobs in the
+/// field pass it, and a change of meaning would silently install the wrong
+/// release — silently, because they would still install *something*.
 #[test]
 fn the_odoo_version_flag_is_untouched() {
     let cli = Cli::try_parse_from(["invok", "--version", "18"])
@@ -1000,8 +979,7 @@ fn the_odoo_version_flag_is_untouched() {
     assert_eq!(cli.version.as_deref(), Some("18"));
 }
 
-/// Il manifesto registra chi l'ha scritto, e un manifesto vecchio resta
-/// leggibile.
+/// the manifest records who wrote it, and an old one stays readable.
 #[test]
 fn the_manifest_records_which_installer_wrote_it() {
     let config = config_fixture();
@@ -1011,12 +989,11 @@ fn the_manifest_records_which_installer_wrote_it() {
         "un manifesto scritto ora deve dire da chi"
     );
 
-    // Retrocompatibilità: un manifesto senza il campo si legge come «non lo so».
-    // Il campo si toglie dal JSON come oggetto, non con una sostituzione di
-    // stringa: quella dipende dall'ordine di serializzazione, e un fixture che
-    // dipende dall'ordine è un fixture che mente il giorno in cui l'ordine cambia
-    // (primo tentativo di questo test: il campo non veniva tolto affatto e
-    // l'asserzione passava per il motivo sbagliato).
+    // a manifest without the field reads as "I do not know". the field is
+    // removed from the JSON as an object, not by string replacement: that
+    // depends on serialisation order, and an order-dependent fixture lies the
+    // day the order changes — on the first attempt the field was not removed at
+    // all and the assertion passed for the wrong reason.
     let mut json: serde_json::Value = serde_json::to_value(&config).expect("serializza");
     json.as_object_mut()
         .expect("un oggetto")
@@ -1030,8 +1007,8 @@ fn the_manifest_records_which_installer_wrote_it() {
     );
 }
 
-/// La nota sul disallineamento parla **solo** quando c'è davvero, e dice
-/// entrambe le versioni.
+/// the mismatch note speaks **only** when there is one, and names both
+/// versions.
 #[test]
 fn a_manifest_from_another_installer_is_announced_not_refused() {
     use invok::state::version_mismatch_note;

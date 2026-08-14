@@ -1,18 +1,15 @@
-//! [`CreateDbRole`]: crea il ruolo PostgreSQL per Odoo, in modo reversibile.
+//! [`CreateDbRole`]: creates the PostgreSQL role for Odoo, reversibly.
 //!
-//! # Coordinamento con il database (ordine inverso)
+//! # coordinating with the database (reverse order)
 //!
-//! `DROP ROLE` fallisce se il ruolo possiede oggetti — e il ruolo possiede il
-//! database creato da [`CreateDatabase`](crate::steps::create_database). La
-//! sequenza di produzione è `CreateDbRole → CreateDatabase`, quindi al rollback
-//! l'ordine inverso esegue **prima** l'undo di `CreateDatabase` (drop del DB) e
-//! **poi** l'undo di `CreateDbRole` (drop del ruolo). Il DB sparisce prima del
-//! ruolo che lo possiede. Stesso pattern del coordinamento home in Fase 3.
+//! `DROP ROLE` fails if the role owns objects — and it owns the database
+//! created by [`CreateDatabase`](crate::steps::create_database). the production
+//! order is role then database, so the rollback drops the database **first**.
+//! same pattern as the home coordination between the first two steps.
 //!
-//! La password del ruolo arriva dal tipo [`Secret`](crate::secret::Secret): il
-//! valore in chiaro è estratto solo al punto di chiamata del confine
-//! `SystemOps` e **non viene mai loggato**; l'escaping e l'invio sicuro
-//! avvengono dentro `pg_create_role`.
+//! the password arrives as a [`Secret`](crate::secret::Secret): the plaintext
+//! is extracted only at the `SystemOps` call site and **never logged**, with
+//! escaping and safe delivery inside the boundary.
 
 use tracing::{info, warn};
 
@@ -22,7 +19,7 @@ use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
-/// Crea il ruolo `db_user` (reversibile).
+/// creates the `db_user` role, reversibly.
 pub struct CreateDbRole {
     ops: Box<dyn SystemOps>,
     prestate: PreState,
@@ -62,7 +59,7 @@ impl Step for CreateDbRole {
             return Ok(());
         }
 
-        // Estrai il segreto solo qui; peer auth se vuoto. Mai loggare la password.
+        // extract the secret only here; empty means peer auth.
         let password = if ctx.db_password.is_empty() {
             None
         } else {
@@ -84,7 +81,7 @@ impl Step for CreateDbRole {
             info!(role = %ctx.db_user, "undo (dry-run): DROP ROLE");
             return Ok(());
         }
-        // Il DB del ruolo è già stato droppato da CreateDatabase.undo (ordine inverso).
+        // the role's database was already dropped, in the reverse order.
         if let Err(e) = self.ops.pg_drop_role(&ctx.db_user) {
             warn!(role = %ctx.db_user, error = %e, "undo: DROP ROLE fallito, proseguo (best-effort)");
         }

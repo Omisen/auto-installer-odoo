@@ -1,12 +1,11 @@
-//! Test di [`SetupDataDir`] (R6, A-R5-3): il filestore di Odoo diventa un
-//! artefatto registrato, e quindi annullabile — ma solo con la stessa protezione
-//! che difende il database del cliente.
+//! [`SetupDataDir`] (A-R5-3): the filestore becomes a recorded artifact, and
+//! therefore undoable — under the same protection that defends the customer's
+//! database.
 //!
-//! I due assi da tenere separati sono la **proprietà della directory**
-//! (`PreState`: l'abbiamo creata noi?) e la **proprietà dei dati** (il database
-//! era nostro?). Servono entrambi: la prima da sola porterebbe a cancellare gli
-//! allegati di un DB preesistente, la seconda da sola a cancellare una directory
-//! che non abbiamo creato.
+//! the two axes to keep apart are **ownership of the directory** and
+//! **ownership of the data**. both are needed: the first alone would delete a
+//! pre-existing database's attachments, the second alone a directory we never
+//! created.
 
 mod common;
 
@@ -20,8 +19,8 @@ use invok::step::Step;
 use invok::steps::generate_config;
 use invok::steps::setup_data_dir::{DataDirSnapshot, SetupDataDir};
 
-/// Context su una home reale (tempdir), così `path_exists` risponde davvero:
-/// i livelli `.local` / `.local/share` vanno distinti uno per uno.
+/// a context over a real home, so `path_exists` really answers: the levels have
+/// to be told apart one by one.
 fn ctx(home: &Path, db_is_ours: bool) -> Context {
     let c = Context {
         odoo_user: "odoo".to_string(),
@@ -98,8 +97,8 @@ fn creates_the_filestore_and_removes_the_topmost_level_it_created() {
 
 #[test]
 fn a_preexisting_dot_local_is_not_touched() {
-    // Il cliente ha già `/opt/odoo/.local` (ci tiene altro). Noi creiamo solo
-    // `share/Odoo` sotto, e l'undo deve fermarsi a `share`: `.local` non è nostra.
+    // the customer already has the outer level, with other things in it. we
+    // create only what is below, and the undo must stop there.
     let home = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(home.path().join(".local")).expect("mkdir .local");
 
@@ -149,9 +148,9 @@ fn a_preexisting_filestore_is_left_alone_entirely() {
 
 #[test]
 fn the_filestore_of_a_preexisting_database_is_never_removed() {
-    // PROTEZIONE CRITICA. La directory l'abbiamo creata noi (`CreatedByUs`), ma
-    // il database era del cliente: dentro ci sono i suoi allegati. `CreateDatabase`
-    // non droppa quel DB, e qui non si cancella il suo filestore.
+    // CRITICAL PROTECTION: the directory is ours, but the database was the
+    // customer's and their attachments are inside. that database is not
+    // dropped, and its filestore is not deleted.
     let home = tempfile::tempdir().expect("tempdir");
     let (ops, log) = mock();
     let mut step = SetupDataDir::with_ops(Box::new(ops));
@@ -172,14 +171,13 @@ fn the_filestore_of_a_preexisting_database_is_never_removed() {
 
 #[test]
 fn the_database_verdict_crosses_the_disk_boundary() {
-    // Il caso reale del comando `rollback`: il Context è ricostruito dalla config
-    // persistita, dove `db_created_by_us` vale `false` di default. Se l'undo
-    // leggesse quel flag invece del proprio snapshot, il filestore di
-    // un'installazione nostra non verrebbe mai rimosso (residuo) — e con il flag
-    // invertito succederebbe il peggio: quello di un cliente rimosso per errore.
+    // the real `rollback` case: the context is rebuilt from the persisted
+    // config, where the flag defaults to false. reading that instead of the
+    // step's own snapshot would leave our filestore behind — and inverted,
+    // would remove a customer's by mistake.
     let home = tempfile::tempdir().expect("tempdir");
 
-    // Installazione: DB nostro, filestore creato da noi.
+    // installation: our database, our filestore.
     let (ops, _log) = mock();
     let mut live = SetupDataDir::with_ops(Box::new(ops));
     let install_ctx = ctx(home.path(), true);
@@ -187,7 +185,7 @@ fn the_database_verdict_crosses_the_disk_boundary() {
     live.run(&install_ctx).expect("run");
     let persisted = live.snapshot_value();
 
-    // Rollback da disco: Context "vergine" (flag a false), step reidratato.
+    // rollback from disk: a pristine context, the step rehydrated.
     let (ops, log) = mock();
     let mut from_disk = SetupDataDir::with_ops(Box::new(ops));
     from_disk.rehydrate(&persisted).expect("rehydrate");
@@ -203,8 +201,9 @@ fn the_database_verdict_crosses_the_disk_boundary() {
 
 #[test]
 fn a_snapshot_pointing_outside_the_perimeter_removes_nothing() {
-    // Fail-closed su uno stato corrotto (o scritto da un'altra installazione): un
-    // `created_root` fuori da `odoo_home` non deve diventare un rm -rf altrove.
+    // fail-closed on a corrupted state, or one written by another installation:
+    // a recorded root outside the home must not become a recursive removal
+    // elsewhere.
     let home = tempfile::tempdir().expect("tempdir");
     let (ops, log) = mock();
     let mut step = SetupDataDir::with_ops(Box::new(ops));
@@ -219,7 +218,7 @@ fn a_snapshot_pointing_outside_the_perimeter_removes_nothing() {
         step.undo(&ctx(home.path(), true))
             .expect("undo best-effort");
     }
-    // E anche il caso limite: created_root == odoo_home.
+    // and the edge case: the recorded root is the home itself.
     let snapshot = serde_json::json!({
         "prestate": "CreatedByUs",
         "created_root": home.path(),
@@ -246,8 +245,8 @@ fn dry_run_mutates_nothing() {
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
-    // Il dry-run non passa a CreatedByUs, quindi l'undo è inerte per costruzione:
-    // forziamo lo stato "creato da noi" per provare anche il ramo di rimozione.
+    // a dry run never reaches `CreatedByUs`, so the state is forced to exercise
+    // the removal branch too.
     let snapshot = serde_json::json!({
         "prestate": "CreatedByUs",
         "created_root": home.path().join(".local"),

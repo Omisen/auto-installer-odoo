@@ -1,13 +1,13 @@
-//! [`SetupSystemd`]: installa e attiva il servizio systemd di Odoo.
+//! [`SetupSystemd`]: installs and activates Odoo's systemd service.
 //!
-//! Fase di consolidamento: riusa la struttura a **tre PreState indipendenti** di
-//! [`SetupPostgres`](crate::steps::setup_postgres) (unit-file / enabled / active)
-//! con la stessa regola D4, e il rendering da **template embedded** di
-//! [`GenerateConfig`](crate::steps::generate_config). Nessuna protezione di dati
-//! e nessuno stato condiviso: i tre assi sono locali allo step.
+//! reuses two proven patterns: the **three independent `PreState`s** of
+//! [`SetupPostgres`](crate::steps::setup_postgres) under the same D4 rule, and
+//! the **embedded template** rendering of
+//! [`GenerateConfig`](crate::steps::generate_config). no data protection and no
+//! shared state — the three axes are local to the step.
 //!
-//! Cura specifica: l'**ordine dell'undo** — stop → disable → rm → reload —
-//! così systemd non resta con riferimenti a un'unit sparita.
+//! the specific care is the **undo's order**, stop → disable → rm → reload, so
+//! systemd is never left referencing a unit that has vanished.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -18,15 +18,15 @@ use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
-/// Template dell'unit, incorporato nel binario.
+/// the unit template, embedded in the binary.
 const SERVICE_TEMPLATE: &str = include_str!("../../templates/odoo.service.tpl");
 const UNIT_MODE: u32 = 0o644;
 const REPO_SUBDIR: &str = "odoo";
 const VENV_SUBDIR: &str = "sandbox";
-/// Attesa di assestamento dopo lo start, in produzione.
+/// how long production waits for the service to settle after starting.
 const DEFAULT_SETTLE_SECS: u64 = 3;
 
-/// Snapshot dei tre assi indipendenti del servizio.
+/// snapshot of the service's three independent axes.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SystemdSnapshot {
     pub unit_file: PreState,
@@ -34,7 +34,7 @@ pub struct SystemdSnapshot {
     pub active: PreState,
 }
 
-/// Installa/abilita/avvia il servizio systemd, ripristinando ogni asse.
+/// installs, enables and starts the service, restoring each axis on undo.
 pub struct SetupSystemd {
     ops: Box<dyn SystemOps>,
     settle_secs: u64,
@@ -42,12 +42,12 @@ pub struct SetupSystemd {
 }
 
 impl SetupSystemd {
-    /// Costruttore di **produzione**: attende che il servizio si assesti prima di
-    /// verificarne lo stato.
+    /// the **production** constructor: waits for the service to settle before
+    /// checking its state.
     ///
-    /// [`Self::with_ops`] azzera l'attesa perché i test non devono dormire; usarlo
-    /// per il `run` farebbe interrogare `is-active` nell'istante stesso dello
-    /// start, cioè quando un servizio reale non è ancora salito.
+    /// [`Self::with_ops`] zeroes that wait because tests must not sleep, and
+    /// using it for a real `run` would query `is-active` at the very instant of
+    /// the start, when a real service is not up yet.
     pub fn for_run(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -56,7 +56,7 @@ impl SetupSystemd {
         }
     }
 
-    /// Costruttore per i test: `SystemOps` iniettabile, nessuna attesa.
+    /// the test constructor: injectable `SystemOps`, no waiting.
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -76,8 +76,8 @@ impl SetupSystemd {
         ))
     }
 
-    /// Temporaneo privato accanto alla unit (stesso filesystem → rename
-    /// atomico), con nome imprevedibile e creazione `O_EXCL | O_NOFOLLOW`.
+    /// a private temporary beside the unit, so the move is an atomic rename;
+    /// unpredictable name, fail-closed creation.
     fn temp_path(unit_path: &std::path::Path) -> std::path::PathBuf {
         crate::system_ops::private_temp_path(unit_path, "odoo.service")
     }
@@ -131,15 +131,15 @@ impl Step for SetupSystemd {
         let unit = Self::unit_name(ctx);
         let unit_path = Self::unit_path(ctx);
 
-        // Rendering + validazione dell'unit.
+        // render and validate the unit.
         let content = render_unit(ctx);
         validate_unit(&content)?;
 
-        // Installa (idempotente: sovrascrive). Il file governa solo l'undo.
+        // idempotent: overwrites. the `PreState` only governs the undo.
         let tmp = Self::temp_path(&unit_path);
         self.ops.create_private_file(&tmp, &content)?;
-        // Temp con nome casuale in /etc/systemd/system, che il rollback non
-        // ripulisce: se il move fallisce, lo togliamo di mezzo noi.
+        // a randomly named temporary in a directory the rollback does not
+        // clean: if the move fails, we remove it ourselves.
         if let Err(e) = self.ops.move_file(&tmp, &unit_path) {
             let _ = self.ops.remove_file(&tmp);
             return Err(e);
@@ -151,13 +151,13 @@ impl Step for SetupSystemd {
         }
         self.ops.daemon_reload()?;
 
-        // Enable solo se non già abilitato (D4).
+        // enable only if it was not already enabled (D4).
         if self.snap.enabled == PreState::Untracked {
             self.ops.service_enable(&unit)?;
             self.snap.enabled = PreState::CreatedByUs;
         }
 
-        // Start (o restart se già attivo, per applicare la nuova config).
+        // start, or restart if already running, to apply the new config.
         if self.snap.active == PreState::Preexisting {
             self.ops.service_restart(&unit)?;
         } else {
@@ -165,7 +165,7 @@ impl Step for SetupSystemd {
             self.snap.active = PreState::CreatedByUs;
         }
 
-        // Assestamento + verifica.
+        // settle, then verify.
         self.settle();
         if !self.ops.service_is_active(&unit) {
             return Err(StepError::Precondition(format!(
@@ -186,27 +186,27 @@ impl Step for SetupSystemd {
         let unit = Self::unit_name(ctx);
         let unit_path = Self::unit_path(ctx);
 
-        // Ordine cruciale: stop → disable → rm → reload.
+        // the order is crucial: stop → disable → rm → reload.
 
-        // stop solo se l'avevamo avviato noi (D4).
+        // stop only what we started (D4).
         if self.snap.active == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_stop(&unit) {
                 warn!(error = %e, "undo: stop servizio fallito, proseguo (best-effort)");
             }
         }
-        // disable solo se l'avevamo abilitato noi (D4).
+        // disable only what we enabled (D4).
         if self.snap.enabled == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_disable(&unit) {
                 warn!(error = %e, "undo: disable servizio fallito, proseguo (best-effort)");
             }
         }
-        // rimuovi l'unit file solo se l'abbiamo creato noi.
+        // remove the unit file only if we created it.
         if self.snap.unit_file == PreState::CreatedByUs {
             if let Err(e) = self.ops.remove_file(&unit_path) {
                 warn!(error = %e, "undo: rimozione unit file fallita, proseguo (best-effort)");
             }
         }
-        // reload finale: systemd dimentica l'unit rimossa.
+        // the final reload makes systemd forget the removed unit.
         if let Err(e) = self.ops.daemon_reload() {
             warn!(error = %e, "undo: daemon-reload fallito, proseguo (best-effort)");
         }
@@ -224,7 +224,7 @@ impl Step for SetupSystemd {
     }
 }
 
-/// Renderizza l'unit dal template embedded sostituendo i `{{VAR}}`.
+/// renders the unit from the embedded template.
 pub fn render_unit(ctx: &Context) -> String {
     let install = ctx.install_dir.to_string_lossy();
     let home = ctx.odoo_home.to_string_lossy();
@@ -244,7 +244,7 @@ pub fn render_unit(ctx: &Context) -> String {
     out
 }
 
-/// Verifica che nessun placeholder `{{...}}` sia rimasto nell'unit renderizzato.
+/// checks that no placeholder is left in the rendered unit.
 pub fn validate_unit(content: &str) -> Result<(), StepError> {
     if content.contains("{{") {
         return Err(StepError::Precondition(

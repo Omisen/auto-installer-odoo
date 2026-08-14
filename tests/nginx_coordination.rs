@@ -1,5 +1,5 @@
-//! Coordinamento Nginx (Fase 9): rollback completo via engine — il default site
-//! è ripristinato e solo il delta firewall è rimosso.
+//! nginx coordination: a complete rollback through the engine restores the
+//! default site and removes only the firewall delta.
 
 mod common;
 
@@ -26,8 +26,8 @@ fn full_rollback_restores_default_site_and_removes_only_delta() {
     let mk = |cfg: MockConfig| MockSystemOps::with_log(cfg, Arc::clone(&log));
     let ufw_rules: HashSet<String> = ["80/tcp"].iter().map(|s| s.to_string()).collect();
 
-    // Install/write/reload usano config default; enable_site vede il default
-    // site presente; firewall ha ufw attivo con 80 già aperta.
+    // the default site is present, and the firewall is active with port 80
+    // already open.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NginxInstall::with_ops(Box::new(mk(MockConfig::default())))),
         Box::new(NginxWriteConfig::with_ops(Box::new(mk(MockConfig {
@@ -68,13 +68,13 @@ fn full_rollback_restores_default_site_and_removes_only_delta() {
     let ops = ops_of(&log);
     let default_site = PathBuf::from("/etc/nginx/sites-enabled/default");
 
-    // Default site ripristinato.
+    // the default site is back.
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site)),
         "il rollback deve ripristinare il default site del cliente"
     );
-    // Firewall: rimosso solo il delta (443), mai la 80 preesistente.
+    // only the delta is removed, never the pre-existing rule.
     assert!(ops.contains(&Op::UfwDelete("443/tcp".to_string())));
     assert!(
         !ops.contains(&Op::UfwDelete("80/tcp".to_string())),

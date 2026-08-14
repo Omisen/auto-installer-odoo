@@ -1,5 +1,5 @@
-//! Test di [`InstallWkhtmltopdf`] (Fase 4): il cuore è G3 — un checksum errato
-//! deve far fallire il run senza installare nulla.
+//! [`InstallWkhtmltopdf`]: the heart is G3 — a wrong checksum must fail the run
+//! without installing anything.
 
 mod common;
 
@@ -30,7 +30,7 @@ fn ctx(codename: &str) -> Context {
     }
 }
 
-/// SHA-256 reale di `bytes` (scritti in un file di prova).
+/// the real SHA-256 of some bytes.
 fn sha_of(bytes: &[u8], dir: &Path) -> String {
     let probe = dir.join("probe.bin");
     std::fs::write(&probe, bytes).expect("write probe");
@@ -53,7 +53,7 @@ fn checksum_mismatch_fails_without_installing() {
     let (mock, log) = MockSystemOps::new(cfg);
     let downloader = MockDownloader::new(bytes, log.clone());
 
-    // Tabella con un hash SBAGLIATO per jammy.
+    // a table carrying a WRONG hash.
     let checksums = table(&[("jammy", &"00".repeat(32))]);
     let mut step = InstallWkhtmltopdf::with_parts(
         Box::new(mock),
@@ -84,8 +84,8 @@ fn checksum_mismatch_fails_without_installing() {
 
 #[test]
 fn checksum_match_installs() {
-    // Ramo felice, per **ognuno** dei tre suffissi realmente pubblicati dalla
-    // release 0.12.6.1-3: download → hash combacia col pin → install via apt.
+    // the happy path for **each** suffix the release really publishes:
+    // download, hash matches the pin, install through the manager.
     for (codename, suffix) in [
         ("jammy", "jammy"),
         ("noble", "jammy"),
@@ -113,7 +113,7 @@ fn checksum_match_installs() {
         step.run(&c).expect("run con checksum valido");
 
         let ops = ops_of(&log);
-        // Il .deb scaricato è quello del suffisso mappato, non del codename.
+        // the downloaded package is the mapped suffix's, not the codename's.
         assert!(
             ops.iter().any(|op| matches!(op, Op::Download { url, .. }
                 if url.ends_with(&format!("wkhtmltox_0.12.6.1-3.{suffix}_amd64.deb")))),
@@ -131,11 +131,10 @@ fn checksum_match_installs() {
     }
 }
 
-/// A-RT-1 (trovato in campo su Multipass, Ubuntu 22.04 minimale): il `.deb` di
-/// wkhtmltopdf dipende da `fontconfig`, `libxrender1`, `xfonts-75dpi`,
-/// `xfonts-base`, assenti su una VM pulita. Con `dpkg -i` lo step falliva
-/// sempre — e per giunta lasciava dpkg rotto. L'installazione deve passare da
-/// un comando che **risolve le dipendenze**.
+/// A-RT-1, found on a minimal VM: the package depends on fonts and libraries a
+/// clean machine lacks. installing it directly always failed — and left the
+/// package database broken. installation must go through a command that
+/// **resolves dependencies**.
 #[test]
 fn install_resolves_dependencies_instead_of_bare_dpkg() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -164,8 +163,8 @@ fn install_resolves_dependencies_instead_of_bare_dpkg() {
     );
 }
 
-/// Ma un errore vero resta un errore: se l'installazione fallisce davvero (non
-/// per dipendenze risolvibili), lo step deve fallire e innescare il rollback.
+/// but a real error stays one: if the installation genuinely fails, the step
+/// must fail and trigger the rollback.
 #[test]
 fn a_real_install_failure_still_fails_the_step() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -198,10 +197,9 @@ fn a_real_install_failure_still_fails_the_step() {
     );
 }
 
-/// Ramo felice con la **tabella di produzione**: i pin non sono più vuoti,
-/// quindi lo step arriva davvero fino al confronto (prima falliva sempre prima,
-/// su "checksum non disponibile"). Qui il `.deb` mock è ovviamente diverso da
-/// quello vero → il confronto col pin reale deve fallire, senza installare.
+/// the happy path against the **production table**: the pins are populated, so
+/// the step really reaches the comparison. the mock package obviously differs
+/// from the real one, so the comparison must fail without installing.
 #[test]
 fn production_pins_reject_a_deb_that_is_not_the_pinned_one() {
     for codename in ["jammy", "noble", "bullseye", "bookworm", "chimera"] {
@@ -235,8 +233,8 @@ fn production_pins_reject_a_deb_that_is_not_the_pinned_one() {
     }
 }
 
-/// La tabella di produzione deve coprire **ogni** suffisso che `map_package_suffix`
-/// può produrre: un buco qui rimetterebbe lo step nello stato "fallisce sempre".
+/// the production table must cover **every** suffix the mapping can produce: a
+/// hole here would put the step back into "always fails".
 #[test]
 fn production_pins_cover_every_mapped_suffix() {
     let pins = default_checksums();
@@ -284,9 +282,9 @@ fn missing_checksum_refuses_to_install() {
     let (mock, log) = MockSystemOps::new(cfg);
     let downloader = MockDownloader::new(b"x".to_vec(), log.clone());
 
-    // Tabella vuota: non è più il caso di produzione (i pin sono popolati), ma
-    // il fail-closed va comunque provato — è la difesa se un suffisso futuro
-    // finisse senza pin.
+    // an empty table is no longer the production case, but the fail-closed path
+    // must still be exercised: it is the defence if a future suffix ends up
+    // without a pin.
     let mut step = InstallWkhtmltopdf::with_parts(
         Box::new(mock),
         Box::new(downloader),
@@ -340,7 +338,7 @@ fn preexisting_correct_version_is_skipped() {
     );
 }
 
-/// Costruisce un `OsInfo` della famiglia Debian per i test di mappatura.
+/// builds an `OsInfo` of the deb family, for the mapping tests.
 fn os_debian(id: &str, codename: Option<&str>) -> OsInfo {
     OsInfo {
         id: id.to_string(),
@@ -360,8 +358,8 @@ fn codename_mapping() {
     assert_eq!(debian("bookworm").suffix, "bookworm");
     assert_eq!(debian("bullseye").suffix, "bullseye");
 
-    // focal non ha un ramo dedicato: il .deb `focal_amd64` non esiste nella
-    // release 0.12.6.1-3, e Ubuntu 20.04 è già rifiutato da validate_os.
+    // that codename has no dedicated branch: the release publishes no package
+    // for it, and the OS is rejected upstream anyway.
     let focal = ubuntu("focal");
     assert_eq!(focal.suffix, "jammy");
     assert!(
@@ -370,15 +368,13 @@ fn codename_mapping() {
     );
 }
 
-/// **A5.2.** Un codename ignoto ricade sul pacchetto più recente della **sua
-/// famiglia**, non su un default unico.
+/// **A5.2.** an unknown codename falls back to the newest package of **its own
+/// family**, not to a single default.
 ///
-/// Il caso non era teorico come sembrava: Debian 13 (`trixie`) supera il
-/// controllo di versione — le soglie sono aperte verso l'alto, ed è giusto che
-/// lo siano — e prima si sarebbe preso un `.deb` costruito per **Ubuntu 22.04**,
-/// con le librerie di sistema di un'altra distribuzione. Un fallback che ignora
-/// la famiglia non è un ripiego prudente: è la scelta sbagliata travestita da
-/// default.
+/// not as theoretical as it looked: a newer Debian passes the version check —
+/// the thresholds are open upwards, rightly — and would previously have taken a
+/// package built for another distribution's system libraries. a fallback that
+/// ignores the family is the wrong choice dressed as a default.
 #[test]
 fn an_unknown_codename_falls_back_within_its_own_family() {
     let debian_futura = map_package_suffix(&os_debian("debian", Some("trixie")));
@@ -395,17 +391,16 @@ fn an_unknown_codename_falls_back_within_its_own_family() {
     assert_eq!(ubuntu_futura.suffix, "jammy");
     assert!(ubuntu_futura.fallback);
 
-    // Dentro la famiglia Debian, un `id` che non è "debian" ricade su `jammy`:
-    // è il ripiego Ubuntu, e Ubuntu è l'altra metà di quella famiglia.
+    // inside the family, an id that is not the Debian one falls back to the
+    // Ubuntu package: the other half of that family.
     let senza_codename = map_package_suffix(&os_debian("ubuntu", None));
     assert_eq!(senza_codename.suffix, "jammy");
     assert!(senza_codename.fallback);
 }
 
-/// Costruisce un `OsInfo` Fedora. Il codename è la **stringa vuota**, com'è in
-/// campo: `/etc/os-release` di Fedora 41 dichiara `VERSION_CODENAME=""`, quindi
-/// non è assenza — è un valore che non significa nulla, e il codice non deve
-/// poggiarci sopra.
+/// builds an `OsInfo` of the rpm family. the codename is the **empty string**,
+/// as in the field: not absence but a value that means nothing, and the code
+/// must not rest on it.
 fn os_fedora(version: &str) -> OsInfo {
     OsInfo {
         id: "fedora".to_string(),
@@ -415,8 +410,8 @@ fn os_fedora(version: &str) -> OsInfo {
     }
 }
 
-/// **Su Fedora la chiave cambia natura.** Il codename lì non esiste, quindi la
-/// scelta del pacchetto passa dalla **versione**.
+/// **on the rpm family the key changes nature**: there is no codename, so the
+/// package is chosen by **version**.
 #[test]
 fn on_fedora_the_suffix_comes_from_the_version_not_the_codename() {
     let m = map_package_suffix(&os_fedora("41"));
@@ -430,15 +425,13 @@ fn on_fedora_the_suffix_comes_from_the_version_not_the_codename() {
     );
 }
 
-/// **A5.2 sulla seconda famiglia.** Una Fedora diversa dalla 37 prende comunque
-/// `fedora37` — l'unico `.rpm` che upstream costruisce per questa famiglia — ma
-/// come **ripiego dichiarato**.
+/// **A5.2 on the second family.** any release takes the single package upstream
+/// builds for it, but as a **declared fallback**.
 ///
-/// Il `fallback: true` non è un dettaglio: quattro release di distanza sono
-/// tante, e chi installa ha diritto di sapere dal log che il pacchetto non è
-/// stato costruito per la sua. Se le librerie non tornassero sarebbe comunque
-/// `dnf` a rifiutare — un `.rpm` dichiara i propri `Requires` — quindi il
-/// fallimento sarebbe rumoroso, non silenzioso.
+/// the flag is not a detail: four releases of distance is a lot, and whoever
+/// installs deserves to read in the log that the package was not built for
+/// theirs. incompatible libraries would still make the manager refuse — a
+/// package declares its own requirements — so the failure would be loud.
 #[test]
 fn any_other_fedora_falls_back_to_the_only_package_built_for_its_family() {
     let esatta = map_package_suffix(&os_fedora("37"));
@@ -458,11 +451,10 @@ fn any_other_fedora_falls_back_to_the_only_package_built_for_its_family() {
     }
 }
 
-/// Il nome del file segue lo schema **rpm**, non quello deb.
+/// the file name follows the **rpm** scheme, not the deb one.
 ///
-/// Sono due convenzioni diverse di upstream (`wkhtmltox_{v}.{s}_amd64.deb`
-/// contro `wkhtmltox-{v}.{s}.x86_64.rpm`), e sbagliarla darebbe un 404 al
-/// download. Verificato contro gli asset realmente pubblicati.
+/// two different upstream conventions, and getting it wrong would 404 the
+/// download. checked against the really published assets.
 #[test]
 fn the_package_file_name_follows_the_format_of_its_family() {
     use invok::packaging::{apt::AptBackend, dnf::DnfBackend, PackageManager};
@@ -477,12 +469,11 @@ fn the_package_file_name_follows_the_format_of_its_family() {
     );
 }
 
-/// **Fail-closed su una famiglia senza pin.** Finché i pin `.rpm` non sono stati
-/// generati, l'installazione su Fedora si ferma **prima di scaricare**.
+/// **fail-closed on a family without pins**: until they are generated,
+/// installation stops **before downloading**.
 ///
-/// È G3 applicato a una famiglia intera: installare un binario di terze parti
-/// senza sapere cosa si sta installando è precisamente ciò che il pin esiste per
-/// impedire, e «funziona lo stesso» non è una ragione per aggirarlo.
+/// G3 applied to a whole family: installing a third-party binary without
+/// knowing what it is, is exactly what the pin exists to prevent.
 #[test]
 fn a_family_without_pins_refuses_to_install_anything() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -492,9 +483,8 @@ fn a_family_without_pins_refuses_to_install_anything() {
     });
     let downloader = MockDownloader::new(b"qualsiasi cosa".to_vec(), log.clone());
 
-    // Tabella **vuota** di proposito: il caso di produzione non è più questo —
-    // i pin ci sono per entrambe le famiglie — ma la difesa va provata comunque,
-    // perché è quella che scatterebbe alla terza famiglia.
+    // deliberately **empty**: no longer the production case, both families have
+    // pins, but this is the defence a third family would meet.
     let mut step = InstallWkhtmltopdf::with_parts(
         Box::new(mock),
         Box::new(downloader),
@@ -523,18 +513,17 @@ fn a_family_without_pins_refuses_to_install_anything() {
     );
 }
 
-/// A-V3-3: il `.deb` non deve nascere a un percorso che chiunque legga il
-/// sorgente possa prevedere.
+/// A-V3-3: the package must not be born at a path anyone reading the source can
+/// predict.
 ///
-/// Con `<tmp>/wkhtmltox_0.12.6.1-3.jammy_amd64.deb` un utente locale poteva
-/// piazzare a quel path un symlink verso un file di sistema **prima** che
-/// l'installer partisse, e farci scrivere sopra da root. Il pin TOFU protegge il
-/// contenuto — un `.deb` sostituito viene rifiutato — ma non la scrittura, che
-/// avviene prima della verifica.
+/// with a fixed name a local user could plant a symlink towards a system file
+/// **before** the installer started, and have root write through it. the TOFU
+/// pin protects the contents — a substituted package is refused — but not the
+/// write, which happens before the check.
 ///
-/// Vincolo che tira nella direzione opposta: `apt-get install <file>` riconosce
-/// un percorso locale **solo** dall'estensione `.deb`. Il nome deve quindi essere
-/// imprevedibile *e* finire in `.deb`, e sono entrambe condizioni necessarie.
+/// a constraint pulls the other way: the manager recognises a local path
+/// **only** by its extension. the name must therefore be unpredictable *and*
+/// keep it.
 #[test]
 fn the_downloaded_deb_has_an_unpredictable_path() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -582,8 +571,8 @@ fn the_downloaded_deb_has_an_unpredictable_path() {
         "il temporaneo deve essere nascosto: {nome}"
     );
 
-    // Il file installato è quello scaricato: non si verifica un file e se ne
-    // installa un altro.
+    // the installed file is the downloaded one: we do not verify one file and
+    // install another.
     assert!(
         ops.iter()
             .any(|op| matches!(op, Op::PkgInstallLocalFile(p) if *p == dest)),
@@ -591,18 +580,16 @@ fn the_downloaded_deb_has_an_unpredictable_path() {
     );
 }
 
-/// I pin sono tutti **distinti**.
+/// the pins are all **distinct**.
 ///
-/// Il valore di un pin non è verificabile offline — bisognerebbe scaricare il
-/// file, e i test girano senza rete — quindi «questo pin è quello giusto» resta
-/// fuori dalla portata della suite: se ne accorgerebbe il campo, dove uno sha
-/// che non combacia ferma lo step con «checksum non valido (G3)» prima di
-/// installare. Rumoroso, non silenzioso: il fail-closed protegge anche
-/// dall'errore di trascrizione.
+/// a pin's value cannot be checked offline — that would mean downloading the
+/// file, and these tests have no network — so "this pin is the right one" is
+/// out of the suite's reach. the field would notice, where a mismatch stops the
+/// step before installing: loud, not silent.
 ///
-/// Una forma di quell'errore però si prende: il copia-incolla che duplica la
-/// riga sopra e dimentica di cambiare il valore. Due pacchetti diversi non hanno
-/// lo stesso SHA-256.
+/// one form of the error is caught here: the copy-paste that duplicates the
+/// line above and forgets to change the value. two different packages do not
+/// share a hash.
 #[test]
 fn every_pin_is_distinct() {
     let pins = default_checksums();

@@ -1,22 +1,17 @@
-//! M4 — i percorsi di nginx seguono la famiglia, e dove un concetto non esiste
-//! lo step non lo inventa.
+//! M4: nginx's paths follow the family, and where a concept does not exist the
+//! step does not invent it.
 //!
-//! # Le due divergenze che non sono «un percorso diverso»
+//! two divergences are not "a different path": on one family the enabled-sites
+//! directory **has no other name, it is absent**, and the default server is not
+//! a separate file but a block inside the main configuration. representing
+//! those with different constants would have created symlinks where nginx never
+//! reads, and looked for a file that does not exist.
 //!
-//! Su Fedora `sites-enabled` **non ha un altro nome: non c'è**, e il server di
-//! default non è un file separato — è un blocco dentro `/etc/nginx/nginx.conf`.
-//! Rappresentarle con costanti diverse avrebbe fatto creare symlink in una
-//! directory che nginx non legge, e cercare un file che non esiste.
+//! with `Option` the difference lives in the **data**, and the steps read it
+//! instead of deriving it.
 //!
-//! Con `Option` la differenza sta nei **dati**, e gli step la leggono invece di
-//! dedurla.
-//!
-//! # Cosa NON cambia
-//!
-//! Il contenuto del vhost: `templates/nginx.conf.tpl` è identico sulle due
-//! famiglie, e non c'era ragione di renderlo divergente. Il pattern delta del
-//! firewall neanche — il token della regola è lo stesso, ed è il motivo per cui
-//! `nginx-firewall` non è stato toccato né in M2 né qui.
+//! what does **not** change: the vhost's contents, identical on both families,
+//! and the firewall's delta pattern, whose rule token is the same.
 
 mod common;
 
@@ -45,14 +40,15 @@ fn cfg(family: OsFamily) -> MockConfig {
     }
 }
 
-// --- Il layout: dati, non costanti sparse ------------------------------------
+// --- the layout: data, not scattered constants ------------------------------
 
-/// Il vhost finisce dove **questa** famiglia lo cerca, con l'estensione giusta.
+/// the vhost lands where **this** family looks for it, with the right
+/// extension.
 ///
-/// L'estensione non è cosmesi: `nginx.conf` su Fedora include `conf.d/*.conf` —
-/// **solo** quelli. Un vhost senza estensione lì sarebbe invisibile e nulla lo
-/// direbbe: nginx partirebbe, il reload riuscirebbe, e Odoo non sarebbe
-/// raggiungibile. È lo stesso difetto senza sintomo di A-V3-7.
+/// the extension is not cosmetic: one family includes **only** files carrying
+/// it. a vhost without it would be invisible with nothing to say so — nginx
+/// would start, the reload would succeed, Odoo would be unreachable. the same
+/// symptomless defect as A-V3-7.
 #[test]
 fn the_vhost_goes_where_its_family_looks_for_it() {
     assert_eq!(
@@ -67,8 +63,8 @@ fn the_vhost_goes_where_its_family_looks_for_it() {
     );
 }
 
-/// Dove il concetto **non esiste**, la risposta è `None` — non un percorso
-/// inventato.
+/// where the concept **does not exist**, the answer is `None` — never an
+/// invented path.
 #[test]
 fn a_missing_concept_is_none_not_a_made_up_path() {
     let debian = Debian::new().nginx_layout();
@@ -91,12 +87,11 @@ fn a_missing_concept_is_none_not_a_made_up_path() {
     assert_eq!(fedora.enabled_link("18"), None);
 }
 
-/// Il backup del default site **non** finisce nella directory che nginx include.
+/// the default site's backup does **not** land in the directory nginx globs.
 ///
-/// `sites-enabled/*` carica ogni file, non solo i `.conf`: un backup lasciato lì
-/// verrebbe servito lo stesso e la porta 80 resterebbe occupata — cioè il
-/// difetto che stiamo correggendo, con un altro nome. C'era già un test su
-/// questo prima di M4; qui si verifica che il **layout** non lo riapra.
+/// that glob loads every file, so a backup left there would still be served and
+/// the port would stay occupied. a test already covered this; here the
+/// **layout** is checked not to reopen it.
 #[test]
 fn the_backup_never_lands_where_nginx_globs() {
     for (nome, layout) in [
@@ -112,11 +107,11 @@ fn the_backup_never_lands_where_nginx_globs() {
     }
 }
 
-// --- Gli step leggono il layout invece di dedurlo ----------------------------
+// --- the steps read the layout instead of deriving it -----------------------
 
-/// Su Debian nulla cambia: symlink creato, default site spiazzato. È il
-/// comportamento che la CI verifica in campo su entrambe le nature del default
-/// site, e M4 non doveva toccarlo.
+/// on one family nothing changes: the symlink is created and the default site
+/// displaced — the behaviour the CI exercises in the field on both natures, and
+/// which M4 was not to touch.
 #[test]
 fn on_debian_the_site_is_enabled_with_a_symlink() {
     let (ops, log) = MockSystemOps::new(MockConfig {
@@ -145,9 +140,9 @@ fn on_debian_the_site_is_enabled_with_a_symlink() {
     );
 }
 
-/// Su Fedora **non si crea alcun symlink**: scrivere il vhost in `conf.d` è già
-/// abilitarlo, e un symlink in una directory inesistente sarebbe un artefatto
-/// creato per niente — che l'undo dovrebbe poi rimuovere.
+/// on the other, **no symlink is created**: writing the vhost is enabling it,
+/// and a symlink in a directory that does not exist would be an artifact made
+/// for nothing — which the undo would then have to remove.
 #[test]
 fn on_fedora_writing_the_vhost_is_already_enabling_it() {
     let (ops, log) = MockSystemOps::new(cfg(OsFamily::Fedora));
@@ -174,20 +169,18 @@ fn on_fedora_writing_the_vhost_is_already_enabling_it() {
     );
 }
 
-/// **Il punto più delicato di M4.** Su Fedora il default site non si tocca:
-/// vive dentro `nginx.conf`, e rimuoverlo significherebbe riscrivere la
-/// configurazione principale di un servizio del cliente.
+/// **M4's most delicate point.** there the default site is left alone: it lives
+/// inside the main configuration, and removing it would mean rewriting a
+/// customer's service configuration.
 ///
-/// È la scelta più prudente delle due, e la conseguenza va dichiarata (README):
-/// su una Fedora con nginx appena installato, un hostname che non combacia con
-/// `NGINX_SERVER_NAME` continua a ricevere la pagina di benvenuto. Meglio quello
-/// che il rischio di A-V3-5, dove trattare male il default site è costato la
-/// distruzione di configurazione del cliente.
+/// the prudent choice of the two, with the consequence declared: a non-matching
+/// hostname still gets the welcome page. better that than A-V3-5's risk, where
+/// mishandling the default site cost a customer their configuration.
 #[test]
 fn on_fedora_the_default_server_is_never_touched() {
     let (ops, log) = MockSystemOps::new(MockConfig {
-        // Anche dichiarando un default site presente, su questa famiglia il
-        // percorso non esiste e non deve essere cercato.
+        // even declaring a default site present, on this family the path does
+        // not exist and must not be looked for.
         default_site_exists: true,
         ..cfg(OsFamily::Fedora)
     });
@@ -208,8 +201,8 @@ fn on_fedora_the_default_server_is_never_touched() {
     );
 }
 
-/// Il vhost si scrive nella directory della famiglia, e lo step non conosce
-/// alcuna costante.
+/// the vhost is written in the family's directory, and the step knows no
+/// constant.
 #[test]
 fn the_vhost_step_writes_where_the_layout_says() {
     for (family, atteso) in [
@@ -233,9 +226,8 @@ fn the_vhost_step_writes_where_the_layout_says() {
     }
 }
 
-/// Il **contenuto** del vhost non diverge: è lo stesso template, e renderlo
-/// diverso per famiglia aggiungerebbe due cose da mantenere allineate senza
-/// alcun guadagno.
+/// the vhost's **contents** do not diverge: one template, and per-family
+/// versions would add two things to keep aligned for no gain.
 #[test]
 fn the_vhost_content_does_not_depend_on_the_family() {
     let reso = |family: OsFamily| invok::steps::nginx_write_config::render_vhost(&ctx(family));
@@ -247,21 +239,21 @@ fn the_vhost_content_does_not_depend_on_the_family() {
     );
 }
 
-// --- M4b: SELinux, aggiunto perché il campo l'ha chiesto --------------------
+// --- M4b: SELinux, added because the field asked for it ---------------------
 
 use invok::steps::nginx_selinux::NginxSelinux;
 
-/// **Il difetto osservato in campo.** Su Fedora, con il vhost corretto,
-/// `nginx -t` valido e il reload riuscito, il browser riceve **502**: SELinux
-/// nega a nginx la connessione verso `127.0.0.1:8069`.
+/// **the defect observed in the field.** with a correct vhost, valid
+/// validation and a successful reload, the browser gets **502**: SELinux denies
+/// nginx the connection to the local service.
 ///
 /// ```text
 /// avc: denied { name_connect } for comm="nginx" dest=8069
 ///      scontext=httpd_t tcontext=unreserved_port_t permissive=0
 /// ```
 ///
-/// Nei log dell'installer non compare nulla di anomalo: è un difetto senza
-/// sintomo fino al primo utente che apre il browser.
+/// nothing odd appears in the installer's logs: a defect with no symptom until
+/// the first user opens a browser.
 #[test]
 fn on_fedora_the_proxy_boolean_is_turned_on() {
     let (ops, log) = MockSystemOps::new(cfg(OsFamily::Fedora));
@@ -285,8 +277,8 @@ fn on_fedora_the_proxy_boolean_is_turned_on() {
     );
 }
 
-/// Su Debian non si tocca nulla: SELinux non è in uso, e mutare la politica di
-/// sicurezza di un sistema che non ce l'ha sarebbe assurdo.
+/// on the other family nothing is touched: SELinux is not in use, and mutating
+/// the security policy of a system that lacks it would be absurd.
 #[test]
 fn on_debian_selinux_is_left_alone() {
     let (ops, log) = MockSystemOps::new(cfg(OsFamily::Debian));
@@ -305,9 +297,9 @@ fn on_debian_selinux_is_left_alone() {
     );
 }
 
-/// **La protezione.** Un boolean **già acceso** non è nostro: su una macchina
-/// che ospita altri servizi web lo è quasi sempre, e spegnerlo al rollback
-/// romperebbe il proxy di qualcun altro.
+/// **the protection.** an **already-enabled** boolean is not ours: on a machine
+/// hosting other web services it almost always is, and turning it off during a
+/// rollback would break somebody else's proxy.
 #[test]
 fn a_boolean_that_was_already_on_is_never_turned_off() {
     let (ops, log) = MockSystemOps::new(MockConfig {
@@ -335,7 +327,7 @@ fn a_boolean_that_was_already_on_is_never_turned_off() {
     );
 }
 
-/// L'undo spegne **solo** ciò che abbiamo acceso noi.
+/// the undo turns off **only** what we turned on.
 #[test]
 fn what_we_turned_on_we_turn_off() {
     let (ops, log) = MockSystemOps::new(cfg(OsFamily::Fedora));
@@ -355,12 +347,11 @@ fn what_we_turned_on_we_turn_off() {
     );
 }
 
-/// **Non interrogabile ≠ spento.** Se `getsebool` non risponde — SELinux
-/// disabilitato, `policycoreutils` assente — non si tocca la politica.
+/// **unqueryable is not off.** with no answer the policy is left alone.
 ///
-/// È la stessa distinzione fra cecità e assenza di A5.1-bis: agire su un
-/// «non lo so» significa scrivere sul sistema di qualcun altro sulla base di
-/// un'informazione che non abbiamo.
+/// the same distinction between blindness and absence as A5.1-bis: acting on an
+/// "I do not know" means writing to somebody else's system on information we do
+/// not have.
 #[test]
 fn an_unreadable_policy_is_not_a_policy_to_write() {
     let (ops, log) = MockSystemOps::new(MockConfig {
@@ -381,19 +372,17 @@ fn an_unreadable_policy_is_not_a_policy_to_write() {
     );
 }
 
-/// **Il buco che la validazione per mutazione ha trovato**, per la seconda volta
-/// nello stesso modo.
+/// **the hole mutation testing found**, for the second time the same way.
 ///
-/// I test sopra passano dal mock, che ha una *sua* `nginx_proxy_boolean`: la
-/// costante vera di `FedoraSelinux` non era esercitata da niente, e la mutazione
-/// «usa `httpd_can_network_relay`» sopravviveva a tutta la suite. In campo
-/// l'effetto sarebbe stato accendere il boolean **sbagliato** — `relay` governa
-/// il proxy verso host *remoti*, non il `name_connect` locale che il log di
-/// `ausearch` mostra — quindi 502 identico, con in più una politica di sicurezza
-/// modificata per niente.
+/// the tests above go through the mock, which has its *own* boolean name: the
+/// real constant was exercised by nothing, and a mutation naming a different
+/// boolean survived the whole suite. in the field that would have enabled the
+/// **wrong** one — the other governs proxying to *remote* hosts, not the local
+/// connection the audit log shows — so the same 502, plus a security policy
+/// changed for nothing.
 ///
-/// È la stessa lezione di M3 (`postgres_data_dir`): quando il mock replica una
-/// decisione della produzione, la decisione va provata **anche dov'è scritta**.
+/// the same lesson as M3: when the mock replicates a production decision, that
+/// decision must be exercised **where it is written** too.
 #[test]
 fn the_boolean_is_the_one_the_kernel_actually_denies() {
     use invok::distro::{debian::Debian, fedora::Fedora, Distro};
@@ -417,11 +406,10 @@ fn the_boolean_is_the_one_the_kernel_actually_denies() {
     );
 }
 
-/// Il messaggio del firewall nomina lo strumento **della famiglia**.
+/// the firewall message names **the family's** tool.
 ///
-/// «ufw non trovato» detto su Fedora — osservato in campo — manda a cercare uno
-/// strumento che lì non esiste. Stessa classe di «esegui `apt-get update`» detto
-/// a chi ha dnf.
+/// naming the wrong one — observed in the field — sends the reader looking for
+/// something their machine does not have.
 #[test]
 fn the_firewall_is_called_by_its_real_name() {
     use invok::distro::{debian::Debian, fedora::Fedora, Distro};

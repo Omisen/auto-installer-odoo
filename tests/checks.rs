@@ -1,4 +1,4 @@
-//! Test dei preflight checks (Fase 2): non mutanti, path iniettabili.
+//! the preflight checks: non-mutating, with injectable paths.
 
 use std::io::Write;
 use std::path::Path;
@@ -19,19 +19,19 @@ fn write_os_release(dir: &Path, body: &str) -> std::path::PathBuf {
     path
 }
 
-// --- Disco: NON deve creare la directory (C4) --------------------------------
+// --- disk: it must NOT create the directory (C4) ----------------------------
 
 #[test]
 fn check_disk_does_not_create_target() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // Target annidato e inesistente: la misura deve risalire all'antenato.
+    // a nested, missing target: the measurement must walk up to an ancestor.
     let target = dir.path().join("opt").join("odoo");
     assert!(!target.exists());
 
-    // required_gb = 0 → passa sempre; ci interessa il non-effetto collaterale.
+    // a zero threshold always passes; what matters is the absent side effect.
     check_disk(&target, 0).expect("check_disk ok");
 
-    // Il fix di C4: nessuna directory è stata creata per misurare.
+    // the C4 fix: no directory was created in order to measure.
     assert!(!target.exists(), "check_disk NON deve creare il target");
     assert!(
         !dir.path().join("opt").exists(),
@@ -44,13 +44,13 @@ fn check_disk_reports_insufficient_without_creating() {
     let dir = tempfile::tempdir().expect("tempdir");
     let target = dir.path().join("opt").join("odoo");
 
-    // Soglia irraggiungibile → errore tipizzato, ma sempre senza creare nulla.
+    // an unreachable threshold errors, still without creating anything.
     let err = check_disk(&target, u64::MAX).expect_err("deve fallire");
     assert!(matches!(err, CheckError::InsufficientDisk { .. }));
     assert!(!target.exists());
 }
 
-// --- OS: parsing + soglie di versione ---------------------------------------
+// --- OS: parsing and version thresholds -------------------------------------
 
 #[test]
 fn check_os_supported() {
@@ -89,22 +89,22 @@ fn check_os_rejects_old_and_unsupported() {
         Err(CheckError::UnsupportedVersion { .. })
     ));
 
-    // Fedora è supportata da M2, ma con la sua soglia: la 39 è sotto.
+    // supported, but with its own threshold: this release is below it.
     let fedora = write_os_release(dir.path(), "ID=fedora\nVERSION_ID=\"39\"\n");
     assert!(matches!(
         check_os_from(&fedora),
         Err(CheckError::UnsupportedVersion { .. })
     ));
 
-    // Una distribuzione di cui non conosciamo nemmeno la famiglia resta
-    // `UnsupportedOs`, ed è respinta da `OsFamily::from_os_id` — l'unico gate.
+    // a distribution whose family we do not know is rejected by the single
+    // gate.
     let arch = write_os_release(dir.path(), "ID=arch\nVERSION_ID=\"rolling\"\n");
     assert!(matches!(
         check_os_from(&arch),
         Err(CheckError::UnsupportedOs { .. })
     ));
 
-    // File assente → errore dedicato.
+    // a missing file has its own error.
     let missing = dir.path().join("nope").join("os-release");
     assert!(matches!(
         check_os_from(&missing),
@@ -112,7 +112,7 @@ fn check_os_rejects_old_and_unsupported() {
     ));
 }
 
-// --- Root / sudo: logica pura, testabile senza privilegi ---------------------
+// --- root and sudo: pure logic, testable unprivileged -----------------------
 
 #[test]
 fn root_and_sudo_pure_logic() {
@@ -133,37 +133,32 @@ fn root_and_sudo_pure_logic() {
     ));
 }
 
-/// A-V3-15: con `--with-nginx` su una macchina dove **nginx sta già servendo**,
-/// la porta 80 non è un conflitto — è del programma che stiamo per configurare.
+/// A-V3-15: where **nginx is already serving**, port 80 is not a conflict — it
+/// belongs to the program we are about to configure.
 ///
-/// Il controllo pretendeva la 80 libera ogni volta che si chiedeva
-/// `--with-nginx`, e rendeva così impossibile il caso d'uso normale: aggiungere
-/// un vhost Odoo a un reverse proxy esistente. Gli step nginx lo gestiscono
-/// esplicitamente — `NginxInstall` marca `Preexisting` un nginx già attivo e non
-/// lo tocca — quindi il preflight rifiutava un'installazione che il resto del
-/// programma sa fare benissimo.
+/// the check demanded a free port every time nginx was requested, making the
+/// normal use case impossible: adding an Odoo vhost to an existing reverse
+/// proxy, which the nginx steps handle explicitly.
 ///
-/// Trovato costruendo il job di CI con nginx (B-V3-7): la zona non era mai stata
-/// eseguita, e alla prima esecuzione reale si sarebbe fermata qui.
+/// found while building the nginx CI job (B-V3-7): the area had never been
+/// exercised, and the first real run would have stopped here.
 ///
-/// Si verifica la **decisione** — quali porte guardare — e non l'esito della
-/// sonda: l'esito dipende da cosa gira sulla macchina che esegue i test, e su
-/// una dove la 80 è libera un controllo sbagliato passerebbe lo stesso. La
-/// prima versione di questo test faceva esattamente quell'errore e la mutazione
-/// di prova gli è sopravvissuta.
+/// what is checked is the **decision** — which ports to look at — and not the
+/// probe's outcome, which depends on the test machine. this test's first
+/// version made exactly that mistake and survived its mutation.
 #[test]
 fn port_80_held_by_a_running_nginx_is_not_a_conflict() {
-    // nginx già in ascolto: 80 e 443 non si guardano affatto.
+    // already listening: those ports are not looked at.
     assert_eq!(
         ports_to_check(8069, true, /* nginx_already_serving */ true),
         vec![8069],
         "un nginx che già serve non è un conflitto con sé stesso"
     );
 
-    // nginx richiesto ma non ancora in ascolto: il conflitto sarebbe reale.
+    // requested but not yet listening: the conflict would be real.
     assert_eq!(ports_to_check(8069, true, false), vec![8069, 80, 443]);
 
-    // Senza nginx, la 80 non riguarda nessuno.
+    // without nginx, port 80 concerns nobody.
     assert_eq!(ports_to_check(8069, false, false), vec![8069]);
     assert_eq!(
         ports_to_check(8069, false, true),
@@ -172,16 +167,14 @@ fn port_80_held_by_a_running_nginx_is_not_a_conflict() {
     );
 }
 
-/// Ma se nginx **non** sta servendo, un conflitto sulla 80 resta un conflitto:
-/// lì nginx non riuscirebbe nemmeno a fare il bind, e dirlo al preflight è
-/// meglio che scoprirlo al reload.
+/// but if nginx is **not** serving, a conflict stays one: it would not even
+/// bind, and saying so at preflight beats finding out at the reload.
 #[test]
 fn an_occupied_port_still_stops_the_installation() {
     use std::net::TcpListener;
 
-    // Si occupa una porta davvero e la si passa come "porta Odoo": esercita la
-    // sonda senza dover fare il bind sulla 80, che in un test senza privilegi
-    // non si può.
+    // a port is really occupied and passed as Odoo's, exercising the probe
+    // without binding a privileged one.
     let occupata = TcpListener::bind("127.0.0.1:0").expect("bind");
     let porta = occupata.local_addr().expect("addr").port();
 
@@ -191,24 +184,23 @@ fn an_occupied_port_still_stops_the_installation() {
     );
 }
 
-// --- A5.3: accettare una release non testata, ma dirlo ----------------------
+// --- A5.3: accept an untested release, but say so ---------------------------
 
-/// Le soglie di `validate_os` sono aperte verso l'alto — e devono restarci: un
-/// rifiuto senza prova blocca il caso buono, e un'installazione impedita è un
-/// danno certo mentre quello evitato è ipotetico (lezione di A5.1-bis).
+/// the thresholds are open upwards and must stay so: a refusal without evidence
+/// blocks the good case, and a blocked installation is a certain harm while the
+/// avoided one is hypothetical.
 ///
-/// Ma «accettiamo» non deve voler dire «tacciamo»: su una release più recente di
-/// quelle che proviamo davvero, l'utente ha diritto di saperlo — è
-/// l'informazione che gli serve quando qualcosa va storto.
+/// but "we accept" must not mean "we keep quiet": on a release newer than the
+/// ones we really exercise, the user deserves to know.
 #[test]
 fn a_release_newer_than_the_tested_ones_is_flagged() {
-    // Ubuntu: 24.04 è l'ultima provata.
+    // the newest exercised release of this family.
     assert!(!is_newer_than_tested("ubuntu", "22.04"));
     assert!(!is_newer_than_tested("ubuntu", "24.04"));
     assert!(is_newer_than_tested("ubuntu", "24.10"));
     assert!(is_newer_than_tested("ubuntu", "26.04"));
 
-    // Debian: 12 è l'ultima provata.
+    // and of this one.
     assert!(!is_newer_than_tested("debian", "11"));
     assert!(!is_newer_than_tested("debian", "12"));
     assert!(
@@ -218,7 +210,7 @@ fn a_release_newer_than_the_tested_ones_is_flagged() {
     );
 }
 
-/// Restare **accettate**: la segnalazione è un avviso, non un rifiuto.
+/// they stay **accepted**: the report is a warning, not a refusal.
 #[test]
 fn a_newer_release_is_still_accepted() {
     for (id, version) in [("ubuntu", "26.04"), ("debian", "13")] {
@@ -237,26 +229,25 @@ fn a_newer_release_is_still_accepted() {
     }
 }
 
-/// Una distribuzione che non trattiamo è già rifiutata da `OsFamily::from_os_id`:
-/// darle una soglia superiore sarebbe un ramo che non può eseguire.
+/// a distribution we do not handle is already rejected upstream, so giving it
+/// an upper threshold would be an unreachable branch.
 #[test]
 fn an_unsupported_distribution_has_no_upper_threshold() {
     assert!(!is_newer_than_tested("arch", "99"));
 }
 
-// --- A-MD-5: l'avviso nomina la famiglia di chi lo legge --------------------
+// --- A-MD-5: the warning names the reader's own family ----------------------
 
-/// Il difetto, per esteso: su Fedora 44 l'installer stampava «(Ubuntu 24.04,
-/// Debian 12)» — cioè due famiglie che non c'entrano — e **non** Fedora 41, la
-/// sola release provata e l'unica informazione utile in quel momento.
+/// the defect in full: the installer printed two families that had nothing to
+/// do with the machine, and **not** the one release actually exercised on it —
+/// the only useful information at that moment.
 ///
-/// È anche la guardia contro il ritorno del difetto: qualunque ricablatura del
-/// testo che rinomini tutte e tre le famiglie fa fallire questo test, perché
-/// l'asserzione non è «nomina la mia» ma «nomina la mia e **non** le altre».
+/// also the guard against its return: any rewrite naming all three families
+/// fails here, because the assertion is "names mine and **not** the others".
 #[test]
 fn the_untested_warning_names_only_the_family_being_installed() {
-    // Versione volutamente altissima: il test parla di *chi* viene nominato,
-    // non di dove cade la soglia (quello lo dicono i test qui sopra).
+    // a deliberately high version: this test is about *who* gets named, not
+    // where the threshold falls.
     for (id, propria, estranee) in [
         ("ubuntu", "Ubuntu", ["Debian", "Fedora"]),
         ("debian", "Debian", ["Ubuntu", "Fedora"]),
@@ -279,13 +270,12 @@ fn the_untested_warning_names_only_the_family_being_installed() {
     }
 }
 
-/// **L'anello che mancava.** `the_newest_tested_releases_match_the_ci_matrix`
-/// lega le costanti alla matrice della CI, ma nulla legava il *messaggio* alle
-/// costanti: potevano divergere in silenzio, e l'hanno fatto per sette fasi.
+/// **the missing link.** another test ties the constants to the CI matrix, but
+/// nothing tied the *message* to the constants: they could diverge in silence,
+/// and did for seven phases.
 ///
-/// La resa attesa è ricostruita qui a mano, di proposito, come per `KNOWN_KEYS`
-/// in `ci_config.rs`: se il test riusasse la funzione di produzione proverebbe
-/// solo che è uguale a se stessa.
+/// the expected rendering is rebuilt by hand on purpose: reusing the production
+/// function would only prove it equals itself.
 #[test]
 fn the_untested_warning_quotes_the_tested_release_from_the_constants() {
     fn come_la_scrive_la_distro((major, minor): (u32, u32)) -> String {
@@ -311,8 +301,8 @@ fn the_untested_warning_quotes_the_tested_release_from_the_constants() {
     }
 }
 
-/// Un avviso che comparisse su una release provata sarebbe un allarme falso, e
-/// un allarme falso che compare sempre insegna a ignorare gli avvisi (A-V3-10).
+/// a warning on an exercised release would be a false alarm, and a false alarm
+/// that appears every time teaches people to ignore warnings (A-V3-10).
 #[test]
 fn no_warning_on_a_release_we_actually_test() {
     for (id, version) in [
@@ -322,7 +312,7 @@ fn no_warning_on_a_release_we_actually_test() {
         ("debian", "11"),
         ("fedora", "41"),
         ("fedora", "40"),
-        // Famiglia ignota: già rifiutata a monte, qui non c'è nulla da dire.
+        // an unknown family is rejected upstream: nothing to say here.
         ("arch", "99"),
     ] {
         assert_eq!(
@@ -334,11 +324,11 @@ fn no_warning_on_a_release_we_actually_test() {
     }
 }
 
-/// `24.04`, non `24.4`: una versione Ubuntu scritta male in un avviso che parla
-/// di versioni è il genere di dettaglio che fa dubitare del resto del messaggio.
+/// a version written wrongly inside a warning about versions is the kind of
+/// detail that casts doubt on the rest of the message.
 ///
-/// Provata **direttamente**, perché il caso che rompe la formattazione ingenua
-/// (un `minor` a due cifre) non è raggiungibile passando dalle costanti di oggi.
+/// exercised **directly**, because the case that breaks naive formatting is
+/// unreachable through today's constants.
 #[test]
 fn a_release_is_rendered_the_way_the_distribution_writes_it() {
     assert_eq!(format_release((24, 4)), "24.04");
@@ -356,13 +346,10 @@ fn a_release_is_rendered_the_way_the_distribution_writes_it() {
     assert_eq!(format_release((41, 0)), "41");
 }
 
-// --- L'interprete Python (A-MD-7) --------------------------------------------
+// --- the Python interpreter (A-MD-7) ----------------------------------------
 
-/// Quello che `python3 --version` stampa davvero, incluse le forme che non sono
-/// «tre numeri e basta».
-///
-/// Il caso `3.14` conta più degli altri: è Fedora 44, cioè la release che ha
-/// fatto nascere questo controllo.
+/// what `python3 --version` really prints, including the forms that are not
+/// simply three numbers.
 #[test]
 fn the_interpreter_version_is_read_from_what_python_actually_prints() {
     assert_eq!(parse_python_version("Python 3.14.0\n"), Some((3, 14)));
@@ -379,11 +366,11 @@ fn the_interpreter_version_is_read_from_what_python_actually_prints() {
     );
 }
 
-/// Un output che non si sa leggere dà `None`, **non** una versione di comodo.
+/// output we cannot read gives `None`, **not** a convenient version.
 ///
-/// La differenza è quella fra «so che è coperto» e «non lo so»: un `(0, 0)` di
-/// ripiego sarebbe più basso di qualunque soglia, quindi silenzierebbe l'avviso
-/// proprio quando non abbiamo idea di cosa ci sia sotto.
+/// the difference between "I know it is covered" and "I do not know": a
+/// fallback of zero would be below every threshold and would silence the
+/// warning exactly when we have no idea what is underneath.
 #[test]
 fn an_unreadable_version_is_not_a_version() {
     assert_eq!(parse_python_version(""), None);
@@ -395,11 +382,10 @@ fn an_unreadable_version_is_not_a_version() {
     assert_eq!(parse_python_version("Python tre.quattordici"), None);
 }
 
-/// La soglia risponde in **entrambe le direzioni**, e il confine è incluso.
+/// the threshold answers in **both directions**, boundary included.
 ///
-/// «Provata» vuol dire che su quella versione l'installazione arriva in fondo:
-/// avvisare lì sarebbe un falso allarme, e un avviso che compare sempre insegna
-/// a ignorare gli avvisi (A-V3-10).
+/// "exercised" means an installation reaches the end on that version, so
+/// warning there would be a false alarm.
 #[test]
 fn only_an_interpreter_newer_than_the_tested_one_is_flagged() {
     assert!(
@@ -415,12 +401,12 @@ fn only_an_interpreter_newer_than_the_tested_one_is_flagged() {
     assert!(!python_is_newer_than_tested((3, 10)));
 }
 
-/// L'avviso nomina **il Python trovato e quello provato**, e dice cosa si
-/// romperà.
+/// the warning names **the Python found and the one exercised**, and says what
+/// will break.
 ///
-/// È il contenuto a essere il valore del controllo, non il fatto che scatti: chi
-/// legge deve poter decidere se andare avanti, e per farlo gli serve sapere qual
-/// è il pezzo che salta (A-R9-1).
+/// the content is the check's value, not the fact that it fires: the reader has
+/// to decide whether to go on, and for that needs to know which piece fails
+/// (A-R9-1).
 #[test]
 fn the_python_warning_names_both_versions_and_what_will_break() {
     let avviso = untested_python_warning((3, 14)).expect("3.14 va segnalato");
@@ -447,9 +433,8 @@ fn the_python_warning_names_both_versions_and_what_will_break() {
     );
 }
 
-/// `3.14`, non `3.140`: la formattazione delle release OS omette lo zero e
-/// aggiunge le due cifre, quella di Python no. Sono due convenzioni diverse, e
-/// riusare la funzione sbagliata scriverebbe «Python 3.14» come «3.014».
+/// two different conventions: the OS release formatter pads, the Python one
+/// does not, and reusing the wrong function would misprint the version.
 #[test]
 fn a_python_version_is_rendered_the_way_python_writes_it() {
     assert_eq!(format_python((3, 14)), "3.14");

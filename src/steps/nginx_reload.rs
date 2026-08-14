@@ -1,14 +1,13 @@
-//! [`NginxReload`] (13e): valida e ricarica Nginx.
+//! [`NginxReload`]: validates and reloads Nginx.
 //!
-//! `run` esegue `nginx -t` e ricarica **solo se la config è valida** (non si
-//! ricarica una config rotta). Non ha artefatti propri da rimuovere: il "vero"
-//! ripristino avviene tramite gli altri sotto-step (vhost/site rimossi o
-//! ripristinati); qui l'undo ferma Nginx se l'abbiamo avviato noi (D4).
+//! `run` runs `nginx -t` and reloads **only if the config is valid**. it has no
+//! artifacts of its own: the real restoration happens in the other sub-steps,
+//! and here the undo stops Nginx if we started it (D4).
 //!
-//! Se invece Nginx era già del cliente, l'undo lo lascia attivo **senza
-//! ricaricare**: essendo il primo undo della fase (ordine inverso), le config
-//! non sono ancora state ripristinate. Il reload di riallineamento sta in fondo
-//! alla fase, in [`NginxInstall`](crate::steps::nginx_install).
+//! if Nginx was the customer's, the undo leaves it running **without
+//! reloading**: being the first undo of the phase, the configurations are not
+//! restored yet. the realignment reload lives at the end of the phase, in
+//! [`NginxInstall`](crate::steps::nginx_install).
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -23,7 +22,7 @@ const NGINX_SERVICE: &str = "nginx";
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NginxReloadSnapshot {
-    /// Nginx era già attivo prima di noi?
+    /// was Nginx already running before us?
     pub active: PreState,
 }
 
@@ -69,7 +68,7 @@ impl Step for NginxReload {
             return Ok(());
         }
 
-        // Non ricaricare una config che non passa nginx -t.
+        // never reload a config that fails `nginx -t`.
         if !self.ops.nginx_test() {
             return Err(StepError::Precondition(
                 "nginx -t ha riportato errori: non ricarico una config non valida".to_string(),
@@ -92,28 +91,26 @@ impl Step for NginxReload {
             return Ok(());
         }
         match self.snap.active {
-            // Se l'avevamo avviato noi (era fermo prima) → stop (D4).
+            // stop only what we started (D4).
             PreState::CreatedByUs => {
                 if let Err(e) = self.ops.service_stop(NGINX_SERVICE) {
                     warn!(error = %e, "undo: stop nginx fallito, proseguo (best-effort)");
                 }
             }
-            // Nginx era già attivo prima di noi: va lasciato attivo (D4), ma
-            // **qui non si ricarica**. Gli undo girano in ordine inverso e
-            // questo è il *primo* della fase Nginx: le config non sono ancora
-            // state ripristinate (il vhost c'è ancora, il default site non è
-            // tornato). Un reload adesso ricaricherebbe proprio lo stato che
-            // stiamo per smontare, e nessuno ricaricherebbe più dopo — nginx
-            // resterebbe a servire la nostra config cancellata.
+            // already running before us, so it stays running (D4) — but **no
+            // reload here**. this is the *first* undo of the phase, and the
+            // configurations are not restored yet: reloading now would load
+            // exactly the state we are about to dismantle, and nothing would
+            // reload afterwards.
             //
-            // Il riallineamento avviene alla **fine** della fase, in
-            // `NginxInstall::undo`, l'ultimo sotto-step Nginx a essere annullato.
+            // the realignment happens at the **end** of the phase, in
+            // `NginxInstall::undo`.
             PreState::Preexisting => {
                 info!(
                     "undo: nginx era già attivo, lo lascio attivo (reload finale in nginx-install)"
                 );
             }
-            // Untracked: fase gated off o nulla fatto → no-op.
+            // gated off, or nothing done: a no-op.
             PreState::Untracked => {}
         }
         Ok(())

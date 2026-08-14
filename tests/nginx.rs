@@ -1,4 +1,4 @@
-//! Test della fase Nginx (Fase 9): gating, protezione default site, delta ufw.
+//! the nginx phase: gating, the default-site protection, the firewall delta.
 
 mod common;
 
@@ -34,7 +34,7 @@ fn default_site() -> PathBuf {
     PathBuf::from("/etc/nginx/sites-enabled/default")
 }
 
-// --- Gating: --with-nginx assente → tutto inerte ----------------------------
+// --- gating: without the flag, everything is inert --------------------------
 
 #[test]
 fn gating_all_steps_are_noop_without_nginx() {
@@ -58,12 +58,12 @@ fn gating_all_steps_are_noop_without_nginx() {
     check_noop!(NginxReload::with_ops);
 }
 
-// --- Default site: la protezione della fase ---------------------------------
+// --- the default site: the phase's protection -------------------------------
 
 #[test]
 fn default_site_removed_then_restored() {
-    // IL test protettivo: il default site esisteva → run lo rimuove → undo lo
-    // ripristina (config Nginx del cliente riportata com'era).
+    // THE protective test: the default site existed, the run removes it, and
+    // the undo restores the customer's config as it was.
     let cfg = MockConfig {
         default_site_exists: true,
         our_link_exists: false,
@@ -78,11 +78,11 @@ fn default_site_removed_then_restored() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    // run rimuove il default site.
+    // the run removes it.
     assert!(ops
         .iter()
         .any(|o| matches!(o, Op::RemoveSymlink(p) if *p == default_site())));
-    // undo lo RIPRISTINA (ricrea il symlink default).
+    // the undo RESTORES it.
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::CreateSymlink { link, .. } if *link == default_site())),
@@ -92,7 +92,8 @@ fn default_site_removed_then_restored() {
 
 #[test]
 fn absent_default_site_is_not_invented() {
-    // Non esisteva → run non lo tocca → undo non lo crea.
+    // it did not exist: the run does not touch it and the undo does not invent
+    // it.
     let cfg = MockConfig {
         default_site_exists: false,
         ..Default::default()
@@ -116,11 +117,11 @@ fn absent_default_site_is_not_invented() {
     );
 }
 
-// --- Firewall: pattern delta -------------------------------------------------
+// --- the firewall: the delta pattern ----------------------------------------
 
 #[test]
 fn firewall_undo_removes_only_the_delta() {
-    // 80 già presente (non nel delta), 443 aggiunta da noi → undo rimuove solo 443.
+    // one rule was already there and one is ours: only ours is removed.
     let cfg = MockConfig {
         ufw_available: true,
         ufw_active: true,
@@ -175,7 +176,7 @@ fn firewall_noop_when_ufw_inactive() {
     );
 }
 
-// --- Reload / Install --------------------------------------------------------
+// --- reload and install -----------------------------------------------------
 
 #[test]
 fn reload_fails_on_invalid_config() {
@@ -200,14 +201,14 @@ fn reload_fails_on_invalid_config() {
     );
 }
 
-/// Trovato dall'e2e in R3: gli undo girano in ordine inverso, quindi
-/// `nginx-reload` è il **primo** della fase e le config non sono ancora
-/// ripristinate. Ricaricare lì lascerebbe nginx a servire la nostra config
-/// dopo che i file sono stati rimossi.
+/// found by the end-to-end tests: undos run in reverse, so the reload step is
+/// the **first** of the phase and the configurations are not restored yet.
+/// reloading there would leave nginx serving our config after its files are
+/// gone.
 #[test]
 fn reload_undo_does_not_reload_before_configs_are_restored() {
     let cfg = MockConfig {
-        service_active: true, // nginx era già attivo: è del cliente
+        service_active: true, // nginx was already active: it is the customer's
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
@@ -228,14 +229,14 @@ fn reload_undo_does_not_reload_before_configs_are_restored() {
     );
 }
 
-/// L'altra metà del fix: `nginx-install` è l'ultimo undo della fase, quindi è
-/// lì che il riallineamento deve avvenire — se nginx sopravvive al rollback.
+/// the other half of the fix: the install step is the phase's last undo, so
+/// that is where the realignment belongs — if nginx survives the rollback.
 #[test]
 fn install_undo_reloads_at_the_end_when_nginx_survives() {
     let cfg = MockConfig {
         installed_packages: ["nginx".to_string()].into_iter().collect(),
         service_enabled: true,
-        service_active: true, // nginx del cliente: sopravvive al rollback
+        service_active: true, // the customer's nginx: survives the rollback
         ..Default::default()
     };
     let (mock, log) = MockSystemOps::new(cfg);
@@ -258,7 +259,7 @@ fn install_undo_reloads_at_the_end_when_nginx_survives() {
     );
 }
 
-/// Ma non si ricarica una config che non passa `nginx -t`, nemmeno nell'undo.
+/// but a config that fails validation is never reloaded, not even in an undo.
 #[test]
 fn install_undo_does_not_reload_an_invalid_config() {
     let cfg = MockConfig {
@@ -313,7 +314,7 @@ fn vhost_rendering_has_no_residue() {
     validate_vhost(&vhost).expect("vhost valido");
 }
 
-// --- A-V3-5: la natura del default site, non solo la sua esistenza ----------
+// --- A-V3-5: the default site's nature, not just its existence --------------
 
 use invok::steps::nginx_enable_site::{DefaultSite, NginxEnableSiteSnapshot};
 use invok::system_ops::PathKind;
@@ -322,14 +323,13 @@ fn enable_site_snapshot(step: &NginxEnableSite) -> NginxEnableSiteSnapshot {
     serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile")
 }
 
-/// **Il ripristino dev'essere fedele.** Se il default site del cliente puntava
-/// a un vhost con un altro nome, l'undo deve riportarlo **là**, non al target
-/// standard della distribuzione.
+/// **restoration must be faithful.** if the customer's default site pointed at
+/// a differently named vhost, the undo must point it back **there**, not at the
+/// distribution's standard target.
 ///
-/// Prima lo snapshot era un `bool` e l'undo ricreava sempre un symlink verso
-/// `/etc/nginx/sites-available/default`: la config non tornava com'era, tornava
-/// com'è *di solito*. Per un progetto che ripristina il `.bashrc` byte-per-byte
-/// era un doppio standard.
+/// the snapshot used to be a boolean and the undo always recreated the standard
+/// link: the config did not come back as it was, it came back as it *usually*
+/// is.
 #[test]
 fn a_non_standard_default_site_is_restored_to_its_own_target() {
     let cliente = PathBuf::from("/etc/nginx/sites-available/vhost-del-cliente");
@@ -375,19 +375,17 @@ fn a_non_standard_default_site_is_restored_to_its_own_target() {
     );
 }
 
-/// **Un file regolare non si cancella.** `symlink_exists` rispondeva `true`
-/// anche per un file vero e `remove_symlink` è `fs::remove_file`: un
-/// amministratore che avesse scritto `sites-enabled/default` come file si vedeva
-/// il contenuto distrutto, e l'undo gli restituiva un symlink al default della
-/// distro. Non un residuo: una perdita di configurazione.
+/// **a regular file is not deleted.** the existence check answered `true` for a
+/// real file too, and the removal is a plain file removal: an administrator who
+/// had written that path as a file saw its contents destroyed, and got a
+/// symlink to the distro default back. not a leftover: a loss of configuration.
 #[test]
 fn a_regular_default_site_is_moved_to_a_backup_never_deleted() {
     let cfg = MockConfig {
         default_site_exists: true,
         default_site_kind: Some(PathKind::RegularFile),
-        // Il backup, una volta creato, esiste: senza questo l'undo lo
-        // troverebbe assente e si asterrebbe (comportamento corretto, ma qui
-        // stiamo verificando il ripristino).
+        // once created the backup exists: without this the undo would find it
+        // missing and abstain — correct, but not what we are checking.
         path_exists: true,
         ..Default::default()
     };
@@ -412,16 +410,16 @@ fn a_regular_default_site_is_moved_to_a_backup_never_deleted() {
         })
         .expect("il file va spostato in un backup");
 
-    // Il backup non può restare in sites-enabled: nginx include `sites-enabled/*`
-    // — ogni file, non solo i .conf — quindi verrebbe ricaricato e la porta 80
-    // resterebbe occupata. Sarebbe lo stesso difetto con un altro nome.
+    // the backup cannot stay in the enabled directory, which nginx globs: it
+    // would be loaded and the port would stay occupied — the same defect under
+    // another name.
     assert!(
         !spostato.starts_with("/etc/nginx/sites-enabled"),
         "il backup non deve restare dove nginx lo ricaricherebbe: {}",
         spostato.display()
     );
 
-    // E l'undo lo rimette esattamente dov'era.
+    // and the undo puts it back exactly where it was.
     step.undo(&c).expect("undo");
     let ops = ops_of(&log);
     assert!(
@@ -433,9 +431,9 @@ fn a_regular_default_site_is_moved_to_a_backup_never_deleted() {
     );
 }
 
-/// Directory (o symlink illeggibile) al posto del default site: non sappiamo
-/// trattarlo, quindi non lo tocchiamo. Fail-closed: meglio una porta 80 occupata
-/// e un avviso che una rimozione alla cieca.
+/// a directory, or an unreadable symlink, in the default site's place: we do
+/// not know how to treat it, so we do not. better an occupied port and a
+/// warning than a blind removal.
 #[test]
 fn an_unknown_default_site_is_left_alone() {
     let cfg = MockConfig {
@@ -461,13 +459,12 @@ fn an_unknown_default_site_is_left_alone() {
     );
 }
 
-/// Retrocompatibilità: uno stato persistito **prima** della R11 non ha la natura
-/// del default site, solo il `bool`. Deve restare consumabile — e ricadere sul
-/// comportamento storico, che è il meglio ricavabile da quell'informazione.
+/// compatibility: a state persisted **before** R11 has only the boolean. it
+/// must stay consumable and fall back to the historical behaviour, the best
+/// that information allows.
 ///
-/// Renderlo illeggibile significherebbe lasciare la porta 80 senza il default
-/// site che avevamo tolto: la stessa cura di retrocompatibilità dell'
-/// `InstallConfig` in R4.
+/// making it unreadable would leave the port without the default site we took
+/// away.
 #[test]
 fn a_pre_r11_snapshot_still_restores_the_default_site() {
     let legacy = serde_json::json!({
@@ -500,16 +497,16 @@ fn a_pre_r11_snapshot_still_restores_the_default_site() {
     );
 }
 
-// --- A-V3-6: il flag dice cosa fa, e il vhost non finge -----------------------
+// --- A-V3-6: the flag says what it does, and the vhost does not pretend -----
 
-/// **La proprietà che dà il nome al flag.** `--open-https-port` tocca il
-/// firewall e **solo** il firewall: il vhost generato è identico con e senza.
+/// **the property the flag is named for**: it touches the firewall and **only**
+/// the firewall, so the generated vhost is identical with and without it.
 ///
-/// Prima si chiamava `--enable-ssl` e prometteva TLS. Il vhost però non ha né
-/// mai ha avuto un listener su 443 — il blocco era interamente commentato — e i
-/// placeholder dei certificati venivano sostituiti *dentro quei commenti*. Chi
-/// lo passava otteneva una porta aperta verso nulla e la convinzione di avere
-/// TLS: peggio di un flag assente.
+/// it used to be called `--enable-ssl` and promised TLS. the vhost never had a
+/// 443 listener — the block was entirely commented out — and the certificate
+/// placeholders were substituted *inside those comments*. passing it gave an
+/// open port towards nothing and the belief of having TLS: worse than no flag
+/// at all.
 #[test]
 fn opening_the_https_port_does_not_change_the_vhost() {
     let senza = render_vhost(&ctx(true, false));
@@ -522,14 +519,13 @@ fn opening_the_https_port_does_not_change_the_vhost() {
     );
 }
 
-/// Il vhost non contiene un blocco 443 — né attivo né commentato — e nessun
-/// riferimento a certificati.
+/// the vhost contains no 443 block — active or commented — and no certificate
+/// reference.
 ///
-/// Il blocco commentato non era innocuo: descriveva una configurazione che
-/// nessuno generava, prometteva che *«sarà ignorato da Nginx se il certificato
-/// non esiste»* (falso: nginx rifiuta di partire) e citava `lib/nginx.sh`, un
-/// file dell'era Bash che non esiste più. Un template che dice di sé cose non
-/// vere è documentazione al contrario.
+/// the commented block was not harmless: it described a configuration nobody
+/// generated, claimed nginx would ignore it without a certificate (false: nginx
+/// refuses to start) and cited a file from the Bash era that no longer exists.
+/// a template that says untrue things about itself is documentation in reverse.
 #[test]
 fn the_vhost_makes_no_tls_promises() {
     let reso = render_vhost(&ctx(true, true));
@@ -545,12 +541,12 @@ fn the_vhost_makes_no_tls_promises() {
             "il vhost non deve contenere '{bugia}': non configura TLS (A-V3-6)"
         );
     }
-    // E resta un vhost valido, senza placeholder residui.
+    // and it stays a valid vhost, with no placeholder left.
     validate_vhost(&reso).expect("nessun placeholder residuo");
     assert!(reso.contains("listen 80"), "il vhost serve la porta 80");
 }
 
-/// Il firewall è l'unico effetto reale, e c'è: la 443 si apre.
+/// the firewall is the only real effect, and it happens: the port opens.
 #[test]
 fn opening_the_https_port_opens_443_on_the_firewall() {
     let cfg = MockConfig {
@@ -571,18 +567,16 @@ fn opening_the_https_port_opens_443_on_the_firewall() {
     );
 }
 
-/// A-V3-7, la conseguenza: su una macchina che ha già una regola `8080/tcp`, la
-/// porta 80 **deve comunque essere aperta**.
+/// A-V3-7's consequence: on a machine that already has a similar-looking rule,
+/// the port **must still be opened**.
 ///
-/// Il difetto non si vedeva come un errore: nginx veniva installato,
-/// configurato e ricaricato senza un intoppo, e restava irraggiungibile
-/// dall'esterno. Nessuna riga anomala nel report — il sintomo era assente,
-/// non oscuro.
+/// the defect did not look like an error: nginx was installed, configured and
+/// reloaded without a hitch, and stayed unreachable from outside. no odd line
+/// in the report — the symptom was absent, not obscure.
 ///
-/// Questo test è la metà comportamentale della guardia: quella pura
-/// (`ufw_rule_in_status`) prova il predicato, questa prova cosa ne consegue.
-/// Poterla scrivere è costato rendere il mock fedele: prima rispondeva con
-/// un'appartenenza a un insieme, semantica che il vero `ufw` non ha.
+/// the behavioural half of the guard: the pure one proves the predicate, this
+/// proves what follows from it. writing it cost making the mock faithful, where
+/// it used to answer with a set membership the real tool does not have.
 #[test]
 fn port_80_is_opened_even_when_8080_is_already_allowed() {
     let cfg = MockConfig {
@@ -605,7 +599,7 @@ fn port_80_is_opened_even_when_8080_is_already_allowed() {
          nginx resta irraggiungibile e nulla lo segnala (A-V3-7): {ops:?}"
     );
 
-    // E resta vero il contrario: una regola davvero presente non si ritocca.
+    // and the converse holds: a genuinely present rule is not re-added.
     step.undo(&c).expect("undo");
     let ops = ops_of(&log);
     assert!(
@@ -614,12 +608,11 @@ fn port_80_is_opened_even_when_8080_is_already_allowed() {
     );
 }
 
-/// A-V3-12: i log del vhost portano la **versione** nel nome.
+/// A-V3-12: the vhost's logs carry the **version** in their names.
 ///
-/// Erano cablati a `odoo18`: due istanze sulla stessa macchina — 17 e 18, il
-/// caso di una migrazione — si scrivevano nello stesso file, e nessuna delle due
-/// aveva un log leggibile. I file restano dopo il rollback (sono log, come
-/// quelli di sistema), ma almeno si sa a quale istanza appartengono.
+/// they were hardcoded, so two instances on one machine — the migration case —
+/// wrote to the same file and neither had a readable log. the files survive the
+/// rollback, being logs, but at least one can tell whose they are.
 #[test]
 fn the_vhost_logs_carry_the_version_in_their_name() {
     let mut c = ctx(true, false);

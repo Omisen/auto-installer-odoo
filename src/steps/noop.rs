@@ -1,9 +1,8 @@
-//! [`NoopStep`]: step fittizio per testare il motore end-to-end.
+//! [`NoopStep`]: a dummy step for testing the engine end to end.
 //!
-//! Non tocca il sistema. È parametrizzabile per fallire in `snapshot`, `run` o
-//! `undo`, e registra le proprie chiamate di `undo` in modo osservabile dai
-//! test (contatore + log condiviso), così da poter verificare ordine inverso,
-//! best-effort e la regola "undo agisce solo su `CreatedByUs`".
+//! touches nothing. it can be made to fail in `snapshot`, `run` or `undo`, and
+//! records its undo calls observably, so the reverse order, the best-effort
+//! rule and "the undo acts only on `CreatedByUs`" are all checkable.
 
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
@@ -15,37 +14,35 @@ use crate::error::StepError;
 use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 
-/// Log condiviso dell'ordine in cui gli `undo` compiono un'azione effettiva.
+/// a shared log of the order in which undos actually act.
 ///
-/// Solo gli `undo` che *agiscono* (step `CreatedByUs`) vi aggiungono il proprio
-/// nome; un `undo` NO-OP (step `Preexisting`) non compare. Più `NoopStep`
-/// possono condividere lo stesso log per verificarne l'ordine reciproco.
+/// only undos that *act* append their name; a no-op one does not appear.
+/// several steps can share one log to check their relative order.
 pub type UndoLog = Arc<Mutex<Vec<String>>>;
 
-/// Step fittizio, senza effetti sul sistema, per i test del motore.
+/// a dummy step with no effect on the system.
 pub struct NoopStep {
     name: String,
     prestate: PreState,
     fail_on_snapshot: bool,
     fail_on_run: bool,
     fail_on_undo: bool,
-    /// Numero di volte in cui `undo` è stato *invocato* (anche se NO-OP).
+    /// how many times `undo` was *invoked*, no-ops included.
     undo_calls: Arc<AtomicUsize>,
-    /// Log condiviso delle azioni di undo effettivamente compiute.
+    /// shared log of the undo actions actually performed.
     undo_log: Option<UndoLog>,
-    /// Azione arbitraria eseguita **dentro** il `run`.
+    /// an arbitrary action run **inside** `run`.
     ///
-    /// Serve a modellare qualcosa che accade *mentre* uno step è in corso —
-    /// il caso vero è un segnale che arriva a metà installazione (B-V3-5). Senza
-    /// questo gancio si potrebbe solo alzare il flag prima o dopo, cioè provare
-    /// tutto tranne il momento che conta.
+    /// models something happening *while* a step is in flight — the real case
+    /// being a signal arriving mid-installation (B-V3-5). without this hook one
+    /// could only raise the flag before or after, i.e. test everything except
+    /// the moment that matters.
     #[allow(clippy::type_complexity)]
     on_run: Option<Box<dyn Fn() + Send + Sync>>,
 }
 
 impl NoopStep {
-    /// Crea uno step che, di default, si comporta come creato da noi
-    /// (`CreatedByUs`) e non fallisce mai.
+    /// a step that behaves as `CreatedByUs` and never fails.
     pub fn new(name: impl Into<String>) -> Self {
         NoopStep {
             name: name.into(),
@@ -59,49 +56,49 @@ impl NoopStep {
         }
     }
 
-    /// Imposta il `PreState` simulato che `snapshot` registrerà.
+    /// sets the simulated `PreState` the snapshot will record.
     pub fn with_prestate(mut self, prestate: PreState) -> Self {
         self.prestate = prestate;
         self
     }
 
-    /// Comodità: marca lo step come `Preexisting` (undo diventerà un NO-OP).
+    /// marks the step `Preexisting`, making its undo a no-op.
     pub fn preexisting(self) -> Self {
         self.with_prestate(PreState::Preexisting)
     }
 
-    /// Fa fallire `snapshot` (per testare il rollback dei precedenti).
+    /// makes `snapshot` fail, to test the rollback of the previous steps.
     pub fn fail_on_snapshot(mut self) -> Self {
         self.fail_on_snapshot = true;
         self
     }
 
-    /// Fa fallire `run` (per innescare il rollback).
+    /// makes `run` fail, to trigger the rollback.
     pub fn fail_on_run(mut self) -> Self {
         self.fail_on_run = true;
         self
     }
 
-    /// Fa fallire `undo` (per testare il comportamento best-effort).
+    /// makes `undo` fail, to test the best-effort behaviour.
     pub fn fail_on_undo(mut self) -> Self {
         self.fail_on_undo = true;
         self
     }
 
-    /// Esegue `f` dentro il `run`, prima che lo step si dichiari completato.
+    /// runs `f` inside `run`, before the step declares itself complete.
     pub fn on_run(mut self, f: impl Fn() + Send + Sync + 'static) -> Self {
         self.on_run = Some(Box::new(f));
         self
     }
 
-    /// Collega un log condiviso su cui annotare le azioni di undo.
+    /// attaches a shared log to record undo actions on.
     pub fn with_undo_log(mut self, log: UndoLog) -> Self {
         self.undo_log = Some(log);
         self
     }
 
-    /// Handle condiviso al contatore delle *invocazioni* di undo, da leggere
-    /// nei test dopo che lo step è stato spostato nel `Vec` del motore.
+    /// a shared handle to the invocation counter, readable after the step has
+    /// been moved into the engine's `Vec`.
     pub fn undo_call_handle(&self) -> Arc<AtomicUsize> {
         Arc::clone(&self.undo_calls)
     }
@@ -119,8 +116,7 @@ impl Step for NoopStep {
                 reason: "fallimento snapshot simulato".to_string(),
             });
         }
-        // Uno step reale rileverebbe qui `Preexisting` vs `CreatedByUs`; il
-        // NoopStep usa il valore preconfigurato.
+        // a real step would detect the state here; this one is preconfigured.
         info!(step = %self.name, prestate = ?self.prestate, "snapshot registrato");
         Ok(())
     }
@@ -145,10 +141,10 @@ impl Step for NoopStep {
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
-        // Ogni invocazione è contata, anche quelle che risulteranno NO-OP.
+        // every invocation counts, no-ops included.
         self.undo_calls.fetch_add(1, Ordering::SeqCst);
 
-        // Invariante 3: undo agisce SOLO su artefatti creati da noi.
+        // invariant 3: the undo acts ONLY on artifacts we created.
         if self.prestate != PreState::CreatedByUs {
             info!(
                 step = %self.name,
@@ -158,7 +154,7 @@ impl Step for NoopStep {
             return Ok(());
         }
 
-        // Da qui in poi è un'azione di undo effettiva: registrala nel log.
+        // from here it is a real undo action: record it.
         if let Some(log) = &self.undo_log {
             if let Ok(mut entries) = log.lock() {
                 entries.push(self.name.clone());

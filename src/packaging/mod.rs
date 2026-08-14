@@ -1,36 +1,27 @@
-//! Il confine **gestore di pacchetti**: cosa sa fare, e quali nomi conosce.
+//! the **package manager** boundary: what it can do, and which names it knows.
 //!
-//! È il primo dei due confini del supporto multi-distro (l'altro è
-//! [`crate::distro`], le convenzioni di distribuzione). Non è una seconda porta
-//! verso il sistema: si **ottiene** dal confine esistente, con
-//! [`SystemOps::packages`](crate::system_ops::SystemOps::packages). Gli step
-//! smettono di dire `ops.apt_install(...)` e dicono `ops.packages().install(...)`;
-//! ciò che tocca il sistema resta un posto solo, e i test continuano a mockarne
-//! uno solo.
+//! the first of the two multi-distro boundaries; the other is
+//! [`crate::distro`]. not a second door onto the system: it is **obtained**
+//! from the existing one, with
+//! [`SystemOps::packages`](crate::system_ops::SystemOps::packages), so what
+//! touches the machine stays in one place and the tests still mock one thing.
 //!
-//! # Perché un trait e non un `enum`
+//! # a trait and not an `enum`
 //!
-//! Con due sole famiglie un `enum` con un `match` in ogni metodo sarebbe più
-//! diretto, e l'argomento «i backend in file separati» da solo non basterebbe a
-//! deciderlo. A decidere è **il mock**: se
-//! [`SystemOps::packages`](crate::system_ops::SystemOps::packages)
-//! restituisse un enum, il mock dei test dovrebbe restituire un'istanza di quel
-//! tipo — i cui rami eseguono `apt-get` e `dnf` per davvero. Per poterlo mockare
-//! servirebbe una terza variante di test **dentro il tipo di produzione**, cioè
-//! un ramo che in produzione non può eseguire: la firma ricorrente dei difetti
-//! di questo progetto, introdotta di proposito. Il `dyn` non costa nulla di
-//! nuovo (`SystemOps` è già `Box<dyn>` ovunque, e il programma è I/O-bound).
+//! with two families an `enum` plus a `match` per method would be more direct.
+//! **the mock** decides it: an enum returned by `packages()` would have to be
+//! instantiated by the test mock too, and its branches really run `apt-get` and
+//! `dnf`. mocking it would need a third, test-only variant **inside the
+//! production type** — a branch that cannot execute in production, which is
+//! this project's recurring defect, introduced on purpose. `dyn` costs nothing
+//! new here.
 //!
-//! # Cosa **non** sta qui
+//! # what does **not** live here
 //!
-//! Nginx, firewall e convenzioni di percorso: sono divergenza *di
-//! distribuzione*, non *di packaging*, e stanno in [`crate::distro`]. Mescolarle
-//! darebbe un'astrazione che astrae due cose diverse — e il nome «backend
-//! multi-distro» le nasconde, il che è la ragione per cui vanno nominate a parte.
-//!
-//! Nemmeno la **politica di rollback**: `steps::remove_with_recovery` resta uno
-//! step-level helper, perché il confine è una mappatura 1:1 sui comandi e i test
-//! devono poter asserire la sequenza esatta.
+//! nginx, firewall and path conventions: those are *distribution* divergence,
+//! not *packaging*, and live in [`crate::distro`]. nor the rollback policy:
+//! this boundary maps 1:1 onto commands so the tests can assert exact
+//! sequences.
 
 pub mod apt;
 pub mod dnf;
@@ -39,50 +30,39 @@ use std::path::Path;
 
 use crate::error::StepError;
 
-/// Che cosa sa dirci il gestore su un nome di pacchetto.
+/// what the manager can tell us about a package name.
 ///
-/// Tre valori e non due booleani, e la distinzione è quella conquistata sul
-/// campo con A5.1-bis. Il punto è separare due cose che oggi sono impastate:
-///
-/// - il **meccanismo** è del gestore. Su apt servono due comandi, perché
-///   `apt-cache policy` dice `Candidate: (none)` su un nome puramente virtuale
-///   mentre `apt-get install -s` lo installerebbe benissimo.
-/// - la **politica** — «un nome reale batte un nome virtuale» — non dipende
-///   dalla famiglia: un nome che il gestore non riconoscerà più dopo
-///   l'installazione non è rimovibile, e un delta che lo contiene mente. Vale
-///   su rpm come su deb.
-///
-/// Con due booleani il chiamante dovrebbe sapere in che ordine interrogarli e
-/// perché, cioè il meccanismo di apt trapelerebbe nella politica. Con un enum la
-/// politica diventa una funzione **pura** su tre valori (vedi
-/// `AptPackagesStep::resolve`) e ogni backend risponde onestamente.
+/// three values and not two booleans, a distinction won in the field with
+/// A5.1-bis. it separates the **mechanism**, which belongs to the manager (apt
+/// needs two commands, because a purely virtual name has no candidate yet
+/// installs fine), from the **policy** — "a real name beats a virtual one" —
+/// which does not depend on the family: a name the manager will not recognise
+/// after installation cannot be removed, and a delta containing it lies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Availability {
-    /// Installabile, e dopo l'installazione il gestore lo riconosce con
-    /// **questo** nome: è rimovibile, quindi il delta che lo contiene è onesto.
+    /// installable, and afterwards the manager knows it by **this** name: it is
+    /// removable, so a delta containing it is honest.
     Real,
-    /// Installabile, ma solo perché un altro pacchetto lo *fornisce*: dopo
-    /// l'installazione il gestore non conosce questo nome, e rimuoverlo non
-    /// rimuove niente. Utilizzabile come **ripiego**, mai come prima scelta.
+    /// installable only because another package *provides* it: afterwards the
+    /// manager does not know this name, and removing it removes nothing. a
+    /// **fallback**, never a first choice.
     VirtualOnly,
-    /// Non installabile con questo nome — oppure il gestore non è in grado di
-    /// rispondere. Le due cose si distinguono con
-    /// [`PackageManager::index_is_queryable`], non tirando a indovinare.
+    /// not installable under this name — or the manager cannot answer. the two
+    /// are told apart with [`PackageManager::index_is_queryable`], not by
+    /// guessing.
     Absent,
 }
 
-/// La decisione di «che disponibilità ha questo nome», sui soli esiti osservati.
+/// the availability decision, over the observed outcomes alone.
 ///
-/// Pura, e separata dai comandi che quegli esiti li producono. È il pattern che
-/// questo progetto usa dove una decisione conta più del modo in cui si ottengono
-/// i suoi input (`checks::ensure_root_euid`, `checks::ports_to_check`,
-/// `state::trust_verdict`, `distro::ufw::rule_in_status`): il codice che esegue
-/// `apt-cache` e `apt-get` può essere verificato **solo** su una macchina reale,
-/// e senza questa separazione la regola che conta resterebbe fuori da ogni test.
+/// pure, and separate from the commands that produce them — the pattern this
+/// project uses wherever the decision matters more than how its inputs were
+/// obtained. the code that runs `apt-cache` can only be checked on a real
+/// machine, and without this split the rule that matters would sit outside
+/// every test.
 ///
-/// L'ordine è la protezione di A5.1-bis: **un candidato reale batte sempre un
-/// nome virtuale**, perché un nome virtuale non è rimovibile e un delta che lo
-/// contiene mente.
+/// the order is A5.1-bis's protection: **a real candidate always beats a
+/// virtual name**.
 pub fn availability_from(policy_says_real: bool, resolver_accepts: bool) -> Availability {
     if policy_says_real {
         Availability::Real
@@ -93,41 +73,35 @@ pub fn availability_from(policy_says_real: bool, resolver_accepts: bool) -> Avai
     }
 }
 
-/// Un requisito di pacchetto: uno o più nomi **alternativi**, in ordine di
-/// preferenza, che soddisfano lo stesso bisogno.
+/// a package requirement: one or more **alternative** names, in order of
+/// preference, satisfying the same need.
 ///
-/// # L'invariante da non perdere con due famiglie
+/// alternatives mean "same need, different names **within one family**":
+/// `libtiff5-dev` and `libtiff-dev` are the same package on two Debian
+/// releases. putting `freetype-devel` beside `libfreetype6-dev` would look free
+/// and **break the group**, because the first resolution rule — an
+/// already-installed alternative wins — is correct between synonyms of one
+/// distro and a trap across families.
 ///
-/// Le alternative sono «stesso bisogno, nomi diversi **sulla stessa famiglia**»:
-/// `libtiff5-dev` e `libtiff-dev` sono lo stesso pacchetto su due release
-/// Debian. Mettere `freetype-devel` accanto a `libfreetype6-dev` sembrerebbe
-/// gratis e **romperebbe il gruppo**: la prima regola della risoluzione — «vince
-/// un'alternativa già installata» — è corretta fra sinonimi della stessa distro
-/// e diventa una trappola fra nomi di famiglie diverse; e la diagnostica
-/// mostrerebbe a chi sta su Fedora un gruppo in cui due nomi su tre non lo
-/// riguardano.
+/// so the family does **not** enter the group: it enters one level up, in
+/// [`PackageCatalog`].
 ///
-/// Perciò la famiglia **non** entra nel gruppo: entra un livello sopra, in
-/// [`PackageCatalog`], che è ciò che il backend risponde quando gli si chiede
-/// l'elenco.
-///
-/// Possiede le `String` invece di prendere `&'static str` perché i test
-/// costruiscono gruppi a runtime; le liste di produzione restano `const` (vedi
-/// [`apt::ODOO_DEPENDENCIES`]) e passano da [`PackageSpec::group`].
+/// owns its `String`s because tests build groups at runtime; the production
+/// lists stay `const` and go through [`PackageSpec::group`].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PackageSpec {
     alternatives: Vec<String>,
-    /// `false` = se nessuna alternativa è installabile si prosegue senza.
+    /// `false` means we carry on when no alternative is installable.
     required: bool,
 }
 
 impl PackageSpec {
-    /// Un solo nome, nessuna alternativa: se manca, lo step si ferma.
+    /// a single name with no alternative: missing, the step stops.
     pub fn one(name: &str) -> Self {
         Self::any(&[name])
     }
 
-    /// Alternative in ordine di preferenza (la prima è il nome preferito).
+    /// alternatives in order of preference; the first is preferred.
     pub fn any(alternatives: &[&str]) -> Self {
         PackageSpec {
             alternatives: alternatives.iter().map(|s| s.to_string()).collect(),
@@ -135,8 +109,8 @@ impl PackageSpec {
         }
     }
 
-    /// Come [`PackageSpec::any`], ma un gruppo interamente non disponibile è un
-    /// warning e non un errore.
+    /// as [`PackageSpec::any`], but an entirely unavailable group warns instead
+    /// of failing.
     pub fn optional(alternatives: &[&str]) -> Self {
         PackageSpec {
             required: false,
@@ -144,24 +118,24 @@ impl PackageSpec {
         }
     }
 
-    /// Converte un gruppo delle liste `const` in un `PackageSpec` obbligatorio.
+    /// turns a group from the `const` lists into a mandatory spec.
     pub fn group(group: &[&str]) -> Self {
         Self::any(group)
     }
 
-    /// Le alternative, in ordine di preferenza.
+    /// the alternatives, most preferred first.
     pub fn alternatives(&self) -> &[String] {
         &self.alternatives
     }
 
-    /// `true` se un gruppo senza alternative disponibili deve fermare lo step.
+    /// `true` when an unsatisfiable group must stop the step.
     pub fn is_required(&self) -> bool {
         self.required
     }
 
-    /// Il nome preferito (il primo del gruppo), per i messaggi diagnostici.
-    /// Un gruppo vuoto non è costruibile dalle liste di produzione; se ci
-    /// arrivasse comunque, qui vale `"<gruppo vuoto>"` invece di panicare.
+    /// the preferred name, for diagnostics. an empty group is not constructible
+    /// from the production lists; should one arrive anyway, this names it
+    /// rather than panicking.
     pub fn preferred(&self) -> &str {
         self.alternatives
             .first()
@@ -170,50 +144,42 @@ impl PackageSpec {
     }
 }
 
-/// Converte una lista canonica (`&[&[&str]]`) in specs obbligatori.
+/// turns a canonical list into mandatory specs.
 pub fn specs(groups: &[&[&str]]) -> Vec<PackageSpec> {
     groups.iter().map(|g| PackageSpec::group(g)).collect()
 }
 
-/// Un **bisogno** dell'installazione, indipendente dal nome che ha su una
-/// distribuzione.
+/// an installation **need**, independent of the name it has on any
+/// distribution.
 ///
-/// # A cosa serve, e a cosa NON serve
+/// it plays no part in resolution, which still works on names. it exists for
+/// **one thing**: a test that enumerates these variants and demands every
+/// family cover them all.
 ///
-/// Non serve alla risoluzione: quella continua a lavorare su nomi, come sempre.
-/// Serve a **una cosa sola**: un test che enumera queste varianti e pretende che
-/// ogni famiglia le copra tutte.
+/// R6-hotfix-2's lesson was "freeze the list, so a refactor that loses a
+/// package says so at once". with two families it is not enough for each list
+/// to be frozen: they must **correspond**. otherwise a dependency added to
+/// Debian is found missing on Fedora only when a VM stops compiling.
 ///
-/// La lezione di R6-hotfix-2 era «congela la lista, così un refactor che perde un
-/// pacchetto lo dice subito». Con due famiglie la lezione si estende: non basta
-/// che ogni lista sia congelata, serve che le due si **corrispondano**. Senza,
-/// si aggiunge una dipendenza a Debian e ci si accorge che manca su Fedora solo
-/// quando una VM non compila più — cioè nel posto più caro possibile.
-///
-/// # Perché la corrispondenza non è 1:1, e va bene così
-///
-/// Un bisogno può costare **più pacchetti** su una famiglia (`BuildTools` è un
-/// pacchetto su Debian e tre su Fedora) e **lo stesso** pacchetto su due bisogni
-/// diversi (`Jpeg` e `Jpeg8` collassano entrambi su `libjpeg-turbo-devel`: la
-/// deduplica di A-MD-1 se ne occupa). Per questo una voce di catalogo porta un
-/// `Vec<PackageSpec>` e non uno solo.
+/// the correspondence is not 1:1, and that is fine: one need can cost **several
+/// packages** on a family, and one package can satisfy two needs. so a
+/// catalogue entry carries a `Vec<PackageSpec>`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum DepId {
     Git,
     Curl,
     Wget,
-    /// `envsubst`, per rendere i template.
+    /// `envsubst`, for rendering the templates.
     Gettext,
     PythonPip,
     PythonDev,
-    /// Il modulo `ensurepip`, senza cui `python3 -m venv` si ferma a metà
-    /// (A-R6-1). Su alcune famiglie è un pacchetto a sé, su altre sta nella
-    /// libreria standard: il bisogno c'è comunque, ed è la precondizione di
-    /// `create-virtualenv` a verificarlo davvero.
+    /// the `ensurepip` module, without which `python3 -m venv` stops halfway
+    /// (A-R6-1). a separate package on some families and part of the stdlib on
+    /// others: the need is there either way.
     PythonVenv,
     PythonWheel,
     PythonSetuptools,
-    /// Compilatore C/C++ e make: servono a compilare le estensioni native di pip.
+    /// C/C++ compiler and make, for pip's native extensions.
     BuildTools,
     Freetype,
     Xml2,
@@ -221,11 +187,11 @@ pub enum DepId {
     Ldap,
     Sasl,
     Jpeg,
-    /// Variante storica del precedente: su alcune release è un pacchetto di
-    /// transizione, su altre non esiste e ricade sullo stesso nome di [`Self::Jpeg`].
+    /// the historical variant of the previous one: a transitional package on
+    /// some releases, absent on others where it collapses onto [`Self::Jpeg`].
     Jpeg8,
     Zlib,
-    /// Header del client PostgreSQL (`libpq`), per `psycopg2`.
+    /// PostgreSQL client headers, for `psycopg2`.
     PostgresClient,
     Xslt,
     Tiff,
@@ -237,13 +203,13 @@ pub enum DepId {
     Xcb,
     Ev,
     CAres,
-    /// **Opzionale**: il compilatore degli asset `.less`. Odoo moderno usa SCSS
-    /// e parte senza; se manca è un warning, non un errore.
+    /// **optional**: the `.less` asset compiler. modern Odoo uses SCSS and
+    /// starts without it, so missing is a warning.
     LessCompiler,
 }
 
 impl DepId {
-    /// Tutti i bisogni, per il test di parità fra cataloghi.
+    /// every need, for the catalogue parity test.
     pub const ALL: &'static [DepId] = &[
         DepId::Git,
         DepId::Curl,
@@ -278,16 +244,16 @@ impl DepId {
     ];
 }
 
-/// Un bisogno e i pacchetti che lo soddisfano **su questa famiglia**.
+/// a need, and the packages that satisfy it **on this family**.
 #[derive(Debug, Clone)]
 pub struct CatalogEntry {
     pub id: DepId,
-    /// Uno o più `PackageSpec`: un bisogno può costare più pacchetti.
+    /// one or more specs: a need can cost several packages.
     pub specs: Vec<PackageSpec>,
 }
 
 impl CatalogEntry {
-    /// Una voce con un solo gruppo di alternative.
+    /// an entry with a single group of alternatives.
     pub fn new(id: DepId, alternatives: &[&str]) -> Self {
         CatalogEntry {
             id,
@@ -295,7 +261,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Una voce **opzionale**: se nessuna alternativa è disponibile si prosegue.
+    /// an **optional** entry: unavailable means carry on.
     pub fn optional(id: DepId, alternatives: &[&str]) -> Self {
         CatalogEntry {
             id,
@@ -303,7 +269,7 @@ impl CatalogEntry {
         }
     }
 
-    /// Una voce che costa **più pacchetti** (es. `build-essential` → gcc, g++, make).
+    /// an entry that costs **several packages**.
     pub fn many(id: DepId, packages: &[&str]) -> Self {
         CatalogEntry {
             id,
@@ -312,58 +278,53 @@ impl CatalogEntry {
     }
 }
 
-/// I nomi di pacchetto che una famiglia conosce.
+/// the package names a family knows.
 ///
-/// # Perché la lista sta nel backend e non in una tabella a parte
+/// the list lives in the backend because it **is** the manager's knowledge: "on
+/// dnf the names are these" is no different from "on dnf you install like
+/// this". keeping them apart would mean two places to update per dependency,
+/// and R6-hotfix-2's lesson is that lists must be protected from refactors, not
+/// multiplied.
 ///
-/// Perché la lista **è** conoscenza del gestore: dire «su dnf i nomi sono
-/// questi» non è diverso da dire «su dnf si installa così». Tenerle separate
-/// significherebbe avere due posti da aggiornare quando si aggiunge una
-/// dipendenza, e la lezione di R6-hotfix-2 è che le liste vanno protette dai
-/// refactor, non moltiplicate.
-///
-/// Sono **dati**, non metodi: così restano leggibili in blocco (per capire cosa
-/// installiamo su una distro basta aprire un file) e congelabili da un test.
+/// **data**, not methods: readable in one block, and freezable by a test.
 #[derive(Debug, Clone)]
 pub struct PackageCatalog {
-    /// Utility comuni a basso rischio, installate per prime.
+    /// low-risk common utilities, installed first.
     pub bootstrap: Vec<CatalogEntry>,
-    /// Dipendenze di sistema di Odoo: obbligatorie **e** opzionali insieme,
-    /// perché `PackageSpec` porta già con sé la distinzione.
+    /// Odoo's system dependencies, mandatory and optional together, since
+    /// `PackageSpec` already carries the distinction.
     pub odoo: Vec<CatalogEntry>,
-    /// Pacchetti che installano il server PostgreSQL.
+    /// the packages that install the PostgreSQL server.
     pub postgres: Vec<String>,
-    /// Il nome con cui si chiede «PostgreSQL è installato?». **Non** è il primo
-    /// elemento di `postgres`: è una domanda diversa, e su Fedora la risposta è
-    /// un nome diverso (`postgresql-server`, non `postgresql`).
+    /// the name to ask "is PostgreSQL installed?" with. **not** the first
+    /// element of `postgres`: a different question, and on Fedora a different
+    /// answer.
     pub postgres_marker: String,
-    /// Il pacchetto di nginx.
+    /// the nginx package.
     pub nginx: String,
-    /// Gli interpreti Python **alternativi** che questa famiglia impacchetta,
-    /// dal più recente al più vecchio.
+    /// the **alternative** Python interpreters this family packages, newest
+    /// first.
     ///
-    /// Serve a M11: quando il `python3` di sistema è più recente dei pin di
-    /// Odoo, il venv nasce su uno di questi invece che su quello (A-MD-7).
-    /// Vuoto è una risposta legittima e non una lacuna — vedi il commento nel
-    /// catalogo `apt`.
+    /// used by M11: when the system `python3` is newer than Odoo's pins, the
+    /// venv is built on one of these (A-MD-7). empty is a legitimate answer,
+    /// not a gap.
     pub alternate_pythons: Vec<AlternatePython>,
 }
 
-/// Un interprete Python alternativo, come lo impacchetta una famiglia.
+/// an alternative Python interpreter, as a family packages it.
 ///
-/// I due nomi stanno insieme perché si installano insieme: senza gli header non
-/// si compila nessuna estensione, e le estensioni che pip deve costruire sul
-/// ramo scelto sono sei (verificato in campo su Fedora 44).
+/// the two names travel together because they install together: without the
+/// headers no extension compiles, and six of them need building on the chosen
+/// branch (measured on Fedora 44).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AlternatePython {
     /// `(3, 13)`.
     pub version: (u32, u32),
-    /// Il pacchetto dell'interprete, che è anche il **comando**: su entrambe le
-    /// famiglie `python3.13` è sia il nome del pacchetto sia il binario in
-    /// `PATH`. Se un giorno le due cose divergessero, questo campo si sdoppia —
-    /// non si indovina.
+    /// the interpreter's package, which is also the **command**: on both
+    /// families `python3.13` names the package and the binary. should they ever
+    /// diverge, this field splits in two rather than being guessed.
     pub interpreter: String,
-    /// Il pacchetto degli header (`python3.13-devel` / `python3.13-dev`).
+    /// the headers package.
     pub devel: String,
 }
 
@@ -378,12 +339,12 @@ impl AlternatePython {
 }
 
 impl PackageCatalog {
-    /// Le specs del bootstrap, appiattite: è ciò che lo step consuma.
+    /// the bootstrap specs, flattened: what the step consumes.
     pub fn bootstrap_specs(&self) -> Vec<PackageSpec> {
         Self::flatten(&self.bootstrap)
     }
 
-    /// Le specs delle dipendenze Odoo, appiattite.
+    /// the Odoo dependency specs, flattened.
     pub fn odoo_specs(&self) -> Vec<PackageSpec> {
         Self::flatten(&self.odoo)
     }
@@ -392,12 +353,12 @@ impl PackageCatalog {
         entries.iter().flat_map(|e| e.specs.clone()).collect()
     }
 
-    /// I nomi che questa famiglia dà a un bisogno, appiattiti.
+    /// the names this family gives a need, flattened.
     ///
-    /// Serve a M11 per **un** uso: sapere quali nomi porta `DepId::PythonDev`,
-    /// cioè gli header del Python di sistema, che un interprete alternativo
-    /// rende inutili. Il nome non si cabla nel piano: si chiede al catalogo, che
-    /// è l'unico a saperlo per questa famiglia.
+    /// used by M11 for **one** thing: knowing which names `DepId::PythonDev`
+    /// carries, i.e. the system Python's headers, which an alternative
+    /// interpreter makes pointless. never hardcoded in the plan — the catalogue
+    /// is the only thing that knows them here.
     pub fn names_for(&self, id: DepId) -> Vec<String> {
         self.bootstrap
             .iter()
@@ -408,7 +369,7 @@ impl PackageCatalog {
             .collect()
     }
 
-    /// Questo catalogo copre il bisogno? (bootstrap **o** dipendenze Odoo)
+    /// does this catalogue cover the need, in either list?
     pub fn covers(&self, id: DepId) -> bool {
         self.bootstrap
             .iter()
@@ -417,104 +378,94 @@ impl PackageCatalog {
     }
 }
 
-/// I comandi di un gestore di pacchetti.
+/// a package manager's commands.
 ///
-/// La superficie è deliberatamente **piccola e 1:1 sui comandi**: nessuna
-/// politica qui dentro, così i test possono asserire la sequenza esatta e
-/// `steps::remove_with_recovery` resta l'unico posto in cui vive la strategia di
-/// rimozione con recupero.
+/// deliberately **small and 1:1 onto commands**: no policy in here, so the
+/// tests can assert exact sequences and the removal-with-recovery strategy
+/// lives in one place.
 pub trait PackageManager {
-    /// Il pacchetto risulta installato **con questo nome**?
+    /// is the package installed **under this name**?
     ///
-    /// La precisazione conta: un nome puramente virtuale risponde `false` anche
-    /// subito dopo essere stato «installato», ed è la ragione per cui
-    /// [`Availability::VirtualOnly`] è un ripiego.
+    /// the wording matters: a purely virtual name answers `false` even right
+    /// after being "installed", which is why [`Availability::VirtualOnly`] is
+    /// only a fallback.
     fn is_installed(&self, pkg: &str) -> bool;
 
-    /// Riscarica gli indici dei repository.
+    /// refreshes the repository indices.
     ///
-    /// È una mutazione (tocca la cache del gestore), quindi vive **solo** dentro
-    /// un `run` — mai in uno `snapshot`, che non muta per invariante (C4). Non
-    /// ha undo: un indice aggiornato non cambia nulla di ciò che è installato, è
-    /// la cache di ciò che *si potrebbe* installare. Come un `git fetch`.
+    /// a mutation, so it lives **only** inside a `run` — never in a `snapshot`,
+    /// which never mutates (C4). no undo: a refreshed index changes nothing
+    /// about what is installed. like a `git fetch`.
     fn refresh_index(&self) -> Result<(), StepError>;
 
-    /// L'indice è interrogabile, cioè le risposte di [`Self::availability`]
-    /// significano qualcosa?
+    /// is the index queryable, i.e. do [`Self::availability`]'s answers mean
+    /// anything?
     ///
-    /// Serve a non confondere **cecità** con **assenza**: su una macchina dove
-    /// l'indice non è mai stato aggiornato ogni interrogazione risponde «non
-    /// disponibile», e senza questa domanda un indice vuoto diventerebbe la
-    /// diagnosi «questo pacchetto non esiste su questa release» — il falso
-    /// positivo A5.1-bis, che in campo ha mandato a cercare la rinomina di un
-    /// pacchetto che stava benissimo al suo posto.
+    /// keeps **blindness** apart from **absence**: with a never-refreshed index
+    /// every query answers "unavailable", and without this question that would
+    /// become "this package does not exist on this release" — the A5.1-bis
+    /// false positive.
     fn index_is_queryable(&self) -> bool;
 
-    /// Che cosa sa dirci il gestore su questo nome. Query, non mutazione.
+    /// what the manager can tell us about this name. a query, not a mutation.
     fn availability(&self, pkg: &str) -> Availability;
 
-    /// Installa (idempotente), senza raccomandati/dipendenze deboli.
+    /// installs, idempotently, without recommends or weak dependencies.
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError>;
 
-    /// Rimuove **esattamente** i pacchetti indicati.
+    /// removes **exactly** the packages given.
     ///
-    /// Si chiama `remove` e non `purge` di proposito: «purge» è un concetto deb,
-    /// e il nome di un metodo non deve promettere una semantica che una delle
-    /// implementazioni non ha.
+    /// named `remove` and not `purge` on purpose: "purge" is a deb concept, and
+    /// a method name must not promise semantics one implementation lacks.
     ///
-    /// **L'invariante che ogni implementazione deve rispettare**: rimuovere solo
-    /// ciò che è stato chiesto. Nessuna rimozione di dipendenze diventate
-    /// orfane — quella è [`Self::remove_orphans`], che è un'azione separata e
-    /// confinata a `--aggressive-rollback`. Su un gestore che lo fa di default,
-    /// va **disattivato esplicitamente**: sarebbe l'`autoremove` globale che R0
-    /// ha bandito dall'undo perché non è delimitato dal nostro delta, cioè
-    /// l'esatto contrario del principio chirurgico.
+    /// **the invariant every implementation must honour**: remove only what was
+    /// asked. no orphaned dependencies — that is [`Self::remove_orphans`],
+    /// confined to `--aggressive-rollback`. a manager that does it by default
+    /// must have it **explicitly disabled**: it would be the global
+    /// `autoremove` R0 banned, unbounded by our delta.
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError>;
 
-    /// Rimuove le dipendenze diventate orfane. **Solo** `--aggressive-rollback`.
+    /// removes orphaned dependencies. **only** under `--aggressive-rollback`.
     fn remove_orphans(&self) -> Result<(), StepError>;
 
-    /// Tenta di riportare il database dei pacchetti in stato consistente.
+    /// tries to bring the package database back to a consistent state.
     ///
-    /// Il rollback arriva sempre *dopo* un fallimento, e quel fallimento può
-    /// aver lasciato il gestore a metà (A-RT-2: su dpkg rotto, apt si rifiuta di
-    /// operare e **ogni** purge del rollback fallisce). Su gestori che non hanno
-    /// uno stato «scompattato ma non configurato» è legittimo che sia un no-op.
+    /// a rollback always runs *after* a failure, and that failure may have left
+    /// the manager halfway (A-RT-2: on a broken dpkg, apt refuses to operate
+    /// and **every** purge fails). a no-op is legitimate on managers with no
+    /// "unpacked but unconfigured" state.
     fn try_repair(&self) -> Result<(), StepError>;
 
-    /// Il secondo livello di recupero, per quando [`Self::try_repair`] non basta
-    /// perché il gestore stesso si rifiuta di operare.
+    /// the second recovery level, for when [`Self::try_repair`] is not enough
+    /// because the manager itself refuses to operate.
     fn try_deep_repair(&self) -> Result<(), StepError>;
 
-    /// Installa un pacchetto da un **file locale**, risolvendone le dipendenze.
+    /// installs a package from a **local file**, resolving its dependencies.
     ///
-    /// Il path dev'essere assoluto (o iniziare con `./`): i gestori trattano
-    /// come file solo gli argomenti che contengono una `/`, altrimenti li cercano
-    /// nei repository.
+    /// the path must be absolute or start with `./`: managers only treat an
+    /// argument as a file when it contains a `/`.
     fn install_local_file(&self, path: &Path) -> Result<(), StepError>;
 
-    /// Come si chiama il file di pacchetto di questo formato.
+    /// what a package file of this format is called.
     ///
-    /// Serve a `install-wkhtmltopdf`, che scarica un pacchetto **da upstream**:
-    /// il progetto pubblica sia `.deb` sia `.rpm`, con schemi di nome diversi
-    /// (`wkhtmltox_{ver}.{suffisso}_amd64.deb` contro
-    /// `wkhtmltox-{ver}.{suffisso}.x86_64.rpm`). Non è una convenzione nostra,
-    /// ma è conoscenza del **formato di pacchetto**, quindi di chi lo installa.
+    /// used by `install-wkhtmltopdf`, which downloads **from upstream**: the
+    /// project publishes both formats under different naming schemes. not our
+    /// convention, but knowledge of the **package format**, hence of whoever
+    /// installs it.
     ///
-    /// L'estensione conta oltre che per il nome: R9 ha scoperto che
-    /// `apt-get install <file>` riconosce un percorso locale **solo** da quella,
-    /// e per questo il temporaneo con nome casuale la conserva
-    /// (`private_temp_path_keeping_extension`).
+    /// the extension matters beyond the name: `apt-get install <file>`
+    /// recognises a local path **only** by it, which is why the randomly named
+    /// temporary preserves it (R9).
     fn local_package_name(&self, version: &str, suffix: &str) -> String;
 
-    /// Il comando che l'utente digiterebbe per aggiornare l'indice, **come
-    /// testo**, da mettere nei messaggi diagnostici.
+    /// the command a user would type to refresh the index, **as text**, for the
+    /// diagnostics.
     ///
-    /// Serve a non scrivere «esegui `apt-get update`» a chi sta su Fedora. Un
-    /// suggerimento sbagliato è peggio di nessun suggerimento: manda a provare
-    /// un comando che non esiste e fa dubitare del resto della diagnosi.
+    /// so we never tell a Fedora user to run `apt-get update`. a wrong
+    /// suggestion is worse than none: it sends them to a command that does not
+    /// exist and casts doubt on the rest.
     fn refresh_command(&self) -> &'static str;
 
-    /// I nomi di pacchetto che questa famiglia conosce.
+    /// the package names this family knows.
     fn catalog(&self) -> PackageCatalog;
 }

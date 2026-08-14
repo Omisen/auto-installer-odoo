@@ -1,46 +1,38 @@
-//! [`SetupDataDir`]: crea il `data_dir` di Odoo (il **filestore**) in modo
-//! reversibile, con la stessa protezione anti-drop del database.
+//! [`SetupDataDir`]: creates Odoo's `data_dir` — the **filestore** —
+//! reversibly, under the same anti-drop protection as the database.
 //!
-//! # Perché esiste (A-R5-3)
+//! # why it exists (A-R5-3)
 //!
-//! Il `data_dir` configurato in `odoo<N>.conf` è
-//! `<odoo_home>/.local/share/Odoo` ([`generate_config::data_dir`]): lì Odoo
-//! scrive il filestore, cioè i file veri degli allegati. Finché nessuno step lo
-//! creava, quella directory nasceva **da sola** al primo avvio di Odoo, dentro
-//! `/opt/odoo` — che l'installer, trovandola già esistente, marca `Preexisting`
-//! e non tocca mai. Il risultato, misurato dal job Ubuntu di R5: dopo un
-//! rollback completo `/opt/odoo/.local` restava lì.
+//! the `data_dir` is where Odoo writes the actual files of record attachments.
+//! while no step created it, that directory came into existence **by itself**
+//! on Odoo's first start, inside a `/opt/odoo` the installer marks
+//! `Preexisting` and never touches. measured result: after a complete rollback,
+//! `/opt/odoo/.local` was still there.
 //!
-//! Un artefatto che nasce senza che nessuno lo registri non è annullabile. Qui
-//! viene creato da uno step, con il suo `PreState`, e quindi diventa rimovibile
-//! per la sola strada che questo progetto ammette: perché *risulta dal
-//! `PreState`* che l'abbiamo creato noi.
+//! an artifact born unrecorded cannot be undone. created by a step, with its
+//! own `PreState`, it becomes removable by the only route this project allows.
 //!
-//! # Il filestore segue il destino del database (anti-drop)
+//! # the filestore follows the database's fate (anti-drop)
 //!
-//! Un filestore non è una cache: è la metà su disco dei dati applicativi. Se il
-//! database era **preesistente** — un DB del cliente con lo stesso nome, che
-//! `CreateDatabase` protegge dal drop — allora il suo filestore contiene
-//! allegati veri, che l'installer non ha alcun diritto di cancellare, anche se la
-//! directory l'ha materialmente creata lui. Perciò l'undo richiede **due**
-//! condizioni: `PreState::CreatedByUs` **e** database creato da noi.
+//! a filestore is not a cache: it is the on-disk half of the application data.
+//! if the database was **pre-existing** — the customer's, which
+//! `CreateDatabase` protects from the drop — its filestore holds real
+//! attachments, whoever created the directory. so the undo needs **two**
+//! conditions: `CreatedByUs` **and** a database of ours.
 //!
-//! Il secondo dato viene letto dal canale `Context::db_created_by_us` durante lo
-//! `snapshot` — che gira dopo quello di `CreateDatabase`, quindi il valore c'è —
-//! e viene **persistito** nello snapshot di questo step. Non è ridondanza: un
-//! rollback da disco ricostruisce il `Context` dalla config persistita, dove
-//! quel flag vale `false` di default, e senza copia locale l'undo non saprebbe
-//! mai di poter agire. Come per il DB, il verdetto si rilegge, non si rideduce.
+//! the second is read from `Context::db_created_by_us` during the snapshot,
+//! which runs after `CreateDatabase`'s, and is then **persisted** here. not
+//! redundancy: a rollback from disk rebuilds the `Context` from the persisted
+//! config, where that flag defaults to `false`, so without a local copy the
+//! undo would never know it may act. the verdict is re-read, not re-derived.
 //!
-//! # Ordine dell'undo, dichiarato
+//! # undo ordering, declared
 //!
-//! Nella sequenza questo step sta dopo `create-database`, quindi il suo undo
-//! gira **prima** del `dropdb` (ordine inverso). Se il `dropdb` fallisse — è
-//! best-effort — resterebbe un database nostro senza filestore. Non è
-//! evitabile senza invertire l'ordine, e invertirlo è impossibile: lo snapshot
-//! di questo step deve girare *dopo* quello di `CreateDatabase` per sapere di
-//! chi è il database. Il caso è comunque quello di un DB che *stiamo* buttando
-//! via, e un `dropdb` fallito finisce già nel report dei residui.
+//! this step comes after `create-database`, so its undo runs **before** the
+//! `dropdb`. if that failed — it is best-effort — a database of ours would be
+//! left without its filestore. unavoidable: this snapshot must run *after*
+//! `CreateDatabase`'s to know whose the database is, and the case is a database
+//! we are throwing away anyway.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -52,21 +44,21 @@ use crate::step::{decode_snapshot, Step};
 use crate::steps::generate_config;
 use crate::system_ops::SystemOps;
 
-/// Snapshot persistito dello step.
+/// the step's persisted snapshot.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DataDirSnapshot {
-    /// Stato del `data_dir` prima di noi.
+    /// the `data_dir`'s state before us.
     pub prestate: PreState,
-    /// Il livello **più alto** che mancava sotto `odoo_home` e che quindi
-    /// abbiamo creato noi (es. `/opt/odoo/.local`). È ciò che l'undo rimuove: se
-    /// il cliente aveva già `.local`, qui c'è `.local/share` o solo il
-    /// filestore, e la sua `.local` non viene toccata.
+    /// the **highest** level missing under `odoo_home`, hence the one we
+    /// created. that is what the undo removes: with a pre-existing `.local`
+    /// this holds `.local/share`, or the filestore alone, and the customer's
+    /// `.local` is never touched.
     pub created_root: Option<std::path::PathBuf>,
-    /// Il database era stato creato da noi? Condizione anti-drop dell'undo.
+    /// was the database ours? the undo's anti-drop condition.
     pub db_was_ours: bool,
 }
 
-/// Crea il `data_dir` di Odoo (reversibile, gated sull'anti-drop del DB).
+/// creates Odoo's `data_dir`, reversibly, gated on the database's anti-drop.
 pub struct SetupDataDir {
     ops: Box<dyn SystemOps>,
     snap: DataDirSnapshot,
@@ -80,8 +72,8 @@ impl SetupDataDir {
         }
     }
 
-    /// La radice di ciò che il nostro `mkdir -p` creerà (helper condiviso con
-    /// [`setup_cache_dir`](crate::steps::setup_cache_dir)).
+    /// the root of what our `mkdir -p` will create, shared with
+    /// [`setup_cache_dir`](crate::steps::setup_cache_dir).
     fn highest_missing_level(&self, ctx: &Context) -> Option<std::path::PathBuf> {
         crate::steps::highest_missing_level(
             self.ops.as_ref(),
@@ -99,8 +91,8 @@ impl Step for SetupDataDir {
     fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError> {
         let data_dir = generate_config::data_dir(ctx);
 
-        // Letto ORA: `CreateDatabase::snapshot` l'ha già pubblicato, e da qui in
-        // avanti vive nel nostro snapshot persistito (vedi nota di modulo).
+        // read NOW: `CreateDatabase::snapshot` has published it, and from here
+        // it lives in our own persisted snapshot.
         self.snap.db_was_ours = ctx
             .db_created_by_us
             .load(std::sync::atomic::Ordering::SeqCst);
@@ -141,8 +133,8 @@ impl Step for SetupDataDir {
             return Ok(());
         }
 
-        // Creato come utente odoo: il filestore deve essere scrivibile dal
-        // servizio, e `mkdir -p` copre i livelli intermedi (.local, .local/share).
+        // created as `odoo`: the service has to be able to write there, and
+        // `mkdir -p` covers the intermediate levels.
         self.ops.mkdir_p_as_user(&ctx.odoo_user, &data_dir)?;
         self.snap.prestate = PreState::CreatedByUs;
         info!(
@@ -162,9 +154,8 @@ impl Step for SetupDataDir {
             return Ok(());
         }
 
-        // PROTEZIONE CRITICA: il filestore di un database preesistente contiene
-        // allegati del cliente. La directory l'abbiamo creata noi, i dati dentro
-        // no.
+        // CRITICAL PROTECTION: a pre-existing database's filestore holds the
+        // customer's attachments. we created the directory, not the data.
         if !self.snap.db_was_ours {
             warn!(
                 "undo NO-OP: il database era preesistente, il filestore contiene allegati \
@@ -179,9 +170,8 @@ impl Step for SetupDataDir {
             .clone()
             .unwrap_or_else(|| generate_config::data_dir(ctx));
 
-        // rm -rf del nostro perimetro: la directory è nostra e i dati dentro
-        // appartengono a un database che stiamo droppando. La rete sul path
-        // reidratato (dev'essere sotto odoo_home) è dentro l'helper.
+        // the directory is ours and the data belongs to a database we are
+        // dropping. the perimeter net on the rehydrated path is in the helper.
         crate::steps::remove_created_root(
             self.ops.as_ref(),
             self.name(),
@@ -196,11 +186,10 @@ impl Step for SetupDataDir {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Reidrata `created_root` **e** `db_was_ours`: il primo dice *cosa*
-    /// rimuovere, il secondo *se* è lecito. Ricalcolare l'uno o l'altro dopo
-    /// l'installazione darebbe la risposta sbagliata in entrambi i casi — le
-    /// directory ormai esistono, e il database esiste sia che l'avessimo creato
-    /// noi sia che fosse del cliente.
+    /// rehydrates `created_root` **and** `db_was_ours`: the first says *what*
+    /// to remove, the second *whether* that is allowed. recomputing either
+    /// after the installation would answer wrongly — the directories now exist,
+    /// and so does the database whoever created it.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;

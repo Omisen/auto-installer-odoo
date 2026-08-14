@@ -1,9 +1,8 @@
-//! Il backend **apt/dpkg**: comandi e nomi della famiglia Debian.
+//! the **apt/dpkg** backend: the Debian family's commands and names.
 //!
-//! Contiene ciò che fino alla 2.2.0 era sparso fra la sezione «apt / dpkg» del
-//! trait `SystemOps` e le costanti di `steps::apt_packages`. Non c'è alcun
-//! cambiamento di comportamento: gli stessi comandi, con gli stessi argomenti,
-//! nello stesso ordine.
+//! gathers what used to be spread between `SystemOps` and the constants in
+//! `steps::apt_packages`, with no behaviour change: same commands, same
+//! arguments, same order.
 
 use std::path::Path;
 
@@ -13,12 +12,10 @@ use crate::system_ops::{
     capture_command_with_env, has_installable_candidate, run_command_with_env, total_package_names,
 };
 
-/// Esegue `apt-get` con l'ambiente non-interattivo (niente prompt tzdata /
-/// needrestart), come il Bash originale.
+/// runs `apt-get` non-interactively, with no tzdata or needrestart prompts.
 ///
-/// `DEBIAN_FRONTEND` e `NEEDRESTART_MODE` sono variabili **Debian-specifiche**:
-/// e' il motivo per cui questa funzione vive qui e non fra gli helper generici
-/// di `system_ops`.
+/// `DEBIAN_FRONTEND` and `NEEDRESTART_MODE` are **Debian-specific**, which is
+/// why this lives here and not among the generic `system_ops` helpers.
 fn run_apt(args: &[&str]) -> Result<(), StepError> {
     run_command_with_env(
         "apt-get",
@@ -30,10 +27,10 @@ fn run_apt(args: &[&str]) -> Result<(), StepError> {
     )
 }
 
-/// Prerequisiti bootstrap: utility comuni a basso rischio.
+/// bootstrap prerequisites: low-risk common utilities.
 ///
-/// Questi quattro nomi sono stabili su tutte le release Debian/Ubuntu
-/// supportate, quindi non hanno alternative.
+/// these four names are stable across every supported release, so they carry no
+/// alternatives.
 fn bootstrap_catalog() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry::new(DepId::Git, &["git"]),
@@ -43,12 +40,11 @@ fn bootstrap_catalog() -> Vec<CatalogEntry> {
     ]
 }
 
-/// Dipendenze di sistema di Odoo sulla famiglia Debian (lista canonica, da
-/// `system.sh`).
+/// Odoo's system dependencies on the Debian family.
 ///
-/// Ogni voce può avere alternative in ordine di preferenza: il primo nome
-/// installabile vince. I gruppi con più di un nome sono quelli che cambiano tra
-/// release — le divergenze osservate in campo su Debian 11/12 (A5.1).
+/// each entry may carry alternatives in order of preference, and the first
+/// installable name wins. the multi-name groups are the ones that change
+/// between releases (A5.1).
 fn odoo_catalog() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry::new(DepId::Git, &["git"]),
@@ -61,10 +57,9 @@ fn odoo_catalog() -> Vec<CatalogEntry> {
         CatalogEntry::new(DepId::PythonSetuptools, &["python3-setuptools"]),
         CatalogEntry::new(DepId::BuildTools, &["build-essential"]),
         CatalogEntry::new(DepId::Gettext, &["gettext-base"]),
-        // Su Ubuntu 24.04 `libfreetype6-dev` è diventato un nome puramente
-        // virtuale (`Provides` di `libfreetype-dev`): installabile ma non
-        // purgabile. Il nome reale come alternativa fa sì che il delta contenga
-        // qualcosa che l'undo possa davvero rimuovere (A5.1-bis).
+        // on Ubuntu 24.04 `libfreetype6-dev` became purely virtual: installable
+        // but not purgeable. the real name as an alternative keeps the delta
+        // made of things the undo can actually remove (A5.1-bis).
         CatalogEntry::new(DepId::Freetype, &["libfreetype6-dev", "libfreetype-dev"]),
         CatalogEntry::new(DepId::Xml2, &["libxml2-dev"]),
         CatalogEntry::new(DepId::Zip, &["libzip-dev"]),
@@ -74,17 +69,16 @@ fn odoo_catalog() -> Vec<CatalogEntry> {
         CatalogEntry::new(DepId::Zlib, &["zlib1g-dev"]),
         CatalogEntry::new(DepId::PostgresClient, &["libpq-dev"]),
         CatalogEntry::new(DepId::Xslt, &["libxslt1-dev"]),
-        // Rinominato senza il soname: Ubuntu 22.04 ha entrambi, Debian 12 solo
-        // il secondo.
+        // renamed without the soname: 22.04 has both, Debian 12 only the
+        // second.
         CatalogEntry::new(DepId::Tiff, &["libtiff5-dev", "libtiff-dev"]),
-        // Su Ubuntu è un pacchetto di transizione verso `libjpeg-turbo8-dev`; su
-        // Debian 12 non esiste e la copertura la dà `libjpeg-dev`, già in lista.
+        // a transitional package on Ubuntu; absent on Debian 12, where
+        // `libjpeg-dev` already covers it.
         //
-        // Nota (A-MD-1): su una release dove nessuno dei primi due esiste, questa
-        // voce risolve a `libjpeg-dev`, **lo stesso nome** di `DepId::Jpeg`. La
-        // risoluzione deduplica i nomi risolti prima di comporre il delta: il
-        // manifesto è la contabilità di ciò che abbiamo aggiunto, e una
-        // contabilità con una riga doppia è una contabilità sbagliata.
+        // A-MD-1: where neither of the first two exists this resolves to the
+        // **same name** as `DepId::Jpeg`. resolution deduplicates before
+        // composing the delta — the manifest is the accounting of what we
+        // added, and a double entry is wrong accounting.
         CatalogEntry::new(
             DepId::Jpeg8,
             &["libjpeg8-dev", "libjpeg-turbo8-dev", "libjpeg-dev"],
@@ -97,28 +91,26 @@ fn odoo_catalog() -> Vec<CatalogEntry> {
         CatalogEntry::new(DepId::Xcb, &["libxcb1-dev"]),
         CatalogEntry::new(DepId::Ev, &["libev-dev"]),
         CatalogEntry::new(DepId::CAres, &["libc-ares-dev"]),
-        // Opzionale: `node-less` è il compilatore degli asset `.less`. Odoo
-        // moderno usa SCSS (compilato in-process da libsass) e parte senza
-        // `lessc`; il pacchetto è però stato rimosso da alcune release Debian, e
-        // una dipendenza da "nice to have" non deve trasformarsi in
-        // un'installazione impossibile.
+        // optional: the `.less` asset compiler. modern Odoo uses SCSS and
+        // starts without it, and the package was dropped from some Debian
+        // releases — a nice-to-have must not make installation impossible.
         CatalogEntry::optional(DepId::LessCompiler, &["node-less"]),
     ]
 }
 
-/// Pacchetti che installano il server PostgreSQL su Debian/Ubuntu.
+/// the packages that install the PostgreSQL server here.
 pub const POSTGRES_PACKAGES: &[&str] = &["postgresql", "postgresql-contrib"];
-/// Il nome con cui si chiede «PostgreSQL è installato?».
+/// the name to ask "is PostgreSQL installed?" with.
 pub const POSTGRES_MARKER_PACKAGE: &str = "postgresql";
-/// Il pacchetto di nginx.
+/// the nginx package.
 pub const NGINX_PACKAGE: &str = "nginx";
 
-/// Gli argomenti di `apt-get install`, come funzione **pura**.
+/// `apt-get install`'s arguments, as a **pure** function.
 ///
-/// Come per dnf: il codice che esegue apt gira solo su una macchina reale, e
-/// `--no-install-recommends` è una protezione del delta (senza, entrano
-/// pacchetti che nessuno ha chiesto e che l'undo poi rimuoverebbe). Averla come
-/// valore di ritorno la rende verificabile.
+/// the code that runs apt only executes on a real machine, and
+/// `--no-install-recommends` protects the delta: without it packages nobody
+/// asked for enter, and the undo would remove them. as a return value the flag
+/// is checkable.
 pub fn install_args(pkgs: &[&str]) -> Vec<String> {
     let mut args = vec![
         "install".to_string(),
@@ -129,22 +121,20 @@ pub fn install_args(pkgs: &[&str]) -> Vec<String> {
     args
 }
 
-/// Gli argomenti di `apt-get purge`, come funzione **pura**.
+/// `apt-get purge`'s arguments, as a **pure** function.
 ///
-/// apt non rimuove le dipendenze orfane se non glielo si chiede, quindi
-/// l'invariante di [`PackageManager::remove`] — rimuovere **solo** ciò che è
-/// stato chiesto — è soddisfatta senza opzioni aggiuntive. Su dnf non è così, ed
-/// è la differenza che il Bivio 2 ha dovuto decidere.
+/// apt does not remove orphans unless asked, so [`PackageManager::remove`]'s
+/// invariant holds with no extra options. dnf differs, and has to disable it
+/// explicitly.
 pub fn remove_args(pkgs: &[&str]) -> Vec<String> {
     let mut args = vec!["purge".to_string(), "-y".to_string()];
     args.extend(pkgs.iter().map(|p| p.to_string()));
     args
 }
 
-/// Il gestore di pacchetti della famiglia Debian.
+/// the Debian family's package manager.
 ///
-/// Senza stato: le due strutture di `RealSystemOps` sono `'static` e i comandi
-/// vengono eseguiti a ogni chiamata, come prima.
+/// stateless: the commands run on every call.
 #[derive(Debug, Default)]
 pub struct AptBackend;
 
@@ -168,43 +158,34 @@ impl PackageManager for AptBackend {
     fn index_is_queryable(&self) -> bool {
         match capture_command_with_env("apt-cache", &["stats"], &[("LC_ALL", "C")]) {
             Ok(out) => total_package_names(&out).is_some_and(|n| n > 0),
-            // Non riusciamo a chiederlo: trattiamolo come indice non
-            // interrogabile. Porta a un messaggio prudente ("aggiorna
-            // l'indice"), non a un verdetto di assenza.
+            // we cannot ask: treat the index as unqueryable, which yields a
+            // cautious message rather than a verdict of absence.
             Err(_) => false,
         }
     }
 
-    /// Due comandi, in quest'ordine, ed è il **meccanismo** di apt — non la
-    /// politica, che sta in `AptPackagesStep::resolve`.
+    /// two commands, in this order: apt's **mechanism**, not the policy, which
+    /// lives in `AptPackagesStep::resolve`.
     ///
-    /// 1. `apt-cache policy` è la via veloce e copre tutti i casi normali. Un
-    ///    `Candidate:` diverso da `(none)` significa che dopo l'installazione
-    ///    `dpkg-query` conoscerà questo nome: [`Availability::Real`].
-    /// 2. se non c'è candidato reale, resta da distinguere «nome inesistente» da
-    ///    «nome puramente virtuale», e a questo risponde solo il risolutore:
-    ///    `apt-get install -s` (simulazione, non muta nulla) esce 0 anche per un
-    ///    `Provides` con un solo fornitore. È più lenta (~0.4s: fa girare il
-    ///    risolutore), per questo si usa come ripiego e non come prima domanda.
-    ///
-    /// Costo rispetto alla 2.2.0: una simulazione in più per ogni **alternativa
-    /// assente** di un gruppo (tre gruppi in tutta la lista, ~1s su
-    /// un'installazione che dura minuti). In cambio il chiamante non deve più
-    /// sapere in che ordine porre due domande e perché.
+    /// 1. `apt-cache policy` is the fast path and covers the normal cases: a
+    ///    `Candidate:` other than `(none)` means `dpkg-query` will know this
+    ///    name after installation.
+    /// 2. otherwise "does not exist" still has to be told from "purely
+    ///    virtual", and only the resolver answers that: `apt-get install -s`
+    ///    simulates without mutating, and exits 0 even for a single-provider
+    ///    `Provides`. slower, so it is the fallback and not the first
+    ///    question.
     fn availability(&self, pkg: &str) -> Availability {
-        // apt-cache assente o in errore: nessuna informazione, non un verdetto.
-        // Non si conclude nulla da qui — si prova la via lenta, e se anche
-        // quella dice di no chi chiama incrocia con `index_is_queryable`.
+        // apt-cache missing or failing: no information, not a verdict. try the
+        // slow path, and let the caller cross-check with `index_is_queryable`.
         let policy_says_real =
             capture_command_with_env("apt-cache", &["policy", "--", pkg], &[("LC_ALL", "C")])
                 .map(|out| has_installable_candidate(&out))
                 .unwrap_or(false);
 
-        // La via lenta si percorre **solo** se serve: `-s` = simulate, apt
-        // calcola la soluzione senza toccare il sistema, ma fa girare il
-        // risolutore (~0.4s). Esce 100 con "E: Unable to locate package" se il
-        // nome non esiste, 0 se è installabile — anche quando è virtuale con un
-        // solo fornitore.
+        // the slow path only when needed: `-s` simulates without touching the
+        // system but runs the resolver. exits 100 for a name that does not
+        // exist, 0 when installable — virtual single-provider included.
         let resolver_accepts = !policy_says_real
             && run_apt(&["install", "-s", "-y", "--no-install-recommends", "--", pkg]).is_ok();
 
@@ -216,10 +197,8 @@ impl PackageManager for AptBackend {
         run_apt(&args.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
-    /// `apt-get purge`: rimuove i pacchetti indicati **e i loro file di
-    /// configurazione**, senza toccare nient'altro. apt non rimuove le orfane se
-    /// non glielo si chiede, quindi l'invariante di [`PackageManager::remove`] è
-    /// soddisfatta senza opzioni aggiuntive.
+    /// `apt-get purge`: removes the named packages **and their config files**,
+    /// and nothing else.
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
         let args = remove_args(pkgs);
         run_apt(&args.iter().map(String::as_str).collect::<Vec<_>>())
@@ -229,16 +208,14 @@ impl PackageManager for AptBackend {
         run_apt(&["autoremove", "-y"])
     }
 
-    /// `apt-get install -f -y`: installa le dipendenze mancanti e completa la
-    /// configurazione dei pacchetti rimasti a metà, riportando `dpkg` in stato
-    /// consistente.
+    /// `apt-get install -f -y`: installs missing dependencies and finishes
+    /// configuring half-done packages, bringing `dpkg` back to consistency.
     fn try_repair(&self) -> Result<(), StepError> {
         run_apt(&["install", "-f", "-y"])
     }
 
-    /// `dpkg --configure -a`: riconfigura i pacchetti scompattati ma non
-    /// configurati. Copre il caso in cui `apt-get install -f` non basta perché
-    /// apt stesso si rifiuta di operare.
+    /// `dpkg --configure -a`: reconfigures unpacked-but-unconfigured packages,
+    /// for when apt itself refuses to operate.
     fn try_deep_repair(&self) -> Result<(), StepError> {
         run_command_with_env(
             "dpkg",
@@ -252,13 +229,13 @@ impl PackageManager for AptBackend {
 
     /// `apt-get install -y <path.deb>`.
     ///
-    /// Sostituisce `dpkg -i`, che installa il pacchetto ma **non** risolve le
-    /// dipendenze: su un sistema minimale il `.deb` resta `unconfigured`, `dpkg`
-    /// esce con errore e da lì in poi ogni comando apt fallisce, rollback
-    /// compreso (A-RT-1/A-RT-2, dalla prova reale su Multipass).
+    /// replaces `dpkg -i`, which installs the package but does **not** resolve
+    /// dependencies: on a minimal system the package stays `unconfigured`,
+    /// `dpkg` errors, and from there every apt command fails — rollback
+    /// included (A-RT-1, A-RT-2).
     fn install_local_file(&self, path: &Path) -> Result<(), StepError> {
-        // `--` prima del path: un `.deb` in una directory il cui nome inizia
-        // con `-` non deve diventare un'opzione (stessa rete di R1).
+        // `--` before the path: a package in a directory whose name starts with
+        // `-` must not become an option.
         let rendered = path.to_string_lossy();
         run_apt(&["install", "-y", "--", &rendered])
     }
@@ -278,18 +255,15 @@ impl PackageManager for AptBackend {
             postgres: POSTGRES_PACKAGES.iter().map(|s| s.to_string()).collect(),
             postgres_marker: POSTGRES_MARKER_PACKAGE.to_string(),
             nginx: NGINX_PACKAGE.to_string(),
-            // **Vuoto, e non è una lacuna.** Debian e Ubuntu impacchettano UN
-            // solo Python nei repository base: gli interpreti alternativi
-            // arrivano da terze parti (il PPA `deadsnakes`), e aggiungere un
-            // repository esterno è una mutazione di sistema di tutt'altra
-            // portata — non annullabile con la stessa pulizia del resto, e con
-            // una fiducia che non è nostra da concedere.
+            // **empty, and not a gap.** the base repositories package ONE
+            // Python; alternative interpreters come from third parties, and
+            // adding an external repository is a system mutation of another
+            // order — not undoable as cleanly, and a trust that is not ours to
+            // grant.
             //
-            // La lista vuota non lascia scoperto niente di reale: il Python di
-            // Ubuntu 22.04/24.04 e di Debian 11/12/13 è dentro i pin di Odoo, e
-            // il giorno in cui una release Debian passasse un interprete non
-            // coperto varrebbe l'avviso di M10 — dire la verità, non installare
-            // repository di nascosto.
+            // nothing real is left uncovered: every supported release's Python
+            // is inside Odoo's pins, and the day one is not, the warning
+            // applies — tell the truth rather than add repositories quietly.
             alternate_pythons: Vec::new(),
         }
     }

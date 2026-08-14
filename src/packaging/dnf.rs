@@ -1,31 +1,20 @@
-//! Il backend **dnf/rpm**: comandi e nomi della famiglia Fedora.
+//! the **dnf/rpm** backend: the Fedora family's commands and names.
 //!
-//! # Cosa è tarato su una macchina reale e cosa no
+//! the **commands** are documented and stable. the **package names** are a
+//! translation of the Debian list, and roughly 26 of 30 differ — a wrong one
+//! here **stops the installation in the snapshot**, before mutating, naming the
+//! unresolved group.
 //!
-//! I **comandi** sono documentati e stabili. I **nomi dei pacchetti** no: sono
-//! la traduzione della lista Debian, e ~26 nomi su 30 divergono. Il progetto ha
-//! una regola su questo — un rifiuto senza prova blocca il caso buono
-//! (A5.1-bis) — ma vale anche il contrario: un nome sbagliato qui **blocca
-//! l'installazione nello snapshot**, prima di mutare, con il gruppo irrisolto
-//! nel messaggio. È il comportamento giusto, e significa che la prima Fedora
-//! reale fallirà più volte prima di installare.
+//! calibrating needs no installation: `--dry-run` runs every step's snapshot
+//! without touching anything, and reports **all** unresolvable groups in one
+//! message.
 //!
-//! La taratura non richiede installazioni: `sudo invok --dry-run`
-//! esegue lo `snapshot` di ogni step senza toccare nulla, e
-//! `unavailable_packages_error` riporta **tutti** i gruppi irrisolvibili in un
-//! solo messaggio. Il ciclo è «dry-run → correggi → ripeti», di minuti.
-//!
-//! # Stato della taratura
-//!
-//! **Verificata su Fedora 41 (dnf5 5.2.17)**, con `--dry-run`: tutti i 31 gruppi
-//! si risolvono. Tre nomi si sono rivelati **virtuali** e sono stati corretti con
-//! il nome reale come alternativa preferita — `wget`, `zlib-devel`,
-//! `openjpeg2-devel`. È la stessa cura di `libfreetype6-dev` su Ubuntu 24.04
-//! (A5.1-bis): un nome virtuale è installabile ma non rimovibile, e un delta che
-//! lo contiene mente al rollback.
-//!
-//! Restano da provare su una macchina vera l'**installazione** e il **rollback**:
-//! il dry-run risolve i nomi, non li installa.
+//! verified on Fedora 41 (dnf5 5.2.17): all 31 groups resolve, and three names
+//! turned out to be **virtual** — `wget`, `zlib-devel`, `openjpeg2-devel` — and
+//! were corrected with the real name as the preferred alternative, the same
+//! care as `libfreetype6-dev` on Ubuntu 24.04. the integration CI then
+//! exercised the full install and rollback cycle on `fedora:41` and
+//! `fedora:44`.
 
 use std::path::Path;
 
@@ -36,87 +25,75 @@ use super::{
 use crate::error::StepError;
 use crate::system_ops::{capture_command, run_command};
 
-/// Prerequisiti bootstrap sulla famiglia Fedora.
+/// bootstrap prerequisites on the Fedora family.
 fn bootstrap_catalog() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry::new(DepId::Git, &["git"]),
         CatalogEntry::new(DepId::Curl, &["curl"]),
-        // `wget` su Fedora 41 **non è un pacchetto**: è un `Provides` di
-        // `wget1-wget` (il wget classico) e `wget2-wget`. Verificato in campo.
-        // Il nome reale va per primo — vedi la nota su `DepId::Wget` in
-        // `odoo_catalog`.
+        // on Fedora 41 `wget` is **not a package**: it is provided by
+        // `wget1-wget` and `wget2-wget`. the real name goes first.
         CatalogEntry::new(DepId::Wget, &["wget1-wget", "wget2-wget", "wget"]),
-        // `gettext-base` di Debian è la parte runtime (`envsubst`); su Fedora
-        // sta nel pacchetto unico `gettext`.
+        // Debian splits out the runtime part; Fedora ships one `gettext`.
         CatalogEntry::new(DepId::Gettext, &["gettext"]),
     ]
 }
 
-/// Dipendenze di sistema di Odoo sulla famiglia Fedora.
+/// Odoo's system dependencies on the Fedora family.
 ///
-/// Tradotte dalla lista Debian, **non ancora verificate su una Fedora reale**:
-/// vedi il doc del modulo per la procedura di taratura.
+/// translated from the Debian list and calibrated on a real Fedora — see the
+/// module docs.
 fn odoo_catalog() -> Vec<CatalogEntry> {
     vec![
         CatalogEntry::new(DepId::Git, &["git"]),
         CatalogEntry::new(DepId::Curl, &["curl"]),
-        // # Perché tre alternative e non un nome solo (verificato in campo)
+        // three alternatives because `wget` here is **purely virtual**: `rpm
+        // -q` does not know it and `dnf remove` would exit 0 having removed
+        // nothing, so a delta containing it lies (A5.1-bis).
         //
-        // Su Fedora 41 `wget` è un nome **puramente virtuale**: `rpm -q wget`
-        // non lo conosce, e `dnf remove wget` uscirebbe 0 rimuovendo zero
-        // pacchetti. Un delta che lo contiene mente, e il rollback dichiarerebbe
-        // rimosso ciò che è rimasto: è A5.1-bis, la stessa forma che su Ubuntu
-        // 24.04 ha prodotto `libfreetype6-dev`.
-        //
-        // `wget1-wget` (il wget classico 1.x) va per primo perché è quello le cui
-        // opzioni `-q -O` sono quelle che `RealDownloader` usa da sempre;
-        // `wget2-wget` è il ripiego se il primo non c'è. Il nome virtuale resta
-        // in coda come rete: se un domani Fedora rinominasse ancora, la
-        // risoluzione lo troverebbe comunque — con il warning che dice perché.
+        // `wget1-wget` first, because its `-q -O` options are the ones
+        // `RealDownloader` uses; `wget2-wget` as fallback. the virtual name
+        // stays last as a net against a future rename.
         CatalogEntry::new(DepId::Wget, &["wget1-wget", "wget2-wget", "wget"]),
         CatalogEntry::new(DepId::PythonPip, &["python3-pip"]),
         CatalogEntry::new(DepId::PythonDev, &["python3-devel"]),
-        // Su Fedora **non esiste** un `python3-venv`: il modulo `venv` è nella
-        // libreria standard e `ensurepip` sta in `python3-libs`, che è già
-        // presente su qualunque sistema con python3. La voce c'è lo stesso — il
-        // bisogno esiste — e risolverà quasi sempre ad `AlreadyInstalled`, senza
-        // gonfiare il delta.
+        // there is **no** `python3-venv` here: the module is in the stdlib and
+        // `ensurepip` ships in `python3-libs`, already present wherever python3
+        // is. the entry stays because the need does, and it resolves to
+        // already-installed without padding the delta.
         //
-        // La verifica vera non è comunque questa: è la precondizione di
-        // `create-virtualenv`, che chiede `import ensurepip` al Python del
-        // sistema (A-R6-1). Un pacchetto in lista non prova che il modulo ci sia.
+        // the real check is `create-virtualenv`'s precondition, which asks the
+        // interpreter for `import ensurepip` (A-R6-1).
         CatalogEntry::new(DepId::PythonVenv, &["python3-libs"]),
         CatalogEntry::new(DepId::PythonWheel, &["python3-wheel"]),
         CatalogEntry::new(DepId::PythonSetuptools, &["python3-setuptools"]),
-        // `build-essential` non ha equivalente: è un metapacchetto Debian. Su
-        // Fedora l'analogo è il gruppo `@development-tools`, che però ha una
-        // sintassi propria e un comportamento poco chiaro alla rimozione (il
-        // delta non saprebbe cosa reclamare). Meglio i tre nomi espliciti: sono
-        // ciò che serve davvero a compilare le estensioni native di pip.
+        // `build-essential` is a Debian metapackage with no equivalent. the
+        // `@development-tools` group has its own syntax and unclear removal
+        // behaviour, so the delta would not know what to reclaim: three
+        // explicit names are what pip's native extensions actually need.
         CatalogEntry::many(DepId::BuildTools, &["gcc", "gcc-c++", "make"]),
         CatalogEntry::new(DepId::Gettext, &["gettext"]),
         CatalogEntry::new(DepId::Freetype, &["freetype-devel"]),
         CatalogEntry::new(DepId::Xml2, &["libxml2-devel"]),
         CatalogEntry::new(DepId::Zip, &["libzip-devel"]),
-        // Nome del tutto diverso: la libreria è OpenLDAP.
+        // a wholly different name: the library is OpenLDAP.
         CatalogEntry::new(DepId::Ldap, &["openldap-devel"]),
-        // Idem: l'implementazione SASL è Cyrus.
+        // likewise: the SASL implementation is Cyrus.
         CatalogEntry::new(DepId::Sasl, &["cyrus-sasl-devel"]),
-        // I tre nomi jpeg di Debian collassano su uno solo.
+        // Debian's three jpeg names collapse into one.
         CatalogEntry::new(DepId::Jpeg, &["libjpeg-turbo-devel"]),
-        // Stesso pacchetto di `Jpeg`: la deduplica di A-MD-1 lo assorbe, e su
-        // questa famiglia il duplicato è la norma, non un caso di bordo.
+        // the same package as `Jpeg`: A-MD-1's deduplication absorbs it, and
+        // here the duplicate is the norm rather than an edge case.
         CatalogEntry::new(DepId::Jpeg8, &["libjpeg-turbo-devel"]),
-        // Cade il `1g` del soname — ma non basta: su Fedora 41 `zlib-devel` è a
-        // sua volta **virtuale**, perché la distribuzione è migrata a `zlib-ng`
-        // e il pacchetto reale è `zlib-ng-compat-devel` (verificato in campo).
+        // the soname drops — and that is not enough: `zlib-devel` is itself
+        // **virtual** since the distribution moved to `zlib-ng`, so the real
+        // package is `zlib-ng-compat-devel`.
         CatalogEntry::new(DepId::Zlib, &["zlib-ng-compat-devel", "zlib-devel"]),
         CatalogEntry::new(DepId::PostgresClient, &["libpq-devel"]),
-        // Cade anche l'`1`.
+        // the `1` drops too.
         CatalogEntry::new(DepId::Xslt, &["libxslt-devel"]),
         CatalogEntry::new(DepId::Tiff, &["libtiff-devel"]),
-        // Il `2` nel nome è storia: il pacchetto reale è `openjpeg-devel`, che
-        // fornisce `openjpeg2-devel` per compatibilità (verificato in campo).
+        // the `2` is history: the real package is `openjpeg-devel`, which
+        // provides `openjpeg2-devel` for compatibility.
         CatalogEntry::new(DepId::OpenJpeg, &["openjpeg-devel", "openjpeg2-devel"]),
         CatalogEntry::new(DepId::Lcms2, &["lcms2-devel"]),
         CatalogEntry::new(DepId::Webp, &["libwebp-devel"]),
@@ -125,73 +102,69 @@ fn odoo_catalog() -> Vec<CatalogEntry> {
         CatalogEntry::new(DepId::Xcb, &["libxcb-devel"]),
         CatalogEntry::new(DepId::Ev, &["libev-devel"]),
         CatalogEntry::new(DepId::CAres, &["c-ares-devel"]),
-        // Opzionale come su Debian, e con la stessa ragione: Odoo moderno usa
-        // SCSS. DA VERIFICARE se esista ancora su Fedora recente — ma un
-        // opzionale mancante è un warning, non uno stop.
+        // optional as on Debian, for the same reason: modern Odoo uses SCSS.
+        // todo: confirm it still exists on recent Fedora — but a missing
+        // optional is a warning, not a stop.
         CatalogEntry::optional(DepId::LessCompiler, &["nodejs-less"]),
     ]
 }
 
-/// Pacchetti che installano il server PostgreSQL su Fedora.
+/// the packages that install the PostgreSQL server here.
 ///
-/// **Non** `postgresql`, che è il solo client: su Fedora il server è un
-/// pacchetto a parte, e installare il client soltanto porterebbe a un
-/// `systemctl start postgresql` che fallisce senza dire perché.
+/// **not** `postgresql`, which is the client alone: the server is a separate
+/// package, and installing only the client would give a `systemctl start` that
+/// fails without saying why.
 pub const POSTGRES_PACKAGES: &[&str] = &["postgresql-server", "postgresql-contrib"];
-/// Il nome con cui si chiede «PostgreSQL è installato?» su Fedora.
+/// the name to ask "is PostgreSQL installed?" with, here.
 ///
-/// È il **server**, non il client: `postgresql` è installato anche su una
-/// macchina che ha solo `psql`, e prenderlo come marker farebbe credere che il
-/// server ci sia già — quindi `Preexisting`, quindi nessuno stop e nessun undo.
+/// the **server**, not the client: `postgresql` is present on a machine that
+/// only has `psql`, and using it as the marker would make the server look
+/// already there — hence `Preexisting`, hence no undo.
 pub const POSTGRES_MARKER_PACKAGE: &str = "postgresql-server";
-/// Il pacchetto di nginx (identico su entrambe le famiglie).
+/// the nginx package, identical on both families.
 pub const NGINX_PACKAGE: &str = "nginx";
 
-/// Gli interpreti Python alternativi impacchettati da Fedora, dal più recente.
+/// the alternative Python interpreters Fedora packages, newest first.
 ///
-/// Fedora ne mantiene diversi accanto a quello di sistema, con lo stesso nome per
-/// il pacchetto e per il binario. Servono da Fedora 43, dove il `python3` di
-/// sistema è passato a **3.14** e i pin di Odoo 18 non lo coprono (A-MD-7).
+/// several are kept alongside the system one, with the same name for package
+/// and binary. needed from Fedora 43, where the system `python3` moved to 3.14
+/// and Odoo 18's pins do not cover it (A-MD-7).
 ///
-/// **Verificato in campo su Fedora 44** (2026-08-04): `dnf install python3.13
-/// python3.13-devel` porta con sé `python3.13-libs`, `python3.13 -m venv` crea
-/// un venv completo senza pacchetti aggiuntivi, l'intero `requirements.txt` di
-/// Odoo 18 si installa (`gevent` come wheel `cp313`, sei estensioni compilate
-/// contro quegli header) e `dnf remove` toglie esattamente ciò che aveva messo.
+/// verified on Fedora 44: installing the interpreter and its headers pulls in
+/// its libs, the venv builds without extra packages, the whole Odoo 18
+/// `requirements.txt` installs, and `dnf remove` takes back exactly what it
+/// added.
 ///
-/// L'ordine è la politica: si prende il **più recente coperto dai pin**, non il
-/// più vecchio disponibile. Un interprete più vicino a quello di sistema riceve
-/// aggiornamenti di sicurezza più a lungo, e resta comunque dentro ciò che
-/// l'installer prova davvero ([`crate::checks::NEWEST_TESTED_PYTHON`]).
+/// the order is the policy: the **newest covered by the pins**, not the oldest
+/// available. a closer interpreter gets security updates longer, and stays
+/// inside what the installer really exercises.
 pub const ALTERNATE_PYTHONS: &[((u32, u32), &str, &str)] = &[
     ((3, 13), "python3.13", "python3.13-devel"),
     ((3, 12), "python3.12", "python3.12-devel"),
 ];
 
-/// Gli argomenti di `dnf install`, come funzione **pura**.
+/// `dnf install`'s arguments, as a **pure** function.
 ///
-/// Estratta perché il flag che conta non è verificabile altrimenti: il codice
-/// che esegue `dnf` gira solo su una Fedora vera, e senza questa separazione
-/// «qualcuno toglie `install_weak_deps=False`» sarebbe una modifica che nessun
-/// test può vedere. È lo stesso motivo per cui esiste `availability_from`.
+/// extracted because the flag that matters is not checkable otherwise: the code
+/// that runs `dnf` only executes on a real Fedora, so dropping
+/// `install_weak_deps=False` would be a change no test could see.
 pub fn install_args(pkgs: &[&str]) -> Vec<String> {
     let mut args = vec![
         "install".to_string(),
         "-y".to_string(),
-        // Controparte di `--no-install-recommends`: senza, dnf tira dentro i
-        // `Recommends` e il delta cresce di pacchetti che nessuno ha chiesto —
-        // e che l'undo poi rimuoverebbe.
+        // the counterpart of `--no-install-recommends`: without it dnf pulls in
+        // weak dependencies and the delta grows with packages nobody asked for
+        // — which the undo would then remove.
         "--setopt=install_weak_deps=False".to_string(),
     ];
     args.extend(pkgs.iter().map(|p| p.to_string()));
     args
 }
 
-/// Gli argomenti di `dnf remove`, come funzione **pura**.
+/// `dnf remove`'s arguments, as a **pure** function.
 ///
-/// Vedi [`DnfBackend::remove`] per il perché di
-/// `clean_requirements_on_remove=False`: è la condizione perché la promessa
-/// chirurgica valga su questa famiglia, e va verificata dove si può.
+/// see [`DnfBackend::remove`] for why `clean_requirements_on_remove=False` is
+/// the condition for the surgical promise to hold here.
 pub fn remove_args(pkgs: &[&str]) -> Vec<String> {
     let mut args = vec![
         "remove".to_string(),
@@ -202,34 +175,32 @@ pub fn remove_args(pkgs: &[&str]) -> Vec<String> {
     args
 }
 
-/// Il gestore di pacchetti della famiglia Fedora.
+/// the Fedora family's package manager.
 #[derive(Debug, Default)]
 pub struct DnfBackend;
 
-/// Esegue `dnf` in modo non interattivo.
+/// runs `dnf` non-interactively.
 ///
-/// Non serve l'equivalente di `DEBIAN_FRONTEND`: dnf non fa domande con `-y`, e
-/// non esiste un `needrestart` da mettere a tacere.
+/// no `DEBIAN_FRONTEND` equivalent is needed: dnf asks nothing under `-y`, and
+/// there is no `needrestart` to silence.
 ///
-/// # Niente `--` prima dei nomi, e va dichiarato
+/// # no `--` before the names, and that is declared
 ///
-/// Su apt il separatore `--` è **metà** della doppia difesa contro
-/// l'argument injection (R1): l'altra metà è il validatore che pretende un primo
-/// carattere alfanumerico. **dnf5 non lo accetta**: `dnf install -- <pkg>`
-/// risponde `Unknown argument "--"` ed esce 2 — verificato su Fedora 41,
-/// dnf5 5.2.17.
+/// on apt the `--` separator is **half** the double defence against argument
+/// injection (R1); the other half is the validator demanding an alphanumeric
+/// first character. **dnf5 rejects it**: `dnf install -- <pkg>` answers
+/// `Unknown argument "--"` and exits 2.
 ///
-/// Su questa famiglia resta quindi una difesa sola. La superficie reale è nulla —
-/// i nomi arrivano dal catalogo, che è fatto di costanti nel sorgente, non da
-/// input dell'utente — ma un vincolo esterno che indebolisce una difesa va
-/// scritto, non lasciato scoprire a chi legge il codice fra un anno.
+/// so one defence remains here. the real surface is nil — the names come from
+/// the catalogue, which is constants in the source — but an external constraint
+/// that weakens a defence is written down, not left to be discovered.
 fn run_dnf(args: &[&str]) -> Result<(), StepError> {
     run_command("dnf", args)
 }
 
 impl PackageManager for DnfBackend {
     fn is_installed(&self, pkg: &str) -> bool {
-        // `rpm` accetta `--`, a differenza di dnf5: qui la doppia difesa regge.
+        // `rpm` accepts `--`, unlike dnf5: the double defence holds here.
         std::process::Command::new("rpm")
             .args(["-q", "--", pkg])
             .output()
@@ -239,70 +210,53 @@ impl PackageManager for DnfBackend {
 
     /// `dnf makecache`.
     ///
-    /// Su dnf è **meno necessario** che su apt — i metadati scadono da soli
-    /// (`metadata_expire`, default 48h) e vengono riscaricati alla prima
-    /// operazione che li richiede. Si esegue lo stesso, e per la stessa ragione
-    /// per cui esiste su apt: A5.1-bis nasceva da un indice vecchio che faceva
-    /// rispondere «questo pacchetto non esiste» a una domanda la cui risposta
-    /// era «non lo so». Meglio pagare qualche secondo che diagnosticare
-    /// un'assenza inventata.
+    /// **less necessary** than on apt, since metadata expire on their own and
+    /// are refetched by the first operation that needs them. run anyway for
+    /// A5.1-bis's reason: a stale index answers "this package does not exist"
+    /// to a question whose answer is "I do not know".
     fn refresh_index(&self) -> Result<(), StepError> {
         run_dnf(&["makecache"])
     }
 
-    /// C'è almeno un repository abilitato da cui ottenere risposte?
+    /// is there at least one enabled repository to get answers from?
     ///
-    /// L'analogo di `apt-cache stats`: distingue **cecità** da **assenza**. Su
-    /// Fedora il caso concreto non è «l'indice non è mai stato aggiornato» ma
-    /// «i repository non sono raggiungibili», e l'effetto sulla diagnosi è lo
-    /// stesso — ogni nome risulterebbe inesistente.
+    /// the analogue of `apt-cache stats`, telling **blindness** from
+    /// **absence**. here the concrete case is unreachable repositories rather
+    /// than a stale index, with the same effect on the diagnosis.
     fn index_is_queryable(&self) -> bool {
         capture_command("dnf", &["repolist", "--enabled", "--quiet"])
             .map(|out| out.lines().any(|line| !line.trim().is_empty()))
             .unwrap_or(false)
     }
 
-    /// Due domande, come su apt, ma poste a `dnf repoquery` — il comando pensato
-    /// per lo scripting.
+    /// two questions, as on apt, asked of `dnf repoquery` — the command meant
+    /// for scripting.
     ///
-    /// 1. **`repoquery --qf '%{name}'`**: esiste un pacchetto con *questo nome
-    ///    esatto*? È l'equivalente del candidato reale, cioè di un nome che dopo
-    ///    l'installazione `rpm -q` saprà riconoscere — e che quindi l'undo saprà
-    ///    rimuovere.
-    /// 2. **`repoquery --whatprovides`**: se no, qualcuno lo *fornisce*? Su
-    ///    Fedora 41 `wget` è esattamente questo: non è un pacchetto, è fornito da
-    ///    `wget1-wget` e `wget2-wget`.
+    /// 1. `repoquery --qf '%{name}'`: is there a package under *this exact
+    ///    name*? the equivalent of a real candidate, i.e. one `rpm -q` will
+    ///    know afterwards and the undo will be able to remove.
+    /// 2. `repoquery --whatprovides`: if not, does something *provide* it?
     ///
-    /// # Perché non i comandi ovvi (verificato in campo, Fedora 41 / dnf5 5.2.17)
+    /// # why not the obvious commands
     ///
-    /// Il primo tentativo usava `dnf list` e `dnf install --assumeno`, e **nessuno
-    /// dei due funzionava**:
+    /// the first attempt used `dnf list` and `dnf install --assumeno`, and
+    /// **neither worked**: dnf5 rejects the `--` separator, and `--assumeno`
+    /// exits 2 **even when the package exists**, because the operation was
+    /// cancelled — precisely what it was asked to do.
     ///
-    /// - `dnf list --quiet -- <pkg>` esce 2 con `Unknown argument "--"`: dnf5 non
-    ///   accetta il separatore;
-    /// - `dnf install --assumeno <pkg>` esce **2 anche quando il pacchetto
-    ///   esiste**, perché l'operazione è stata annullata — che è precisamente ciò
-    ///   che gli si era chiesto di fare.
+    /// the second is this project's recurring defect mirrored: not a check that
+    /// cannot fail, but one **that cannot succeed**. every package not already
+    /// installed came out absent, and the first Fedora dry run stopped listing
+    /// twenty-four names that all existed.
     ///
-    /// Il secondo è la firma ricorrente di questo progetto nella sua forma
-    /// speculare: non un controllo che non può fallire, ma uno **che non può
-    /// riuscire**. L'effetto era che ogni pacchetto non già installato risultava
-    /// assente, e il primo dry-run su Fedora si è fermato elencando ventiquattro
-    /// nomi che esistevano tutti.
-    ///
-    /// `repoquery` non ha il problema: risponde con l'elenco — vuoto se nulla
-    /// corrisponde — ed esce **0** in entrambi i casi. Alla domanda si risponde
-    /// leggendo l'output, non l'exit code. È la stessa lezione di R9-hotfix:
-    /// *`exit != 0` non dice PERCHÉ*.
-    ///
-    /// La politica che ne discende — reale batte virtuale — è la stessa di apt e
-    /// vive in `AptPackagesStep::resolve`: qui c'è solo il meccanismo.
+    /// `repoquery` exits **0** either way and answers through its output, not
+    /// its exit code — R9-hotfix's lesson: *`exit != 0` does not say WHY*.
     fn availability(&self, pkg: &str) -> Availability {
         let real = capture_command("dnf", &["repoquery", "--quiet", "--qf", "%{name}\n", pkg])
             .map(|out| out.lines().any(|line| line.trim() == pkg))
             .unwrap_or(false);
 
-        // La via lenta si percorre **solo** se serve, come su apt.
+        // the slow path only when needed, as on apt.
         let provided_by_others = !real
             && capture_command("dnf", &["repoquery", "--quiet", "--whatprovides", pkg])
                 .map(|out| out.lines().any(|line| !line.trim().is_empty()))
@@ -311,57 +265,44 @@ impl PackageManager for DnfBackend {
         availability_from(real, provided_by_others)
     }
 
-    /// `dnf install -y`, **senza dipendenze deboli**.
+    /// `dnf install -y`, **without weak dependencies**.
     ///
-    /// `--setopt=install_weak_deps=False` è la controparte di
-    /// `--no-install-recommends`: senza, dnf tira dentro i `Recommends` e il
-    /// delta cresce di pacchetti che nessuno ha chiesto — e che l'undo poi
-    /// rimuoverebbe.
+    /// the counterpart of `--no-install-recommends`: without it the delta grows
+    /// with packages nobody asked for, which the undo would then remove.
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {
         let args = install_args(pkgs);
         run_dnf(&args.iter().map(String::as_str).collect::<Vec<_>>())
     }
 
-    /// `dnf remove -y`, **senza toccare le orfane**.
+    /// `dnf remove -y`, **leaving orphans alone**.
     ///
-    /// # `clean_requirements_on_remove=False` non è un dettaglio
+    /// `clean_requirements_on_remove=False` is the condition for the surgical
+    /// promise to hold here. dnf's default is to remove newly useless
+    /// dependencies too, which would be exactly the global `autoremove` R0
+    /// **banned** from the undo for not being bounded by our delta. on apt that
+    /// is an explicit action confined to `--aggressive-rollback`; here it would
+    /// happen on every rollback, and could take away a library shared with the
+    /// customer's software.
     ///
-    /// È la condizione perché la promessa chirurgica valga anche qui. Il default
-    /// di dnf è rimuovere anche le dipendenze diventate inutili: sarebbe
-    /// esattamente l'`apt-get autoremove` globale che R0 ha **bandito**
-    /// dall'undo perché non è delimitato dal nostro delta. Su apt quella
-    /// rimozione è un'azione esplicita, confinata a `--aggressive-rollback`
-    /// ([`Self::remove_orphans`]); qui accadrebbe di default, in ogni rollback,
-    /// e potrebbe portarsi via una libreria condivisa con software del cliente.
+    /// the flag is passed **always**, even should the default change: a
+    /// behaviour a promise rests on is not left to a config file we do not
+    /// control.
     ///
-    /// Il flag si passa **sempre**, anche se il default un giorno cambiasse: un
-    /// comportamento su cui poggia una promessa non si lascia decidere a un file
-    /// di configurazione che non controlliamo.
+    /// # what the flag does NOT prevent
     ///
-    /// # Cosa il flag NON impedisce (verificato in campo)
+    /// **reverse dependencies**. removing a package announces the removal of
+    /// whatever depended on it, and that is mandatory: rpm cannot leave
+    /// installed a package whose dependency disappears. `apt-get purge` does
+    /// the same, so it is **not** a divergence between families — but it is a
+    /// limit of the surgical promise that holds for both, and must be said.
     ///
-    /// Le **reverse dependencies**. `dnf remove git` su Fedora 41 annuncia anche
-    /// `Removing dependent packages: perl-Git`, e non è il flag a governarlo: è
-    /// obbligatorio, perché rpm non può lasciare installato un pacchetto la cui
-    /// dipendenza sparisce. `apt-get purge` fa lo stesso, quindi **non è una
-    /// divergenza fra famiglie** — ma è un limite della promessa chirurgica che
-    /// vale per entrambe e che va detto: rimuovere un pacchetto del nostro delta
-    /// può portarsi via un pacchetto **del cliente** che dipendeva da lui.
+    /// # what is left behind, declared
     ///
-    /// Non c'è modo di evitarlo restando dentro il gestore, e uscirne
-    /// (`rpm -e --nodeps`) lascerebbe il sistema in uno stato che il gestore non
-    /// sa più riparare — molto peggio del residuo che si vorrebbe evitare.
-    ///
-    /// # Cosa resta, dichiarato
-    ///
-    /// Su rpm non esiste il `purge` di deb. Un file di configurazione
-    /// **modificato** rispetto a quello del pacchetto viene rinominato in
-    /// `.rpmsave` invece di essere cancellato. Per il delta pesante di Odoo —
-    /// una trentina di pacchetti `-devel`, che file di configurazione non ne
-    /// hanno — il residuo atteso è **nessuno**; per `postgresql-server` e
-    /// `nginx`, che si rimuovono solo con `--aggressive-rollback`, può esserci.
-    /// È un residuo inerte e tracciabile, della stessa categoria del log
-    /// dell'installer, che pure sopravvive al rollback per scelta.
+    /// rpm has no deb-style `purge`: a **modified** config file is renamed to
+    /// `.rpmsave` rather than deleted. Odoo's heavy delta is `-devel` packages
+    /// with no config files, so the expected residue is **none**; the ones
+    /// removed only under `--aggressive-rollback` may leave some. inert and
+    /// traceable, like the installer's own log.
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
         let args = remove_args(pkgs);
         run_dnf(&args.iter().map(String::as_str).collect::<Vec<_>>())
@@ -371,43 +312,37 @@ impl PackageManager for DnfBackend {
         run_dnf(&["autoremove", "-y"])
     }
 
-    /// **No-op**, e non per pigrizia.
+    /// **a no-op**, and not out of laziness.
     ///
-    /// `try_repair` esiste perché apt si rifiuta di operare su un `dpkg` lasciato
-    /// a metà — lo stato «scompattato ma non configurato», che
-    /// `apt-get install -f` risolve (A-RT-2). In rpm quello stato **non esiste**:
-    /// una transazione o è applicata o è annullata, e non c'è nulla di analogo da
-    /// riparare. Gli equivalenti più vicini (`dnf history undo`, `rpm --rebuilddb`)
-    /// fanno cose diverse: il primo è una seconda semantica di rollback accanto
-    /// alla nostra, il secondo ricostruisce il database e non riguarda i
-    /// pacchetti a metà.
+    /// `try_repair` exists because apt refuses to operate on a half-finished
+    /// `dpkg` (A-RT-2). rpm has no such state: a transaction is applied or
+    /// rolled back. the nearest equivalents do different things — one is a
+    /// second rollback semantics beside ours, the other rebuilds the database.
     ///
-    /// La politica di `steps::remove_with_recovery` degrada quindi in «prova a
-    /// rimuovere, riprova una volta, poi elenca i residui» — e la parte che conta
-    /// davvero, il **report dei residui**, resta identica per tutte le famiglie.
+    /// so the recovery policy degrades to "try, retry once, then list the
+    /// leftovers" — and the part that matters, the **leftovers report**, is
+    /// identical across families.
     fn try_repair(&self) -> Result<(), StepError> {
         Ok(())
     }
 
-    /// No-op, per la stessa ragione di [`Self::try_repair`].
+    /// a no-op, for the same reason as [`Self::try_repair`].
     fn try_deep_repair(&self) -> Result<(), StepError> {
         Ok(())
     }
 
-    /// `dnf install -y <path.rpm>`: installa un `.rpm` locale risolvendone le
-    /// dipendenze, come `apt-get install <file.deb>` sul lato Debian.
+    /// `dnf install -y <path.rpm>`: installs a local package, resolving its
+    /// dependencies.
     fn install_local_file(&self, path: &Path) -> Result<(), StepError> {
         let rendered = path.to_string_lossy();
         run_dnf(&["install", "-y", &rendered])
     }
 
-    /// Lo schema rpm di upstream: `wkhtmltox-{ver}.{suffisso}.x86_64.rpm`.
+    /// upstream's rpm scheme: `wkhtmltox-{ver}.{suffix}.x86_64.rpm`.
     ///
-    /// **DA VERIFICARE su una release reale**: il nome è ricostruito dalla
-    /// convenzione rpm, non letto dagli asset pubblicati. Se fosse sbagliato il
-    /// download fallirebbe con un 404 — rumoroso, non silenzioso — e comunque
-    /// prima del download c'è il fail-closed sui pin, che per questa famiglia
-    /// non esistono ancora.
+    /// a wrong name would fail the download with a 404 — loud, not silent — and
+    /// the TOFU pin for the `fedora37` package is checked before anything is
+    /// installed.
     fn local_package_name(&self, version: &str, suffix: &str) -> String {
         format!("wkhtmltox-{version}.{suffix}.x86_64.rpm")
     }

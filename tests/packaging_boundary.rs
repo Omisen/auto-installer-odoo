@@ -1,22 +1,17 @@
-//! M1 — l'estrazione dei due confini, e le due cose che l'estrazione ha
-//! cambiato davvero.
+//! M1: extracting the two boundaries, and the parts the extraction really
+//! changed.
 //!
-//! Il grosso di M1 è un refactor: la garanzia che sia stato neutro sono i 324
-//! test già esistenti, che passano invariati. Qui stanno i test di ciò che
-//! **non** è invariato:
+//! most of M1 is a refactor, and the guarantee that it was neutral is the
+//! pre-existing suite passing unchanged. what lives here is what is **not**
+//! unchanged:
 //!
-//! - la scelta del backend, che ora è una decisione presa in un posto solo e
-//!   che può dire di no;
-//! - la deduplica dei nomi risolti (A-MD-1), che chiude un difetto trovato
-//!   scrivendo il design;
-//! - la decisione di disponibilità, estratta come funzione pura perché la
-//!   validazione per mutazione l'ha trovata scoperta;
-//! - la distinzione fra i costruttori di produzione e quelli dei test, che
-//!   togliendo `Step::new()` stava per andare persa.
-//!
-//! Ciò che l'estrazione **non** ha cambiato — la sequenza del recupero, il
-//! pattern delta, le protezioni critiche — resta presidiato dai test che c'erano
-//! già, e il fatto che passino invariati è la garanzia che cerchiamo.
+//! - the backend choice, now a decision taken in one place that can say no;
+//! - deduplication of resolved names (A-MD-1), a defect found while writing the
+//!   design;
+//! - the availability decision, extracted as a pure function because mutation
+//!   testing found it uncovered;
+//! - the distinction between production and test constructors, which removing
+//!   the old `new()` was about to lose.
 
 mod common;
 
@@ -40,16 +35,13 @@ fn names(v: &[&str]) -> Vec<String> {
     v.iter().map(|s| s.to_string()).collect()
 }
 
-// --- La scelta del backend: una decisione, in un posto solo ------------------
+// --- the backend choice: one decision, in one place -------------------------
 
-/// Da M2 **entrambe** le famiglie hanno un backend, e nessuna riceve quello
-/// dell'altra.
+/// **both** families have a backend, and neither gets the other's.
 ///
-/// La verifica non è «esiste una fabbrica» — sarebbe vera anche se tutte e due
-/// restituissero apt — ma che i comandi prodotti siano quelli giusti: è
-/// l'errore che la forma `Option` esiste per rendere impossibile, e che sarebbe
-/// silenzioso (`apt-get` su una macchina senza apt fallisce in modo oscuro, e
-/// nel rollback significherebbe lasciare installato tutto).
+/// the check is not "a factory exists" — true even if both returned the same
+/// one — but that the commands produced are the right ones. that error would be
+/// silent, and in a rollback it would mean leaving everything installed.
 #[test]
 fn each_family_gets_its_own_backend() {
     let debian = backend_factory(OsFamily::Debian).expect("la famiglia Debian ha apt")();
@@ -68,14 +60,14 @@ fn each_family_gets_its_own_backend() {
     );
 }
 
-/// Il default della fabbrica è la famiglia di **ogni installazione esistente**.
+/// the factory's default is the family of **every existing installation**.
 #[test]
 fn the_default_family_is_the_one_every_existing_manifest_describes() {
     assert!(backend_factory(OsFamily::default()).is_some());
 }
 
-/// Il catalogo è ciò che il backend risponde: la lista **non** è più una
-/// costante che uno step legge per conto suo.
+/// the catalogue is what the backend answers: the list is no longer a constant
+/// a step reads on its own.
 #[test]
 fn the_package_lists_come_from_the_backend_catalog() {
     let ops = MockSystemOps::new(MockConfig::default()).0;
@@ -103,18 +95,17 @@ fn the_package_lists_come_from_the_backend_catalog() {
     );
 }
 
-// --- A-MD-1: il delta persistito non contiene doppioni ----------------------
+// --- A-MD-1: the persisted delta holds no duplicates ------------------------
 
-/// La funzione pura, sui casi che contano.
+/// the pure function, on the cases that matter.
 #[test]
 fn dedup_keeps_the_first_occurrence_and_the_order() {
     let mut v = names(&["git", "libjpeg-dev", "curl", "libjpeg-dev", "wget"]);
     dedup_keeping_order(&mut v);
     assert_eq!(v, names(&["git", "libjpeg-dev", "curl", "wget"]));
 
-    // `Vec::dedup` non basterebbe: i duplicati non sono consecutivi. Questo è
-    // esattamente il caso reale — nella lista Debian i due `libjpeg-dev` sono a
-    // sei posizioni di distanza.
+    // the plain `dedup` would not do: the duplicates are not adjacent. this is
+    // the real case — in one catalogue the two are six positions apart.
     let mut consecutivi = names(&["a", "a", "b"]);
     dedup_keeping_order(&mut consecutivi);
     assert_eq!(consecutivi, names(&["a", "b"]));
@@ -124,19 +115,18 @@ fn dedup_keeps_the_first_occurrence_and_the_order() {
     assert!(vuoto.is_empty());
 }
 
-/// **Il difetto, per come si manifesta.** Due gruppi diversi che risolvono allo
-/// stesso nome mettevano quel nome **due volte** nel delta persistito.
+/// **the defect, as it shows up.** two groups resolving to the same name put
+/// that name in the persisted delta **twice**.
 ///
-/// Su apt è innocuo — install e purge sono idempotenti — ma il delta è la
-/// contabilità di ciò che abbiamo aggiunto e l'unica cosa su cui l'undo è
-/// autorizzato ad agire. Una contabilità con una riga doppia è una contabilità
-/// sbagliata, e su una famiglia dove più gruppi Debian collassano su un solo
-/// nome il doppione smette di essere un caso di bordo.
+/// harmless to the commands, which are idempotent — but the delta is the
+/// accounting of what we added and the only thing the undo may act on. a
+/// double-counted ledger is a wrong ledger, and on a family where several
+/// groups collapse onto one name it stops being an edge case.
 #[test]
 fn two_groups_resolving_to_the_same_name_appear_once_in_the_delta() {
     let (ops, _log) = MockSystemOps::new(MockConfig {
-        // `libjpeg8-dev` non esiste su questa "release": il secondo gruppo
-        // ricade sulla terza alternativa, che è la stessa del primo gruppo.
+        // one name is absent on this "release": the second group falls back to
+        // the third alternative, which is the first group's too.
         packages_without_candidate: ["libjpeg8-dev", "libjpeg-turbo8-dev"]
             .iter()
             .map(|s| s.to_string())
@@ -170,8 +160,8 @@ fn two_groups_resolving_to_the_same_name_appear_once_in_the_delta() {
     );
 }
 
-/// Lo stesso vale per i preesistenti: se il pacchetto c'era già, entrambi i
-/// gruppi lo riconoscono, e `already_installed` non deve elencarlo due volte.
+/// the same for the pre-existing ones: both groups recognise a package that was
+/// already there, and it must be listed once.
 #[test]
 fn a_preexisting_package_shared_by_two_groups_is_listed_once() {
     let (ops, _log) = MockSystemOps::new(MockConfig {
@@ -203,7 +193,7 @@ fn a_preexisting_package_shared_by_two_groups_is_listed_once() {
     );
 }
 
-/// E il `run` non chiede al gestore di installare due volte lo stesso nome.
+/// and the run does not ask the manager to install one name twice.
 #[test]
 fn the_install_command_does_not_repeat_a_package() {
     let (ops, log) = MockSystemOps::new(MockConfig {
@@ -238,17 +228,15 @@ fn the_install_command_does_not_repeat_a_package() {
     assert_eq!(installs[0], names(&["libjpeg-dev"]));
 }
 
-// --- La politica di rimozione parla al gestore, non al SystemOps -------------
+// --- the removal policy speaks to the manager, not to SystemOps -------------
 //
-// La **sequenza** del recupero (riparazione → rimozione → riparazione profonda →
-// riparazione → rimozione) non è verificata qui: la presidiano già
-// `tests/apt_packages.rs::undo_recovers_a_broken_dpkg_before_purging` e
-// `undo_retries_the_purge_after_dpkg_configure_all`, che dopo M1 passano
-// **invariati** — ed è proprio quella invarianza la prova che l'estrazione è
-// stata neutra. Riscriverli qui sposterebbe la garanzia senza aggiungerla.
+// the recovery **sequence** is not checked here: `tests/apt_packages.rs`
+// already guards it and passes **unchanged** after M1 — that invariance is the
+// proof the extraction was neutral. rewriting it here would move the guarantee
+// without adding to it.
 
-/// Un delta vuoto non fa partire nessun comando: non c'è niente di nostro da
-/// rimuovere, e un `apt-get purge` senza argomenti sarebbe rumore.
+/// an empty delta starts no command: there is nothing of ours to remove, and a
+/// purge with no arguments would be noise.
 #[test]
 fn an_empty_delta_asks_the_manager_for_nothing() {
     let (ops, log) = MockSystemOps::new(MockConfig {
@@ -276,20 +264,18 @@ fn an_empty_delta_asks_the_manager_for_nothing() {
     );
 }
 
-// --- I costruttori di produzione non sono quelli dei test -------------------
+// --- production constructors are not the test ones --------------------------
 
-/// **La regressione che clippy ha intercettato durante M1**, messa per iscritto.
+/// **the regression clippy caught during M1**, written down.
 ///
-/// `CloneOdooRepo` e `SetupSystemd` hanno due costruttori che *non* sono
-/// intercambiabili: `for_run` porta i parametri di produzione (backoff fra i
-/// retry del clone, attesa di assestamento del servizio), `with_ops` li azzera
-/// perché i test non devono dormire.
+/// two steps have constructors that are *not* interchangeable: one carries the
+/// production timings (clone backoff, service settling wait), the other zeroes
+/// them because tests must not sleep.
 ///
-/// Togliendo i vecchi `new()` la sequenza di produzione rischiava di essere
-/// costruita con i costruttori dei test: tre tentativi di clone **istantanei**
-/// su una rete che non risponde sono un tentativo solo, e il retry di R2
-/// diventerebbe decorativo. Nessun test su mock se ne sarebbe accorto — i mock
-/// vogliono proprio sleep 0.
+/// removing the old ones risked building the production sequence from the test
+/// constructors: three **instant** clone attempts on a dead network are one
+/// attempt, and the retry would be decorative. no mock test would notice —
+/// mocks want the zero wait.
 #[test]
 fn the_production_sequence_uses_the_production_constructors() {
     let sorgente = std::fs::read_to_string("src/steps/mod.rs").expect("leggo steps/mod.rs");
@@ -311,12 +297,12 @@ fn the_production_sequence_uses_the_production_constructors() {
     }
 }
 
-/// La reidratazione invece usa `with_ops`, ed è corretto: si sta ricostruendo
-/// uno step **per annullarlo**, e rimuovere una directory o fermare un servizio
-/// non hanno bisogno di attese.
+/// rehydration uses the zero-wait one, and rightly so: a step is being rebuilt
+/// **to undo it**, and removing a directory or stopping a service needs no
+/// waiting.
 ///
-/// È la stessa distinzione di A-R8-1: prima di riusare un costruttore per una
-/// domanda nuova, chiedersi a quale domanda rispondeva.
+/// A-R8-1's distinction again: before reusing something for a new question, ask
+/// which question it answered.
 #[test]
 fn the_rehydration_path_does_not_need_the_production_timings() {
     let make_ops = backend_factory(OsFamily::Debian).expect("backend Debian");
@@ -328,11 +314,11 @@ fn the_rehydration_path_does_not_need_the_production_timings() {
     }
 }
 
-// --- Il confine non ha cambiato la protezione che presidia ------------------
+// --- the boundary did not change the protection it guards -------------------
 
-/// L'undo purga **solo** il delta, anche ora che il purge passa dal gestore.
-/// È la protezione del pattern delta, e non è cambiata: qui la si verifica dal
-/// lato che conta, cioè i comandi che arrivano davvero al sistema.
+/// the undo purges **only** the delta, now that removal goes through the
+/// manager too — checked from the side that matters, the commands that actually
+/// reach the system.
 #[test]
 fn the_undo_still_removes_only_what_we_added() {
     let (ops, log) = MockSystemOps::new(MockConfig {
@@ -368,15 +354,14 @@ fn the_undo_still_removes_only_what_we_added() {
     );
 }
 
-// --- La decisione di disponibilità, separata dai comandi --------------------
+// --- the availability decision, separated from the commands -----------------
 
-/// La regola che protegge A5.1-bis, verificata **senza apt sotto mano**.
+/// the rule that protects A5.1-bis, checked **without apt at hand**.
 ///
-/// Il codice che esegue `apt-cache policy` e `apt-get install -s` può essere
-/// provato solo su una macchina reale; la *decisione* che ne discende no, e
-/// senza questa separazione resterebbe fuori da ogni test — come ha mostrato la
-/// validazione per mutazione di M1, dove «dichiara reale un nome virtuale»
-/// sopravviveva a tutta la suite.
+/// the code that runs the queries needs a real machine; the *decision* that
+/// follows does not, and without this separation it stayed out of every test —
+/// as M1's mutation testing showed, where "call a virtual name real" survived
+/// the whole suite.
 #[test]
 fn a_real_candidate_always_beats_a_virtual_name() {
     use invok::packaging::{availability_from, Availability};

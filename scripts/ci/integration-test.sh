@@ -1,33 +1,31 @@
 #!/usr/bin/env bash
 # =============================================================================
-# scripts/ci/integration-test.sh — test di INTEGRAZIONE REALE (R5)
+# the REAL integration test.
 #
-# Installa Odoo davvero, verifica che funzioni, poi esegue
-# `invok rollback` e verifica che il sistema sia tornato pulito.
+# really installs Odoo, checks it works, then runs the rollback and checks the
+# system came back clean.
 #
-# È l'automazione della sessione di verifica manuale su Multipass che ha
-# trovato A-RT-1 (dpkg -i non risolve le dipendenze → installazione impossibile
-# su ogni sistema minimale) e A-RT-2 (il purge del rollback falliva su dpkg
-# rotto → 24 pacchetti residui). Nessuno dei due era visibile ai test su mock:
-# i mock modellano ciò che sappiamo del sistema, e quei due bug stavano
-# esattamente in ciò che non sapevamo.
+# it automates the manual VM session that found A-RT-1 (an install command that
+# does not resolve dependencies, making installation impossible on any minimal
+# system) and A-RT-2 (the rollback's purge failing on a broken dpkg, leaving the
+# whole delta behind). neither was visible to the mock suite: mocks model what we
+# know about the system, and those two bugs lived in what we did not.
 #
-# DISTRUTTIVO. Crea utenti, installa pacchetti, tocca PostgreSQL e systemd.
-# Va eseguito SOLO su macchine usa-e-getta: runner di CI, container, VM di
-# prova. Mai su una macchina di lavoro.
+# DESTRUCTIVE. it creates users, installs packages, touches PostgreSQL and
+# systemd. run it ONLY on throwaway machines — CI runners, containers, test VMs.
+# never on a working machine.
 #
-# Modalità (MODE):
-#   full   — l'installazione DEVE riuscire; si verifica il servizio attivo,
-#            Odoo che risponde, il DB, e poi il rollback. Richiede systemd
-#            funzionante (runner nativi).
-#   probe  — l'installazione PUÒ fallire (container senza systemd come PID 1:
-#            `setup-postgres` non riesce ad avviare il servizio). Si verifica
-#            ciò che è arrivato a compimento — nomi dei pacchetti apt per
-#            quell'OS, pin wkhtmltopdf per quel codename — e soprattutto che il
-#            sistema resti pulito. È la sonda di portabilità (A5.1/A5.2).
+# modes:
+#   full   the installation MUST succeed; the service, Odoo's HTTP answer and
+#          the database are checked, then the rollback. needs a working systemd.
+#   probe  the installation MAY fail (in a container systemd is not PID 1, so
+#          the PostgreSQL step cannot start the service). what completed is
+#          checked — the package names for that OS, the checksum pin for that
+#          codename — and above all that the system stays clean. the portability
+#          probe (A5.1, A5.2).
 #
-# Variabili: MODE, BIN, ENV_FILE. I valori attesi degli artefatti seguono
-# configs/ci.env.
+# variables: MODE, BIN, ENV_FILE. the expected artifact values follow the CI
+# config.
 # =============================================================================
 
 set -euo pipefail
@@ -36,20 +34,20 @@ MODE="${MODE:-full}"
 BIN="${BIN:-./target/release/invok}"
 ENV_FILE="${ENV_FILE:-configs/ci.env}"
 
-# Il test si adatta alla configurazione che gli viene data invece di assumerla:
-# con `WITH_NGINX=true` verifica anche i cinque step nginx, che altrimenti
-# escono al primo `if` e restano coperti solo dai mock (B-V3-7).
+# the test adapts to the config it is given instead of assuming it: with nginx
+# enabled it checks those steps too, which otherwise exit at the first condition
+# and stay covered by mocks alone (B-V3-7).
 #
-# Si legge il file con `sed`, non con `source`: è lo stesso motivo per cui
-# l'installer lo fa in modo dichiarativo — un `.env` non è codice da eseguire.
+# the file is read with `sed`, not sourced: the same reason the installer parses
+# it declaratively — a `.env` is not code to execute.
 env_value() {
   sed -n "s/^$1=[\"']\\?\\([^\"']*\\)[\"']\\?[[:space:]]*$/\\1/p" "$ENV_FILE" | tail -n 1
 }
 WITH_NGINX="$(env_value WITH_NGINX)"
 WITH_NGINX="${WITH_NGINX:-false}"
 
-# Deve combaciare con configs/ci.env. Il DB_NAME non di default è deliberato:
-# vedi il commento nel file di config.
+# must match the CI config. the non-default database name is deliberate; see the
+# comment in that file.
 DB_NAME="${DB_NAME:-citest}"
 DB_ROLE="${DB_ROLE:-odoo}"
 OS_USER="${OS_USER:-odoo}"
@@ -66,18 +64,17 @@ STATE="/var/lib/invok/state.json"
 
 WORK="$(mktemp -d)"
 
-# Le asserzioni NON si fermano alla prima: un solo giro di CI (che dura decine
-# di minuti) deve dire *tutto* ciò che non va, non solo il primo sintomo.
+# assertions do NOT stop at the first failure: one CI round, which takes tens of
+# minutes, must say *everything* that is wrong and not only the first symptom.
 FAILURES=0
-# Non basta CONTARLE. Le asserzioni vivono dentro `::group::`, che GitHub
-# mostra collassati: chi legge il riepilogo vede «4 verifiche non superate» e
-# deve andare a cercare QUALI, aprendo i gruppi uno per uno. È la lezione di
-# A-R9-1 applicata a questo script — `exit != 0` non dice perché, e nemmeno un
-# numero lo dice. I messaggi si accumulano e si ristampano alla fine, FUORI dai
-# gruppi.
+# COUNTING them is not enough. assertions live inside collapsed groups, so a
+# reader sees "4 checks failed" and has to hunt for WHICH, opening groups one by
+# one. A-R9-1's lesson applied to this script: a non-zero exit does not say why,
+# and neither does a number. the messages accumulate and are reprinted at the
+# end, OUTSIDE the groups.
 FAILED_CHECKS=()
 
-# --- utilità -----------------------------------------------------------------
+# --- helpers -----------------------------------------------------------------
 
 group()  { echo "::group::$*"; }
 endgroup() { echo "::endgroup::"; }
@@ -85,16 +82,16 @@ info()   { echo "  ·  $*"; }
 ok()     { echo "  ✔  $*"; }
 fail()   { echo "  ✖  $*"; FAILURES=$((FAILURES + 1)); FAILED_CHECKS+=("$*"); }
 
-# Legge il file di stato (0600 root) via sudo.
+# reads the state file, which is root-owned and 0600.
 state_json() { sudo cat "$STATE" 2>/dev/null || echo '{}'; }
 
-# `assert <descrizione> <comando...>` — vero se il comando esce 0.
+# `assert <description> <command...>` — true when the command exits zero.
 assert() {
   local desc="$1"; shift
   if "$@" >/dev/null 2>&1; then ok "$desc"; else fail "$desc"; fi
 }
 
-# `refute <descrizione> <comando...>` — vero se il comando esce ≠ 0.
+# `refute <description> <command...>` — true when the command exits non-zero.
 refute() {
   local desc="$1"; shift
   if "$@" >/dev/null 2>&1; then fail "$desc"; else ok "$desc"; fi
@@ -104,27 +101,24 @@ pg_query() { sudo -u postgres psql -tAc "$1" 2>/dev/null || true; }
 
 pg_reachable() { sudo -u postgres psql -tAc 'select 1' >/dev/null 2>&1; }
 
-# La famiglia del gestore di pacchetti, letta dal sistema.
+# the package manager's family, read from the system.
 #
-# Lo script gira su entrambe: rende per-famiglia le tre domande che dipendono dal
-# gestore — «è installato?», «cosa c'è installato?», «dove sta il default site di
-# nginx?» — e lascia tutto il resto invariato, perché tutto il resto non dipende
-# dal gestore.
+# the script runs on both: it makes per-family the three questions that depend on
+# the manager — is it installed, what is installed, where is nginx's default site
+# — and leaves the rest untouched, because the rest does not depend on it.
 case "$(. /etc/os-release && echo "$ID")" in
   fedora|rhel|centos|almalinux|rocky) PKG_FAMILY=rpm ;;
   *)                                  PKG_FAMILY=deb ;;
 esac
 info "famiglia di pacchetti: $PKG_FAMILY"
 
-# "Installato" con la stessa definizione che usa l'installer
-# (`PackageManager::is_installed`). Non è pedanteria: `dpkg -s` esce **0** anche
-# su un pacchetto rimosso che ha ancora i file di configurazione
-# (`deinstall ok config-files`), e con quella definizione un purge mancato
-# potrebbe passare per riuscito. Le asserzioni devono misurare ciò che
-# l'installer considera presente, non qualcosa di simile.
+# "installed" with the same definition the installer uses. not pedantry: the
+# naive query exits **zero** for a removed package that still has its config
+# files, and with that definition a failed purge could pass for a success. the
+# assertions must measure what the installer considers present.
 #
-# Su rpm il problema non si pone — non esiste lo stato «rimosso ma configurato»
-# — e `rpm -q` è già la domanda esatta.
+# on the other family the question does not arise — there is no "removed but
+# configured" state — and the plain query is already exact.
 pkg_installed() {
   if [ "$PKG_FAMILY" = rpm ]; then
     rpm -q -- "$1" >/dev/null 2>&1
@@ -133,18 +127,17 @@ pkg_installed() {
   fi
 }
 
-# --- fase 1: installazione ---------------------------------------------------
+# --- phase 1: installation ---------------------------------------------------
 
 group "Installazione reale ($MODE)"
 echo "OS: $(. /etc/os-release && echo "$PRETTY_NAME")"
 echo "Config: $ENV_FILE"
 
-# Fotografia PRIMA di mutare: /opt/odoo esiste già su questo runner?
-# Serve alla verifica finale (A-V3-2). Se era preesistente, il rollback deve
-# lasciarla — `prepare-opt-root` la marca Preexisting — e pretendere che sparisca
-# sarebbe pretendere una violazione del principio chirurgico. Sui runner e nei
-# container l'attesa è che NON esista, e in quel caso dopo il rollback non deve
-# esistere nemmeno alla fine.
+# a snapshot BEFORE mutating: does the perimeter directory already exist here?
+# needed by the final check (A-V3-2). if it was pre-existing the rollback must
+# leave it, and demanding it disappear would be demanding a violation. on runners
+# and containers it should not exist, and then it must not exist at the end
+# either.
 if [ -d "$ODOO_HOME" ]; then
   OPT_ODOO_PREEXISTING=1
   info "$ODOO_HOME esisteva già prima dell'installazione"
@@ -153,9 +146,9 @@ else
   info "$ODOO_HOME assente prima dell'installazione (macchina vergine)"
 fi
 
-# L'utente di sistema c'era già? Se sì, il rollback deve LASCIARLO: è la
-# protezione più importante del progetto applicata agli utenti, e va verificata
-# nel verso giusto — pretendere che sparisca sarebbe pretendere una violazione.
+# was the system user already there? then the rollback must LEAVE it: the
+# project's central protection applied to users, and it must be checked the right
+# way round.
 if id "$OS_USER" >/dev/null 2>&1; then
   OS_USER_PREEXISTING=1
   info "l'utente '$OS_USER' esisteva già prima dell'installazione"
@@ -164,18 +157,17 @@ else
   info "l'utente '$OS_USER' assente prima dell'installazione"
 fi
 
-# Nginx: cosa c'era al posto del default site, prima di noi (A-V3-5).
+# what was in the default site's place before us (A-V3-5).
 #
-# Su rpm il default site **non è un file separato**: è un blocco `server` dentro
-# `nginx.conf`, e l'installer non lo tocca (vedi `Fedora::nginx_layout`). Lì la
-# domanda non si pone, e fingere che si ponga produrrebbe asserzioni su un file
-# che non esiste — verdi per la ragione sbagliata.
+# on one family it is **not a separate file** but a block inside the main
+# configuration, which the installer does not touch. there the question does not
+# arise, and pretending it does would assert on a file that does not exist —
+# green for the wrong reason.
 if [ "$PKG_FAMILY" = rpm ]; then
   HAS_DEFAULT_SITE=0
   DEFAULT_SITE=""
-  # Su rpm `conf.d` è **già** la directory attiva: nginx la include per intero,
-  # quindi non esiste nessun symlink da abilitare (`Fedora::nginx_layout` →
-  # `enabled_dir: None`).
+  # there the drop-in directory is **already** the active one — nginx includes
+  # it whole — so there is no symlink to enable.
   VHOST="/etc/nginx/conf.d/odoo${VER_SHORT}.conf"
   VHOST_LINK=""
 else
@@ -195,11 +187,11 @@ else
 fi
 [ "$WITH_NGINX" = "true" ] && info "default site nginx prima dell'installazione: $DEFAULT_SITE_BEFORE"
 
-# Fotografia dei pacchetti installati PRIMA di mutare.
+# a snapshot of the installed packages BEFORE mutating.
 #
-# Serve alla verifica finale più importante e senza contabilità: **nessun
-# pacchetto che c'era prima deve mancare dopo**. Non dipende da cosa abbiamo
-# registrato noi, quindi non può passare per il motivo sbagliato.
+# it feeds the most important final check, the one without bookkeeping: **no
+# package that was there before may be missing after**. it does not depend on
+# what we recorded, so it cannot pass for the wrong reason.
 pkgs_installed_now() {
   if [ "$PKG_FAMILY" = rpm ]; then
     rpm -qa --qf '%{NAME}\n' 2>/dev/null | sort -u
@@ -211,21 +203,20 @@ pkgs_installed_now() {
 pkgs_installed_now > "$WORK/pkgs-before.txt"
 info "pacchetti installati prima:     $(wc -l < "$WORK/pkgs-before.txt")"
 
-# ufw è ATTIVO? Solo allora `nginx-firewall` fa qualcosa: sui runner di default
-# ufw è installato ma inattivo, e lo step esce subito (A-V3-7 mai esercitato).
-# Le porte aperte, **una per riga**, con la stessa domanda che pone la
-# produzione. Su firewalld si legge il PERMANENTE e non il runtime, perché è
-# quello che interroga `Firewalld::rule_exists`: un test che chiedesse al
-# runtime potrebbe dire «aperta» dove l'installer vede «chiusa» (o viceversa) e
-# misurerebbe una cosa diversa da quella che deve proteggere. È la lezione del
-# mock di ufw in R13 — un test fedele allo strumento, non a un'idea dello
-# strumento.
+# is the firewall ACTIVE? only then does the firewall step do anything: on a
+# runner it is installed but inactive, and the step exits at once (so A-V3-7 was
+# never exercised).
+#
+# the open ports, **one per line**, asked the way production asks. on one family
+# the PERMANENT set is read and not the runtime one, because that is what the
+# installer queries: asking the runtime could answer "open" where the installer
+# sees "closed" and would measure something other than what it must protect.
 fw_open_ports() {
   if [ "$PKG_FAMILY" = rpm ]; then
     sudo firewall-cmd --permanent --list-ports 2>/dev/null | tr ' ' '\n' | sed '/^$/d'
   else
-    # La prima colonna è `To`; le intestazioni non combaciano mai con un token
-    # tipo `80/tcp`, quindi non serve escluderle per nome.
+    # the first column is the destination; the headers never match a token like
+    # `80/tcp`, so there is no need to exclude them by name.
     sudo ufw status 2>/dev/null | awk '{print $1}'
   fi
 }
@@ -246,19 +237,16 @@ else
   FW_NAME=ufw
   FW_ACTIVE=0
 fi
-# `FW_REQUIRED=1` — lo scenario DICHIARA che il firewall dev'essere attivo.
+# the scenario DECLARES that the firewall must be active.
 #
-# Senza, un firewall che non si alza fa saltare le verifiche e lascia il job
-# **verde**: il rischio non è un controllo che non può fallire, ma un controllo
-# che può non essere ESEGUITO senza che nulla lo dica. È la variante di A-R9-1
-# («nello scenario per cui l'ho scritto, viene eseguito?») applicata a un intero
-# blocco di asserzioni invece che a una sola.
+# without this, a firewall that fails to come up skips the checks and leaves the
+# job **green**: the risk is not a check that cannot fail but one that may not be
+# RUN with nothing to say so — A-R9-1's variant ("in the scenario I wrote it for,
+# does it run?") applied to a whole block of assertions.
 #
-# Lo scenario che chiede il firewall è anche l'unico che lo esercita: se non c'è,
-# non prova ciò per cui esiste, e proseguire per venti minuti di installazione
-# per poi non poterlo dire è peggio che fermarsi subito. Fermata immediata,
-# quindi, e non un `fail` accodato agli altri: questa non è un'asserzione
-# sull'installer, è una precondizione dello scenario.
+# the scenario asking for the firewall is also the only one exercising it, so an
+# immediate stop rather than a failure queued with the others: this is not an
+# assertion about the installer, it is the scenario's precondition.
 FW_REQUIRED="${FW_REQUIRED:-0}"
 if [ "$WITH_NGINX" = "true" ] && [ "$FW_ACTIVE" = "0" ]; then
   if [ "$FW_REQUIRED" = "1" ]; then
@@ -269,9 +257,9 @@ senza aver provato ciò per cui esiste"
   fi
   info "$FW_NAME non attivo: le verifiche sul firewall verranno saltate"
 fi
-# L'output si cattura: da qui si legge il **diario** dell'esecuzione (quali step
-# sono stati raggiunti, quali pacchetti aggiunti). Il manifesto NON serve a
-# questo — dice cosa resta sul sistema, e dopo un rollback non resta nulla.
+# the output is captured: the run's **journal** is read from it — which steps
+# were reached, which packages added. the manifest does NOT serve this: it says
+# what remains, and after a rollback nothing does.
 set +e
 sudo "$BIN" --config "$ENV_FILE" 2>&1 | tee "$WORK/install.out"
 INSTALL_RC=${PIPESTATUS[0]}
@@ -281,31 +269,28 @@ endgroup
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -ne 0 ]; then
   fail "l'installazione doveva riuscire (exit $INSTALL_RC)"
-  # Senza installazione non c'è nulla da verificare, ma il rollback va provato
-  # lo stesso: deve ripulire ciò che la run fallita ha lasciato.
+  # with no installation there is nothing to check, but the rollback is run
+  # anyway: it must clean what the failed run left.
 fi
 
-# Se il build di gevent è fallito, l'errore deve DIRE PERCHÉ (A-MD-7).
+# when a build fails, the error must SAY WHY (A-MD-7).
 #
-# `exit != 0` non dice perché, ed è la lezione di A-R9-1: le due asserzioni
-# «sostanziali» erano verdi mentre il difetto stava nel *messaggio*. Qui il
-# valore della correzione è tutto nel testo — la differenza fra trecento righe di
-# `gcc` e «questa versione di Odoo non ha un pin per questo Python».
+# a non-zero exit does not say why (A-R9-1): here the fix's whole value is in the
+# text — the difference between three hundred lines of compiler output and "this
+# Odoo version has no pin for this Python".
 #
-# **L'attesa si deriva dal verdetto dell'installer, non da una soglia scritta
-# qui.** Il preflight logga l'avviso solo se l'interprete è più recente di quelli
-# provati: se quell'avviso c'è, allora un fallimento del build di gevent DEVE
-# portare anche la diagnosi. Duplicare la soglia in bash creerebbe una seconda
-# fonte di verità che può divergere in silenzio, che è esattamente A-MD-5.
+# **the expectation is derived from the installer's verdict, not from a threshold
+# written here.** the preflight logs the warning only when the interpreter is
+# newer than the tested ones; if that warning is present, a build failure MUST
+# carry the diagnosis too. duplicating the threshold in shell would create a
+# second source of truth that diverges silently (A-MD-5).
 #
-# Fuori da quel caso non si asserisce nulla: un gevent che non compila su un
-# Python coperto ha un'altra causa, e pretendere lì questa diagnosi
-# significherebbe pretendere una diagnosi sbagliata.
+# outside that case nothing is asserted: a build failing on a covered Python has
+# another cause, and demanding this diagnosis there would demand a wrong one.
 #
-# Si legge dall'output **senza ANSI**: `tracing` colora anche su pipe, e un
-# pattern scritto su ciò che si vede a schermo può non combaciare con ciò che
-# c'è nel file — il difetto costato due giri in A-R8-1-ter, e GitHub rende gli
-# escape invisibili, quindi non si vedrebbe nemmeno guardando.
+# read from the output **without ANSI**: the logger colours on a pipe too, and a
+# pattern written against what one sees on screen may not match what is in the
+# file (A-R8-1-ter).
 journal_strip_ansi "$WORK/install.out" > "$WORK/install-plain.txt"
 if grep -q "più recente di Python" "$WORK/install-plain.txt"; then
   info "il preflight ha segnalato un interprete più recente di quelli provati"
@@ -315,23 +300,22 @@ if grep -q "più recente di Python" "$WORK/install-plain.txt"; then
   fi
 fi
 
-# L'interprete alternativo (M11), verificato **dove ha lasciato traccia**.
+# the alternative interpreter (M11), checked **where it left traces**.
 #
-# Come sopra, l'attesa si deriva dal verdetto dell'installer e non da una
-# versione scritta qui: se il preflight dice di aver scelto un altro interprete,
-# quel nome esce dal log e da lì si ricava tutto — quale binario deve esserci nel
-# venv e quale pacchetto deve sparire dopo il rollback. Scrivere `python3.13` in
-# questo script vorrebbe dire avere una seconda tabella che invecchia per conto
-# suo (A-MD-5), e per giunta far fallire i job dove l'interprete di sistema va
-# benissimo (Ubuntu, Debian, Fedora 41).
+# as above, the expectation comes from the installer's verdict and not from a
+# version written here: if the preflight says it chose another interpreter, that
+# name comes out of the log and everything follows — which binary must be in the
+# virtualenv and which package must be gone after the rollback. writing a version
+# in this script would be a second table ageing on its own (A-MD-5), and would
+# fail the jobs where the system interpreter is perfectly fine.
 PYTHON_PLAN="$(journal_python_plan "$WORK/install-plain.txt")"
 if [ -n "$PYTHON_PLAN" ]; then
   info "l'installer ha scelto l'interprete '$PYTHON_PLAN' per il virtualenv"
   if [ "$INSTALL_RC" -eq 0 ]; then
-    # Il venv porta il binario dell'interprete di base: è la prova che il venv
-    # è nato DA QUELLO e non dal `python3` di sistema. `sudo` perché
-    # /opt/odoo è 0750 odoo:odoo e un `test -x` non privilegiato risponderebbe
-    # «permesso negato», cioè un rosso per il motivo sbagliato.
+    # the virtualenv carries the base interpreter's binary: proof it was born
+    # FROM THAT one and not from the system's. privileged, because the perimeter
+    # is 0750 and an unprivileged test would answer "permission denied" — a red
+    # for the wrong reason.
     assert "il virtualenv è nato su $PYTHON_PLAN" \
       sudo test -x "$INSTALL_DIR/sandbox/bin/$PYTHON_PLAN"
     assert "l'interprete scelto è installato sul sistema" \
@@ -339,21 +323,21 @@ if [ -n "$PYTHON_PLAN" ]; then
   fi
 fi
 
-# --- fase 2: il sistema installato funziona (solo MODE=full) -----------------
+# --- phase 2: the installed system works (full mode only) --------------------
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   group "Verifica dell'installazione"
 
   assert "utente di sistema '$OS_USER' creato" id "$OS_USER"
-  # `sudo`, e non per abitudine: `/opt/odoo` è `0750 odoo:odoo`, quindi
-  # l'utente che esegue questo script non ha il diritto di ATTRAVERSARLA. Un
-  # `test -d` non privilegiato lì dentro non risponde «non c'è», risponde
-  # «permesso negato» — e `assert` traduce entrambi in un rosso identico.
+  # privileged, and not out of habit: the perimeter is 0750, so the user running
+  # this script may not TRAVERSE it. an unprivileged test there does not answer
+  # "absent", it answers "permission denied" — and the assertion turns both into
+  # the same red.
   #
-  # Sui runner nativi passavano, il che significa che passavano per una
-  # proprietà dell'ambiente e non perché la domanda fosse posta bene; su Fedora
-  # il conto è arrivato. Un controllo va fatto con i privilegi che la domanda
-  # richiede, altrimenti misura i permessi di chi lo esegue.
+  # on native runners these passed, which means they passed by a property of the
+  # environment and not because the question was well put; on another family the
+  # bill arrived. a check must be made with the privileges the question needs, or
+  # it measures the permissions of whoever runs it.
   assert "sorgenti in $INSTALL_DIR" sudo test -d "$INSTALL_DIR/odoo"
   assert "virtualenv creato" sudo test -x "$INSTALL_DIR/sandbox/bin/python3"
   assert "config generata" sudo test -f "$INSTALL_DIR/odoo${VER_SHORT}.conf"
@@ -362,7 +346,7 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   assert "servizio abilitato" systemctl is-enabled --quiet "$UNIT"
   assert "wkhtmltopdf installato" pkg_installed wkhtmltox
 
-  # Il database esiste e ha lo schema Odoo inizializzato.
+  # the database exists and carries an initialised schema.
   if [ "$(pg_query "select 1 from pg_database where datname='$DB_NAME'")" = "1" ]; then
     ok "database '$DB_NAME' creato"
   else
@@ -380,10 +364,9 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
     fail "schema Odoo non inizializzato"
   fi
 
-  # Odoo risponde davvero sulla porta. Il servizio "attivo" non basta: il
-  # processo può essere su e morire subito dopo per una config sbagliata.
-  # `/` risponde con un redirect (303/302) verso /odoo o /web: va benissimo
-  # come prova di "vivo".
+  # Odoo really answers on the port. an "active" service is not enough: the
+  # process can be up and die right after on a bad config. the root path answers
+  # with a redirect, which is proof enough of life.
   http=""
   for _ in $(seq 1 30); do
     http="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1:${PORT}/" 2>/dev/null || echo 000)"
@@ -396,9 +379,9 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
        sudo journalctl -u "$UNIT" -n 60 --no-pager || true ;;
   esac
 
-  # A-R5-1: lo stato sopravvive al successo ed è marcato concluso. È ciò che
-  # rende possibile disinstallare più tardi; se questo assert cade, il comando
-  # `rollback` qui sotto non avrebbe nulla da consumare.
+  # A-R5-1: the state survives success and is marked finished. that is what
+  # makes a later uninstall possible; if this fails, the rollback below would
+  # have nothing to consume.
   assert "il manifesto di disinstallazione è rimasto sul disco" sudo test -f "$STATE"
   if [ "$(state_json | jq -r '.finished')" = "true" ]; then
     ok "il manifesto è marcato 'finished'"
@@ -416,15 +399,12 @@ rimuovere (regressione A-R4-1)"
   endgroup
 fi
 
-# --- fase 2-ter: la fase Nginx, quando è richiesta (B-V3-7) ------------------
+# --- phase 2c: the nginx phase, when asked for (B-V3-7) ----------------------
 #
-# Fino a questo punto la CI reale non l'aveva **mai** eseguita: `configs/ci.env`
-# ha `WITH_NGINX="false"`, quindi i cinque step nginx uscivano al primo `if` in
-# ogni installazione mai fatta su una macchina vera. Il vhost non veniva mai
-# scritto né validato da `nginx -t`, il default site mai rimosso né ripristinato.
-# R11 (A-V3-5) e R12 (A-V3-6) vivevano interamente su mock — ed è esattamente la
-# situazione in cui, in questo progetto, i difetti sono sopravvissuti: A1.4
-# (ordine del reload nginx) è stato trovato da un e2e, non da una rilettura.
+# until this existed the real CI had **never** run it: the base config disables
+# nginx, so those steps exited at the first condition in every installation ever
+# done on a real machine. two whole remediations lived entirely on mocks — and
+# that is exactly the situation in which defects have survived here.
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]; then
   group "Verifica Nginx"
@@ -438,7 +418,7 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
   assert "la configurazione nginx è valida (nginx -t)" sudo nginx -t
   assert "nginx attivo" systemctl is-active --quiet nginx
 
-  # A-V3-12: i log del vhost portano la versione, non un `odoo18` cablato.
+  # A-V3-12: the vhost's logs carry the version, not a hardcoded one.
   if sudo grep -q "odoo${VER_SHORT}.access.log" "$VHOST"; then
     ok "i log del vhost seguono la versione installata (A-V3-12)"
   else
@@ -446,25 +426,25 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
     sudo grep -n "access_log\|error_log" "$VHOST" || true
   fi
 
-  # A-V3-6: il vhost NON promette TLS. Un blocco 443 verso certificati
-  # inesistenti farebbe fallire `nginx -t` — e infatti sopra passa.
+  # A-V3-6: the vhost promises no TLS. a 443 block towards non-existent
+  # certificates would fail validation — which above it passes.
   if sudo grep -qE "^\s*listen\s+443|^\s*ssl_certificate" "$VHOST"; then
     fail "il vhost contiene direttive TLS: non le genera l'installer (A-V3-6)"
   else
     ok "il vhost non promette TLS (è compito di certbot --nginx)"
   fi
 
-  # Il default site è stato tolto di mezzo: è ciò che libera la porta 80.
+  # the default site was moved out of the way, which is what frees port 80.
   if [ "$HAS_DEFAULT_SITE" = "1" ]; then
     refute "il default site è stato disattivato" sudo test -e "$DEFAULT_SITE"
   fi
 
-  # Firewall: la porta 80 dev'essere stata aperta (A-V3-7).
+  # the firewall: port 80 must have been opened (A-V3-7).
   #
-  # È la verifica che il confronto per token funziona su una macchina vera. Con
-  # il vecchio `status.contains("80/tcp")`, la presenza di `8080/tcp` faceva
-  # risultare la 80 già aperta: non entrava nel delta, non veniva aperta, e
-  # nginx restava irraggiungibile **senza alcun errore**.
+  # this is where the token comparison is proved on a real machine. with the old
+  # substring check, a similar-looking rule made port 80 look already open: it
+  # never entered the delta, was never opened, and nginx stayed unreachable
+  # **with no error at all**.
   if [ "$FW_ACTIVE" = "1" ]; then
     if fw_open_ports | grep -qx "80/tcp"; then
       ok "regola $FW_NAME 80/tcp aperta (A-V3-7: non confusa con 8080/tcp)"
@@ -474,8 +454,8 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
     fi
   fi
 
-  # E la 80 serve Odoo attraverso il proxy: è l'unica prova che l'intera catena
-  # (vhost + reload + upstream) funziona davvero.
+  # and port 80 serves Odoo through the proxy: the only proof the whole chain
+  # really works.
   http80=""
   for _ in $(seq 1 15); do
     http80="$(curl -sS -o /dev/null -w '%{http_code}' "http://127.0.0.1/" 2>/dev/null || echo 000)"
@@ -491,18 +471,17 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ] && [ "$WITH_NGINX" = "true" ]
   endgroup
 fi
 
-# --- fase 2-bis: una seconda installazione NON deve toccare il manifesto -----
+# --- phase 2b: a second installation must NOT touch the manifest -------------
 #
-# A-V3-1. Prima, rilanciare l'installer su un'istanza già installata riscriveva
-# il manifesto con ogni artefatto marcato `Preexisting` — perché è ciò che gli
-# snapshot vedono, correttamente — e da lì `rollback` faceva 24 undo NO-OP,
-# dichiarava «nessun residuo», cancellava lo stato e lasciava Odoo installato
-# per sempre. Lo scenario finiva con il test **verde**: è il motivo per cui
-# serve provarlo qui e non solo su mock.
+# A-V3-1. re-running the installer over an existing instance used to rewrite the
+# manifest with every artifact marked pre-existing — correctly, since that is
+# what the snapshots see — after which the rollback did nothing, declared no
+# leftovers, cleared the state and left Odoo installed forever. the scenario
+# ended **green**, which is why it is proved here and not only on mocks.
 #
-# Si verificano tre cose, in ordine di importanza: che la seconda esecuzione
-# fallisca; che il manifesto sia rimasto **identico**; e che il messaggio
-# indirizzi l'utente da qualche parte invece di lasciarlo a indovinare.
+# three things, in order of importance: that the second run fails; that the
+# manifest is **identical**; and that the message sends the user somewhere
+# instead of leaving them to guess.
 
 if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   group "Seconda installazione: deve essere rifiutata (A-V3-1)"
@@ -522,12 +501,11 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   fi
 
   sudo cp "$STATE" "$WORK/manifest-after.json"
-  # `cmp` esce non-zero sia se i file DIFFERISCONO sia se non riesce a
-  # confrontarli (assente, illeggibile). Distinguere i due casi non è pedanteria:
-  # `diffutils` mancava nell'immagine Fedora e questo blocco ha accusato il
-  # manifesto di essere cambiato quando in realtà nessuno l'aveva guardato. Un
-  # controllo che non può eseguire deve dire «non ho potuto», mai «è andata
-  # male» — è la stessa distinzione fra cecità e assenza di A5.1-bis.
+  # the comparison exits non-zero both when the files DIFFER and when it cannot
+  # compare them at all. telling the two apart is not pedantry: the tool was
+  # missing from one image and this block accused the manifest of having changed
+  # when nobody had looked at it. a check that cannot run must say "I could not",
+  # never "it went badly" — the blindness-versus-absence distinction again.
   if ! command -v cmp >/dev/null 2>&1; then
     fail "impossibile confrontare il manifesto: 'cmp' non è installato \
 (pacchetto diffutils). Il controllo su A-V3-1 NON è stato eseguito"
@@ -539,15 +517,13 @@ l'istanza potrebbe non essere più disinstallabile (A-V3-1)"
     sudo diff "$WORK/manifest-before.json" "$WORK/manifest-after.json" 2>/dev/null || true
   fi
 
-  # Il rifiuto deve venire dal MANIFESTO, non da un effetto collaterale.
+  # the refusal must come from the MANIFEST, not from a side effect.
   #
-  # A-R9-1: la prima versione di questo blocco si accontentava di `exit != 0` e
-  # di un messaggio che citasse `rollback`. Passava — anzi, falliva — per la
-  # ragione sbagliata: l'installazione veniva respinta da `check_ports` («porta
-  # 8069 già in uso»), perché Odoo era in ascolto, e il controllo sul manifesto
-  # non veniva raggiunto mai. Un'uscita non-zero non dice *perché*, e qui il
-  # perché è tutto: «libera la porta» manda l'utente a fermare Odoo, non a
-  # disinstallarlo.
+  # A-R9-1: this block's first version settled for a non-zero exit and a message
+  # naming the rollback command. it failed for the wrong reason — the port check
+  # rejected the installation first, because Odoo was listening, and the manifest
+  # check was never reached. "free the port" sends the user to stop Odoo, not to
+  # uninstall it.
   if grep -q "installazione completata su questa macchina" "$WORK/second-install.log"; then
     ok "il rifiuto viene dal manifesto (A-V3-1), non da un effetto collaterale"
   else
@@ -573,27 +549,26 @@ dell'installazione esistente, non la causa — l'utente viene mandato a fermare 
   endgroup
 fi
 
-# --- fase 3: il diario dell'esecuzione, letto dal LOG ------------------------
+# --- phase 3: the run's journal, read from the LOG ---------------------------
 #
-# Il delta è l'insieme dei pacchetti che NON c'erano prima di noi: il rollback
-# deve purgare quelli e SOLO quelli. Leggerlo dall'output invece di scriverlo a
-# mano rende l'asserzione indipendente dall'immagine: su un runner GitHub
-# `git`/`curl`/`build-essential` sono già installati, su un container Debian
-# minimale no.
+# the delta is the set of packages that were NOT there before us: the rollback
+# must purge those and ONLY those. reading it from the output instead of writing
+# it by hand makes the assertion independent of the image — a hosted runner has
+# the build tools preinstalled, a minimal container does not.
 #
-# **Dal log e non dal manifesto**, e la distinzione è il punto. Il manifesto dice
-# *cosa c'è ancora sul sistema*: quando un rollback annulla uno step, quel record
-# sparisce — è ciò che impedisce a un rilancio di saltare artefatti che non
-# esistono più (A-R8-1). Il diario di *cosa è stato fatto* vive invece nel log,
-# che non viene riscritto. In `MODE=probe` l'installazione fallisce e si annulla
-# da sé, quindi il manifesto è (giustamente) vuoto quando arriviamo qui: leggerlo
-# darebbe zero pacchetti e tutte le verifiche di pulizia passerebbero a vuoto.
+# **from the log and not from the manifest**, and the distinction is the point.
+# the manifest says *what is still on the system*: when a rollback undoes a step
+# that record disappears, which is what stops a re-run from skipping artifacts
+# that no longer exist (A-R8-1). the account of *what was done* lives in the log,
+# which is not rewritten. in probe mode the installation fails and undoes itself,
+# so the manifest is rightly empty here: reading it would give zero packages and
+# every cleanliness check would pass on nothing.
 
 group "Diario dell'esecuzione (dal log)"
 
-# Il parsing vive in journal.sh, esercitato da selftest-journal.sh nella CI
-# veloce: un pattern che non combacia non dà errore, dà zero risultati — e zero
-# pacchetti da verificare si presenta come una verifica superata.
+# the parsing lives in journal.sh, exercised by its self-test in the fast CI: a
+# pattern that does not match gives no error, it gives zero results — and zero
+# packages to verify looks like a passing check.
 sed_out="$WORK/install.txt"
 journal_strip_ansi "$WORK/install.out" > "$sed_out"
 
@@ -612,13 +587,11 @@ if [ ! -s "$WORK/delta.txt" ] && [ "$MODE" = "full" ]; then
 e le verifiche di pulizia passerebbero a vuoto"
 fi
 
-# In MODE=probe l'installazione si ferma presto per costruzione (niente systemd
-# come PID 1 → `setup-postgres` non avvia il servizio). Senza questo controllo,
-# un fallimento allo step 1 supererebbe tutte le verifiche di pulizia per il
-# motivo sbagliato: non c'è nulla da pulire perché non è stato fatto nulla.
-# Questi due step sono ciò che la sonda esiste per esercitare: i nomi dei
-# pacchetti apt di quell'OS (A5.1) e il pin wkhtmltopdf del suo codename
-# (A5.2, A-RT-1).
+# in probe mode the installation stops early by construction. without this
+# check, a failure at step one would pass every cleanliness check for the wrong
+# reason: nothing to clean because nothing was done. these two steps are what the
+# probe exists to exercise — that OS's package names (A5.1) and its codename's
+# checksum pin (A5.2, A-RT-1).
 if [ "$MODE" = "probe" ]; then
   for step in install-system-dependencies install-wkhtmltopdf; do
     if grep -qx "$step" "$WORK/steps.txt"; then
@@ -630,7 +603,7 @@ if [ "$MODE" = "probe" ]; then
 fi
 endgroup
 
-# --- fase 4: rollback --------------------------------------------------------
+# --- phase 4: rollback -------------------------------------------------------
 
 group "Rollback"
 set +e
@@ -645,14 +618,13 @@ if [ "$ROLLBACK_RC" -eq 0 ]; then
 else
   fail "il rollback è uscito con $ROLLBACK_RC"
 fi
-# Due esiti sono entrambi corretti, e distinguerli conta.
+# two outcomes are both correct, and telling them apart matters.
 #
-# «Nessun residuo» = c'era un'installazione registrata e l'ha annullata tutta.
-# «Nessuna installazione da annullare» = non c'era nulla da fare — ed è il caso
-# NORMALE in `MODE=probe`, dove l'installazione fallisce e **si annulla da sé**
-# durante l'esecuzione: quando arriviamo qui il sistema è già pulito e il
-# manifesto è già sparito. Pretendere «Nessun residuo» significherebbe pretendere
-# che ci fosse ancora qualcosa da annullare.
+# "no leftovers" means there was a registered installation and all of it was
+# undone. "nothing to undo" means there was nothing to do — the NORMAL case in
+# probe mode, where the installation fails and **undoes itself** during the run,
+# so by the time we get here the system is already clean and the manifest gone.
+# demanding the first would demand that something was still left.
 if grep -q "Nessun residuo" "$WORK/rollback.out"; then
   ok "il rollback dichiara nessun residuo"
 elif grep -q "Nessuna installazione da annullare" "$WORK/rollback.out"; then
@@ -666,16 +638,16 @@ else
   fail "il rollback ha lasciato residui (vedi il report qui sopra)"
 fi
 
-# --- fase 5: il sistema è tornato pulito -------------------------------------
+# --- phase 5: the system is clean again --------------------------------------
 #
-# Sono gli stessi controlli fatti a mano su Multipass, ora automatici. Il punto
-# non è "il comando è uscito 0": è che sul sistema non resti niente di nostro.
+# the same checks once done by hand on a VM, now automatic. the point is not that
+# the command exited zero: it is that nothing of ours is left on the system.
 
 group "Verifica di pulizia post-rollback"
 
 if [ "$OS_USER_PREEXISTING" = "1" ]; then
-  # Preesistente: NON è nostro da cancellare. È l'anti-drop applicato agli
-  # utenti, e qui l'asserzione va nel verso opposto.
+  # pre-existing: NOT ours to delete. the anti-drop applied to users, and here
+  # the assertion runs the other way round.
   assert "l'utente preesistente '$OS_USER' è sopravvissuto al rollback" id "$OS_USER"
 else
   refute "l'utente di sistema '$OS_USER' è stato rimosso" id "$OS_USER"
@@ -687,14 +659,12 @@ refute "il servizio non è più attivo" systemctl is-active --quiet "$UNIT"
 refute "il manifesto è stato consumato" sudo test -f "$STATE"
 refute "wkhtmltopdf è stato purgato" pkg_installed wkhtmltox
 
-# L'interprete alternativo se ne va con tutto il resto (M11).
+# the alternative interpreter goes with everything else (M11).
 #
-# È la metà che rende la scelta *reversibile*: 43 MB installati da noi e mai
-# rimossi sarebbero un residuo dentro il perimetro che il rollback promette di
-# riportare com'era — ed è il motivo per cui a portarlo è
-# `install-system-dependencies` (che purga il delta) e non
-# `bootstrap-prerequisites` (che lascia). Sul reale questa verifica distingue le
-# due cose; su mock nessun test può farlo, perché lì niente si installa davvero.
+# the half that makes the choice *reversible*: tens of megabytes installed by us
+# and never removed would be a leftover inside the perimeter the rollback
+# promises to restore — which is why the step that carries it is the one that
+# purges its delta and not the one that leaves what it adds.
 if [ -n "$PYTHON_PLAN" ]; then
   refute "l'interprete '$PYTHON_PLAN' installato da noi è stato rimosso" \
     pkg_installed "$PYTHON_PLAN"
@@ -716,27 +686,27 @@ else
   info "(atteso in MODE=probe, dove il servizio non è mai partito)"
 fi
 
-# PostgreSQL resta INSTALLATO: senza --aggressive-rollback il rollback fa solo
-# stop + disable, perché quelli sono reversibili e un purge no (D3). Che resti
-# è il comportamento corretto, non un residuo.
+# PostgreSQL stays INSTALLED: without the aggressive flag the rollback only
+# stops and disables, because those are reversible and a purge is not (D3). that
+# it stays is correct behaviour, not a leftover.
 if pkg_installed postgresql; then
   ok "PostgreSQL resta installato (corretto: purge solo con --aggressive-rollback)"
 fi
 
-# Nginx: la config del cliente torna com'era (B-V3-7).
+# the customer's nginx config comes back as it was (B-V3-7).
 #
-# È la metà che conta di A-V3-5. Il default site è **config preesistente di
-# terzi**: rimuoverlo per liberare la porta 80 è lecito, non rimetterlo a posto
-# no. Fino a questa fase nessuna esecuzione reale l'aveva mai verificato.
+# A-V3-5's half that counts. the default site is **somebody else's pre-existing
+# configuration**: removing it to free port 80 is lawful, not putting it back is
+# not. until this phase no real run had ever checked it.
 if [ "$WITH_NGINX" = "true" ]; then
   refute "il vhost è stato rimosso" sudo test -f "$VHOST"
   if [ -n "$VHOST_LINK" ]; then
     refute "il sito è stato disabilitato" sudo test -e "$VHOST_LINK"
   fi
 
-  # Su rpm il default site non è un file separato: non c'è nessun ritorno da
-  # verificare, e inventare l'asserzione produrrebbe un verde per la ragione
-  # sbagliata.
+  # on that family the default site is not a separate file: there is no return
+  # to verify, and inventing the assertion would give a green for the wrong
+  # reason.
   if [ "$HAS_DEFAULT_SITE" = "1" ]; then
   case "$DEFAULT_SITE_BEFORE" in
     assente)
@@ -762,9 +732,9 @@ configurazione che A-V3-5 descrive"
   esac
   fi
 
-  # Firewall dopo il rollback: si chiude ciò che abbiamo aperto, e **solo**
-  # quello. Una regola preesistente del cliente non si tocca mai — è la stessa
-  # regola del delta apt, applicata al firewall.
+  # after the rollback: close what we opened, and **only** that. a customer's
+  # pre-existing rule is never touched — the package delta's rule, applied to the
+  # firewall.
   if [ "$FW_ACTIVE" = "1" ]; then
     if fw_open_ports | grep -qx "80/tcp"; then
       fail "la regola 80/tcp aperta da noi è rimasta dopo il rollback ($FW_NAME)"
@@ -778,15 +748,15 @@ configurazione che A-V3-5 descrive"
     fi
   fi
 
-  # nginx sopravvive e resta servibile: il rollback non deve lasciare il
-  # servizio del cliente con una config rotta (A1.4).
+  # nginx survives and stays serviceable: the rollback must not leave the
+  # customer's service with a broken config (A1.4).
   if pkg_installed nginx || pkg_installed nginx-core || pkg_installed nginx-full; then
     ok "nginx resta installato (purge solo con --aggressive-rollback)"
   fi
   assert "la configurazione nginx è valida anche dopo il rollback" sudo nginx -t
 fi
 
-# Il delta apt: purgato per intero.
+# the package delta: purged in full.
 delta_left=0
 while read -r pkg; do
   if [ -z "$pkg" ]; then continue; fi
@@ -795,14 +765,14 @@ while read -r pkg; do
     delta_left=$((delta_left + 1))
   fi
 done < "$WORK/delta.txt"
-# `if`, non `[ ] && ok`: sotto `set -e` un test falso come ultimo comando di una
-# lista `&&` farebbe uscire lo script prima del report finale.
+# an `if`, not a short-circuit: under `set -e` a false test as the last command
+# of an `&&` list would exit the script before the final report.
 if [ "$delta_left" -eq 0 ]; then
   ok "tutti i pacchetti del delta sono stati purgati"
 fi
 
-# I preesistenti: mai toccati. È la promessa chirurgica, dal lato opposto —
-# un rollback che purga troppo è grave quanto uno che purga troppo poco.
+# the pre-existing ones: never touched. the surgical promise from the other
+# side — a rollback that purges too much is as bad as one that purges too little.
 preexisting_lost=0
 while read -r pkg; do
   if [ -z "$pkg" ]; then continue; fi
@@ -815,11 +785,10 @@ if [ "$preexisting_lost" -eq 0 ]; then
   ok "nessun pacchetto preesistente è stato toccato"
 fi
 
-# La stessa promessa, verificata **senza contabilità**: si confronta l'insieme
-# dei pacchetti installati prima con quello di adesso. Non dipende da cosa
-# abbiamo registrato noi, quindi non può passare per il motivo sbagliato — è la
-# differenza fra «i pacchetti che dicevamo di aver aggiunto sono spariti» e
-# «niente di ciò che c'era è sparito».
+# the same promise **without bookkeeping**: the set of installed packages before
+# is compared with the set now. it does not depend on what we recorded, so it
+# cannot pass for the wrong reason — the difference between "the packages we said
+# we added are gone" and "nothing that was there is gone".
 pkgs_installed_now > "$WORK/pkgs-after.txt"
 if perduti="$(comm -23 "$WORK/pkgs-before.txt" "$WORK/pkgs-after.txt")" && [ -z "$perduti" ]; then
   ok "nessun pacchetto presente prima dell'installazione è stato rimosso"
@@ -827,28 +796,23 @@ else
   fail "il rollback ha rimosso pacchetti che c'erano già: $(echo "$perduti" | tr '\n' ' ')"
 fi
 
-# /opt/odoo: su macchina vergine, dopo il rollback NON deve esistere.
+# on a virgin machine the perimeter directory must NOT exist after the rollback.
 #
-# Fino ad A-V3-2 questa verifica accettava una whitelist (`.installer.log`,
-# `.installer.lock`) e dichiarava OK una directory sopravvissuta: metteva per
-# iscritto il residuo come comportamento atteso, ed è il motivo per cui la CI
-# non ha mai trovato il difetto. I due file erano lì perché lock e log vivevano
-# dentro la home; ora vivono in /run e /var/log, la directory non ha più alcuna
-# ragione di sopravvivere, e l'undo di `prepare-opt-root` può finalmente
-# attivarsi.
+# until A-V3-2 this check accepted a whitelist and called a surviving directory
+# fine: it wrote the leftover down as expected behaviour, which is why the CI
+# never found the defect. those files were there because the lock and the log
+# lived inside the home; now they live outside it, the directory has no reason to
+# survive, and the first step's undo can finally fire.
 #
-# È questa riga ad aver trovato A-R5-3: `.cache` (la cache di pip, che nasceva
-# nella home dell'utente odoo) e `.local` (il filestore, che Odoo si creava da
-# sé, fuori da ogni step e quindi non annullabile). Chiuse in R6 dai due lati
-# opposti — la cache non nasce più qui (`pip --cache-dir` dentro il venv), il
-# filestore è ora lo step `setup-data-dir` con il suo PreState. La guardia di
-# regressione resta, ora più stretta: qualunque contenuto è un residuo, e lo è
-# anche la directory stessa.
+# this line is what found A-R5-3: the pip cache and the filestore, both born in
+# the home outside any step and therefore not undoable. closed from opposite
+# sides — the cache no longer appears there, the filestore is now a step with its
+# own PreState. the regression guard stays, tighter: any content is a leftover,
+# and so is the directory itself.
 #
-# Nota: vale perché il runner parte da una macchina senza /opt/odoo. Se la
-# directory fosse preesistente, `prepare-opt-root` la marcherebbe Preexisting e
-# NON rimuoverla sarebbe il comportamento corretto — per questo si verifica
-# che fosse assente prima di installare.
+# it holds because the runner starts without that directory. were it
+# pre-existing, NOT removing it would be the correct behaviour — hence the
+# snapshot taken before installing.
 if [ "${OPT_ODOO_PREEXISTING:-0}" = "1" ]; then
   ok "$ODOO_HOME era preesistente: il rollback non deve rimuoverla (nessuna asserzione)"
 elif [ -d "$ODOO_HOME" ]; then
@@ -860,7 +824,7 @@ fi
 
 endgroup
 
-# --- esito -------------------------------------------------------------------
+# --- outcome -----------------------------------------------------------------
 
 echo
 if [ "$FAILURES" -eq 0 ]; then
@@ -871,8 +835,8 @@ echo "=== INTEGRAZIONE FALLITA ($MODE): $FAILURES verifiche non superate ==="
 echo "Verifiche fallite:"
 for check in "${FAILED_CHECKS[@]}"; do
   echo "  ✖  $check"
-  # `::error::` diventa un'annotazione in cima all'esecuzione: visibile senza
-  # aprire nulla, che è il punto.
+  # an error annotation shows at the top of the run: visible without opening
+  # anything, which is the point.
   echo "::error::$check"
 done
 echo "Log dell'installer:"

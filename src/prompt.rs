@@ -1,11 +1,10 @@
-//! Raccolta input interattiva con `inquire`, dietro lo **stesso confine** della
-//! Fase 1: la logica di cascata resta in [`crate::config`]; qui cambia solo il
-//! *come* si chiede. La UI non entra negli step.
+//! interactive input with `inquire`. the cascade logic stays in
+//! [`crate::config`]; only the *asking* lives here, and the UI never enters a
+//! step.
 //!
-//! Si prompta **solo** per i campi non passati da CLI, usando come default il
-//! valore da `.env` o il default finale. In assenza di TTY, `main` non chiama
-//! questo modulo e usa `CLI → .env → default`: `inquire` non blocca mai senza
-//! terminale.
+//! only fields **not** passed on the CLI are prompted for, defaulting to the
+//! `.env` value or the final default. without a TTY `main` skips this module
+//! entirely, so `inquire` never blocks on a terminal that is not there.
 
 use std::io::IsTerminal;
 
@@ -18,12 +17,12 @@ use crate::config::{self, RawConfig};
 
 const VERSIONS: [&str; 4] = ["16.0", "17.0", "18.0", "19.0"];
 
-/// `true` se sia stdin sia stdout sono TTY.
+/// `true` when both stdin and stdout are TTYs.
 pub fn is_interactive() -> bool {
     std::io::stdin().is_terminal() && std::io::stdout().is_terminal()
 }
 
-/// Validatore `inquire` costruito da un validatore di [`crate::config`].
+/// an `inquire` validator built from a [`crate::config`] one.
 fn identifier_validator(
     field: &'static str,
 ) -> impl Fn(&str) -> Result<Validation, CustomUserError> + Clone {
@@ -52,7 +51,7 @@ fn subdir_validator() -> impl Fn(&str) -> Result<Validation, CustomUserError> + 
     }
 }
 
-/// Sottocartella install valida (nessun `/`, `.` o `..`, solo identifier).
+/// a valid install subdirectory: no `/`, `.` or `..`, identifier chars only.
 fn is_valid_subdir(value: &str) -> bool {
     !value.is_empty()
         && !value.starts_with('/')
@@ -67,8 +66,14 @@ fn is_valid_subdir(value: &str) -> bool {
         })
 }
 
-/// Raccoglie interattivamente i campi **non** passati da CLI. `env` fornisce i
-/// default suggeriti. Non prompta `db_user` (segue `odoo_user`).
+/// collects the fields **not** passed on the CLI, suggesting `env` values as
+/// defaults.
+///
+/// never prompts for `db_user`, which follows `odoo_user`.
+///
+/// # errors
+///
+/// propagates an `inquire` failure, including the user aborting a prompt.
 pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     println!();
     println!("── Configurazione installazione Odoo ──");
@@ -76,7 +81,6 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
 
     let mut out = RawConfig::default();
 
-    // Versione: Select.
     if cli.version.is_some() {
         info!("Versione Odoo da CLI");
     } else {
@@ -91,7 +95,6 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
         out.version = Some(choice);
     }
 
-    // Utente OS.
     if cli.odoo_user.is_some() {
         info!("Utente Odoo da CLI");
     } else {
@@ -104,7 +107,6 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
         );
     }
 
-    // Nome DB.
     if cli.db_name.is_some() {
         info!("Database Odoo da CLI");
     } else {
@@ -117,7 +119,6 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
         );
     }
 
-    // Porta.
     if cli.port.is_some() {
         info!("Porta Odoo da CLI");
     } else {
@@ -130,7 +131,6 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
         );
     }
 
-    // Install dir (sottocartella sotto /opt/odoo).
     if cli.install_dir.is_some() {
         info!("Install dir da CLI");
     } else {
@@ -149,7 +149,6 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
         out.install_dir = Some(format!("{home}/{subdir}"));
     }
 
-    // Password admin (mascherata).
     if cli.admin_passwd.is_some() {
         info!("Password admin Odoo acquisita da CLI");
     } else {
@@ -162,10 +161,9 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
         } else if let Some(env_pw) = env.admin_passwd.clone() {
             out.admin_passwd = Some(env_pw);
         }
-        // se vuoto e nessun env → resta None → cascata usa il default "admin".
+        // empty and no env value → stays None → the cascade defaults it.
     }
 
-    // Nginx: Confirm solo se non passato da CLI.
     if cli.with_nginx.is_none() {
         let default = env.with_nginx.unwrap_or(false);
         let yes = Confirm::new("Configurare Nginx come reverse proxy?")
@@ -177,7 +175,11 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     Ok(out)
 }
 
-/// Chiede una conferma sì/no (default `false`).
+/// asks a yes/no question, defaulting to no.
+///
+/// # errors
+///
+/// propagates an `inquire` failure.
 pub fn confirm(question: &str) -> Result<bool> {
     Ok(Confirm::new(question).with_default(false).prompt()?)
 }

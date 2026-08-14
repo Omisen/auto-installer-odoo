@@ -1,25 +1,20 @@
-//! [`CreateOdooUser`]: crea l'utente di sistema `odoo` e ne rende owner la home.
+//! [`CreateOdooUser`]: creates the `odoo` system user and gives it the home.
 //!
-//! Segue il modello di [`crate::steps::prepare_opt_root`], ma su una risorsa più
-//! ricca (utente + gruppo + ownership della home).
+//! follows [`crate::steps::prepare_opt_root`]'s model on a richer resource:
+//! user, group and home ownership.
 //!
-//! # Coordinamento con `PrepareOptRoot` (il punto delicato)
+//! # coordinating with `PrepareOptRoot`
 //!
-//! `/opt/odoo` è creata da [`PrepareOptRoot`](crate::steps::prepare_opt_root),
-//! non da questo step. Qui la directory diventa `odoo:odoo`. Regola di
-//! ownership del rollback: **ogni step possiede la rimozione di ciò che ha
-//! creato**. Perciò:
+//! that step creates `/opt/odoo`; this one makes it `odoo:odoo`. the rollback's
+//! ownership rule is **every step owns the removal of what it created**, so:
 //!
-//! - `undo` esegue `userdel` **senza `-r`**: NON rimuove la home. La home la
-//!   rimuove `PrepareOptRoot.undo`, che gira *dopo* (ordine inverso).
-//! - se la home era `Preexisting` (non nostra) e il nostro `chown` ne ha
-//!   cambiato l'owner, `undo` ripristina l'owner originale salvato in
-//!   `snapshot` — così non resta di proprietà di un utente che stiamo
-//!   cancellando.
+//! - the undo runs `userdel` **without `-r`** and does NOT remove the home,
+//!   which `PrepareOptRoot`'s undo removes later in the reverse order;
+//! - if the home was `Preexisting` and our `chown` changed its owner, the undo
+//!   restores the original, so it is not left owned by a user we are deleting.
 //!
-//! Regola invariante di `CLAUDE.md`: **mai `userdel -r` su un utente
-//! `Preexisting`** (cancellerebbe una home non nostra). Qui l'undo agisce solo
-//! su utenti `CreatedByUs`, e comunque senza `-r`.
+//! invariant from `CLAUDE.md`: **never `userdel -r` on a `Preexisting` user**.
+//! here the undo acts only on `CreatedByUs` ones, and without `-r` anyway.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -30,30 +25,29 @@ use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::{OwnerId, SystemOps, UserSpec};
 
-/// Permessi della home (owner rwx, group r-x, other ---).
+/// home permissions.
 const HOME_MODE: u32 = 0o750;
-/// Nessuna shell interattiva (principio del privilegio minimo).
+/// no interactive shell: least privilege.
 const LOGIN_SHELL: &str = "/bin/false";
 
-/// Snapshot serializzabile dello step, sufficiente a ricostruire l'undo.
+/// the step's serialisable snapshot, enough to rebuild the undo.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CreateUserSnapshot {
-    /// `Preexisting` se l'utente c'era già; `CreatedByUs` dopo un run che l'ha
-    /// creato; `Untracked` altrimenti.
+    /// whether the user was already there, or we created it.
     pub user_prestate: PreState,
-    /// Owner della home **prima** del nostro `chown` (per ripristinarlo in undo
-    /// se la home era `Preexisting`). `None` se la home non esisteva.
+    /// the home's owner **before** our `chown`, so the undo can restore it.
+    /// `None` when the home did not exist.
     pub home_original_owner: Option<OwnerId>,
 }
 
-/// Crea l'utente di sistema `odoo` (reversibile) e ne rende owner la home.
+/// creates the `odoo` system user, reversibly, and gives it the home.
 pub struct CreateOdooUser {
     ops: Box<dyn SystemOps>,
     snap: CreateUserSnapshot,
 }
 
 impl CreateOdooUser {
-    /// Costruttore con `SystemOps` iniettabile (usato dai test con un mock).
+    /// constructor with injectable `SystemOps`, for the tests.
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -63,44 +57,37 @@ impl CreateOdooUser {
 }
 
 impl CreateOdooUser {
-    /// Precondizione: se l'utente esiste già, la sua home dev'essere usabile da
-    /// lui (A-V3-4).
+    /// precondition: an already-existing user must be able to use its home
+    /// (A-V3-4).
     ///
-    /// # Il caso che intercetta
+    /// a pre-existing `odoo` user **and** a pre-existing root-owned `/opt/odoo`
+    /// makes the installation impossible: this step deliberately does not chown
+    /// a directory that is not ours, and three steps later `SetupCacheDir` hits
+    /// *Permission denied* on a `mkdir`, with no clue about a cause two steps
+    /// back.
     ///
-    /// Utente `odoo` preesistente **e** `/opt/odoo` preesistente di proprietà di
-    /// root. Da qui l'installazione è impossibile: questo step non fa il `chown`
-    /// (scelta deliberata — la directory non è nostra), e tre step più avanti
-    /// `SetupCacheDir` esegue `sudo -u odoo mkdir -p /opt/odoo/.cache` su una
-    /// directory di root. Il risultato era un *Permission denied* su un `mkdir`,
-    /// senza alcun indizio sulla causa vera, che sta due step prima e in una
-    /// combinazione di condizioni che l'utente non ha modo di indovinare.
+    /// stopping **here** with an explicit message is better: a precondition,
+    /// like the database init's hard stop. not an undo to write but a mutation
+    /// not to begin.
     ///
-    /// Fermarsi **qui** e con un messaggio esplicito è meglio: è una
-    /// precondizione, come l'hard-stop sull'init del database. Non è un `undo`
-    /// da scrivere, è una mutazione da non iniziare.
+    /// declared limitation: it checks whether the home belongs to **root**, not
+    /// to some third user — that would mean resolving our user's uid, and the
+    /// realistic case is a system directory created by root.
     ///
-    /// # Cosa NON copre, dichiarato
+    /// the "home created by us" case never arrives here: `PrepareOptRoot` hands
+    /// it over at once, because that is where the information lives.
     ///
-    /// Il controllo guarda se la home è di **root** (`uid 0`), non se appartiene
-    /// a un terzo utente qualsiasi: quello richiederebbe di risolvere l'uid del
-    /// nostro utente, e il caso realistico — una directory di sistema creata da
-    /// root — è questo. Il messaggio dice cosa ha trovato, non di più.
+    /// # errors
     ///
-    /// # Perché il caso "home creata da noi" non arriva qui
-    ///
-    /// Se `/opt/odoo` la crea [`PrepareOptRoot`](crate::steps::prepare_opt_root)
-    /// e l'utente esiste già, è quello step a consegnargliela subito. Quando
-    /// arriviamo qui la home è già dell'utente e la precondizione passa. La
-    /// distinzione fra "creata da noi" e "preesistente" vive lì perché è lì che
-    /// l'informazione esiste.
+    /// [`StepError::Precondition`] naming the home, its owner and the two ways
+    /// out.
     fn refuse_unusable_home(&self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.user_prestate != PreState::Preexisting {
             return Ok(());
         }
         let Some(owner) = self.snap.home_original_owner else {
-            // Home assente: siamo in dry-run (in un'esecuzione reale
-            // `PrepareOptRoot` l'ha appena creata). Niente da verificare.
+            // no home means a dry run: in a real one `PrepareOptRoot` has just
+            // created it.
             return Ok(());
         };
         if owner.uid != 0 {
@@ -123,32 +110,26 @@ impl CreateOdooUser {
     }
 }
 
-/// L'esito di `groupdel` che l'audit chiama A-MD-3: **il gruppo non c'era già**.
+/// the `groupdel` outcome A-MD-3 names: **the group was already gone**.
 ///
-/// # Perché va distinto da un fallimento
+/// on Fedora `userdel` takes the primary group with it, so the following
+/// `groupdel` exits 6; on Debian the group outlives the user and the call is
+/// needed. an unforeseen behavioural divergence between the families.
 ///
-/// Su Fedora `userdel` rimuove anche il gruppo primario dell'utente; il
-/// `groupdel` che segue esce quindi 6 («specified group doesn't exist»). Su
-/// Debian/Ubuntu il gruppo sopravvive all'utente e il `groupdel` serve davvero:
-/// è una divergenza di comportamento fra le famiglie che nessuno aveva previsto.
+/// the undo is correct either way — the group *is not there*, which is the
+/// wanted result — but reporting it as a `WARN` made every successful rollback
+/// look suspicious. A-V3-10's category: cosmetic, and insidious precisely
+/// because it appears **every time** and teaches people to ignore warnings.
 ///
-/// L'undo è corretto in entrambi i casi — il gruppo *non c'è*, che è il
-/// risultato voluto — ma finché lo comunicava come `WARN` chi leggeva un
-/// rollback riuscito trovava un avviso e si chiedeva se qualcosa fosse rimasto
-/// indietro. È la categoria di A-V3-10: cosmetico, e proprio per questo
-/// insidioso, perché compare **a ogni rollback** e insegna a ignorare i warning.
+/// the exit code and not the message, because `groupdel` writes in the
+/// **system's language** and a check on stderr would fail on a localised
+/// machine — `apt-cache policy`'s trap in R6. code 6 is documented by
+/// shadow-utils and does not translate.
 ///
-/// # Perché l'exit code e non il messaggio
-///
-/// Perché `groupdel` scrive «group 'odoo' does not exist» **nella lingua del
-/// sistema**, e un controllo sullo stderr fallirebbe su una macchina localizzata
-/// — la stessa trappola di `apt-cache policy` in R6, dove è servito `LC_ALL=C`.
-/// Il codice 6 è documentato da shadow-utils e non si traduce.
-///
-/// Pura: si verifica su un errore costruito a mano, senza avere un gruppo da
-/// rimuovere né i privilegi per farlo.
+/// pure: checkable on a hand-built error, without a group to remove or the
+/// privileges to remove it.
 pub fn group_already_gone(err: &StepError) -> bool {
-    /// `groupdel`: «specified group doesn't exist» (shadow-utils).
+    /// `groupdel`: "specified group doesn't exist".
     const GROUP_NOT_FOUND: &str = "6";
     matches!(err, StepError::CommandFailed { status, .. } if status == GROUP_NOT_FOUND)
 }
@@ -167,8 +148,8 @@ impl Step for CreateOdooUser {
             PreState::Untracked
         };
 
-        // Owner della home PRIMA del nostro eventuale chown: serve a un undo
-        // corretto se la home era preesistente (non nostra).
+        // the home's owner BEFORE any chown of ours, for a correct undo when it
+        // was pre-existing.
         self.snap.home_original_owner = if self.ops.path_exists(&ctx.odoo_home) {
             self.ops.owner_of(&ctx.odoo_home).ok()
         } else {
@@ -190,8 +171,8 @@ impl Step for CreateOdooUser {
         let user = &ctx.odoo_user;
         let home = &ctx.odoo_home;
 
-        // Utente preesistente: non è nostro. Nessun useradd e — scelta
-        // conservativa — nessun chown aggressivo su una situazione non nostra.
+        // pre-existing user: not ours. no `useradd`, and deliberately no
+        // aggressive chown on a situation that is not ours either.
         if self.snap.user_prestate == PreState::Preexisting {
             info!(user = %user, "run: utente già presente, skip creazione (nessun chown aggressivo)");
             return Ok(());
@@ -215,7 +196,7 @@ impl Step for CreateOdooUser {
             shell: LOGIN_SHELL.to_string(),
         };
         self.ops.create_user(&spec)?;
-        // useradd non ri-chowna una home preesistente: lo facciamo esplicitamente.
+        // `useradd` does not re-chown a pre-existing home, so we do.
         self.ops.chown_named(home, user, user)?;
         self.ops.chmod(home, HOME_MODE)?;
 
@@ -225,7 +206,7 @@ impl Step for CreateOdooUser {
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
-        // Agisce solo su utenti creati da noi. Mai toccare un Preexisting.
+        // acts only on users we created. never touch a pre-existing one.
         if self.snap.user_prestate != PreState::CreatedByUs {
             info!(prestate = ?self.snap.user_prestate, "undo NO-OP (utente non creato da noi)");
             return Ok(());
@@ -238,16 +219,14 @@ impl Step for CreateOdooUser {
             return Ok(());
         }
 
-        // 1) userdel SENZA -r: la home /opt/odoo la rimuove PrepareOptRoot.undo.
+        // `userdel` WITHOUT `-r`: the home is `PrepareOptRoot`'s to remove.
         if let Err(e) = self.ops.delete_user(user) {
             warn!(user = %user, error = %e, "undo: userdel fallito, proseguo (best-effort)");
         }
 
-        // 2) Gruppo dedicato creato da --user-group, se resta orfano.
-        //
-        // Su alcune famiglie `userdel` porta via anche il gruppo primario, e
-        // questo `groupdel` trova il vuoto: è l'esito **voluto**, non un
-        // fallimento, e va detto come tale (A-MD-3).
+        // the dedicated group, if it outlived the user. on some families
+        // `userdel` already took it, and finding nothing is the **wanted**
+        // outcome rather than a failure (A-MD-3).
         if let Err(e) = self.ops.delete_group(user) {
             if group_already_gone(&e) {
                 info!(
@@ -260,9 +239,9 @@ impl Step for CreateOdooUser {
             }
         }
 
-        // 3) Ripristina l'owner originale della home se l'avevamo cambiato
-        //    (rilevante quando la home era Preexisting). Se invece è di
-        //    PrepareOptRoot, verrà rimossa comunque: qui è best-effort innocuo.
+        // restore the home's original owner if we changed it. when the home is
+        // `PrepareOptRoot`'s it will be removed anyway, so this is a harmless
+        // best-effort.
         if let Some(original) = self.snap.home_original_owner {
             if self.ops.path_exists(&ctx.odoo_home) {
                 if let Err(e) = self.ops.chown_numeric(&ctx.odoo_home, original) {

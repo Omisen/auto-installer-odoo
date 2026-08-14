@@ -1,15 +1,14 @@
-//! [`CreateDatabase`]: crea il database applicativo, in modo reversibile.
+//! [`CreateDatabase`]: creates the application database, reversibly.
 //!
-//! # Protezione critica: mai droppare un database preesistente
+//! # critical protection: never drop a pre-existing database
 //!
-//! Questa è la singola barriera che distingue "installer che pulisce" da
-//! "installer che può distruggere i dati di un cliente". Un database con lo
-//! stesso nome che **esisteva già** può contenere dati reali: l'undo lo droppa
-//! **solo** se lo abbiamo creato noi (`PreState::CreatedByUs`). Su `Preexisting`
-//! l'undo è rigorosamente NO-OP.
+//! the single barrier separating "an installer that cleans up" from "an
+//! installer that can destroy a customer's data". a database that **already
+//! existed** under the same name may hold real data, so the undo drops it
+//! **only** when we created it; on `Preexisting` it is strictly a no-op.
 //!
-//! Il ramo è reso impossibile da sbagliare: il `PreState` governa il drop, e la
-//! chiamata a `dropdb` è raggiungibile solo nel ramo `CreatedByUs`.
+//! the branch is made impossible to get wrong: the `PreState` governs the drop,
+//! and the call is reachable only inside the `CreatedByUs` branch.
 
 use tracing::{info, warn};
 
@@ -19,7 +18,7 @@ use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
-/// Crea il database `db_name` (reversibile) con owner `db_user`.
+/// creates the `db_name` database, reversibly, owned by `db_user`.
 pub struct CreateDatabase {
     ops: Box<dyn SystemOps>,
     prestate: PreState,
@@ -40,16 +39,16 @@ impl Step for CreateDatabase {
     }
 
     fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError> {
-        // Rileva se il DB esisteva PRIMA di noi: è la fonte di verità della
-        // protezione anti-drop.
+        // did the database exist BEFORE us? the anti-drop protection's source
+        // of truth.
         self.prestate = if self.ops.pg_db_exists(&ctx.db_name)? {
             PreState::Preexisting
         } else {
             PreState::Untracked
         };
 
-        // Pubblica il risultato per InitializeOdooDatabase (Fase 7): l'init è
-        // lecito SOLO se il DB non è preesistente. Preexisting → false = rifiuta.
+        // publish the verdict for the init step: writing the schema is allowed
+        // ONLY into a database that is not pre-existing.
         ctx.db_created_by_us.store(
             self.prestate != PreState::Preexisting,
             std::sync::atomic::Ordering::SeqCst,
@@ -75,9 +74,8 @@ impl Step for CreateDatabase {
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
-        // PROTEZIONE CRITICA: si droppa SOLO ciò che abbiamo creato noi.
-        // Un DB preesistente non viene MAI rimosso — potrebbe contenere dati
-        // reali del cliente.
+        // CRITICAL PROTECTION: drop ONLY what we created. a pre-existing
+        // database is NEVER removed — it may hold the customer's real data.
         if self.prestate != PreState::CreatedByUs {
             info!(
                 db = %ctx.db_name,
@@ -100,16 +98,14 @@ impl Step for CreateDatabase {
         serde_json::to_value(&self.prestate).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Reidratazione: è **qui** che la protezione anti-drop attraversa il
-    /// confine del disco.
+    /// **here** is where the anti-drop protection crosses the disk boundary.
     ///
-    /// Il `PreState` persistito è la sola cosa che, in un rollback eseguito ore
-    /// o giorni dopo, distingue "database creato da noi" da "database del
-    /// cliente che portava lo stesso nome". Non si ricalcola interrogando
-    /// PostgreSQL — a quel punto il DB esiste in entrambi i casi e la domanda
-    /// non ha più risposta. Si rilegge, e un valore illeggibile è un errore che
-    /// blocca l'undo: meglio un database che resta da rimuovere a mano che uno
-    /// droppato per un'inferenza sbagliata.
+    /// the persisted `PreState` is the only thing that, in a rollback run days
+    /// later, tells "a database we created" from "the customer's, under the
+    /// same name". it is not recomputed by asking PostgreSQL — by then the
+    /// database exists either way and the question has no answer. an unreadable
+    /// value is an error that blocks the undo: better a database left to remove
+    /// by hand than one dropped on a wrong inference.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let prestate = decode_snapshot(self.name(), snapshot)?;
         self.prestate = prestate;

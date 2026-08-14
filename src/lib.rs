@@ -1,27 +1,20 @@
-//! Invok — installer Odoo reversibile.
+//! Invok — a reversible Odoo installer.
 //!
-//! Questa libreria espone il **motore** dell'installer: il trait [`step::Step`],
-//! il pattern [`state::PreState`], il [`context::Context`] e l'orchestratore
-//! [`engine::Installer`] (execute + rollback) con persistenza dello stato su
-//! disco. In Fase 0 l'unico step è [`steps::noop::NoopStep`]; gli step di
-//! sistema reali arrivano nelle fasi successive senza modificare il motore.
+//! this library holds the **engine**: the [`step::Step`] trait, the
+//! [`state::PreState`] pattern, the [`context::Context`] and the
+//! [`engine::Installer`] orchestrator (execute + rollback) with state persisted
+//! to disk. the real system steps live in [`steps`] and plug in without the
+//! engine changing.
 //!
-//! Le regole invarianti sono descritte in `CLAUDE.md` e nei doc-comment di
-//! [`step::Step`] ed [`engine::Installer`].
+//! the invariants are described in `CLAUDE.md` and in the doc comments of
+//! [`step::Step`] and [`engine::Installer`].
 
-/// La versione di **questo installer**, dal manifesto di cargo.
+/// version of **this installer**, from the cargo manifest.
 ///
-/// Un posto solo, e tre consumatori: il flag `-V`, la prima riga del log e il
-/// manifesto di disinstallazione. Prima non esisteva affatto — `A-V3-16`, trovato
-/// installando il `.rpm` della 2.3.0 su una Fedora vera: `--version` è la versione
-/// **di Odoo**, e non c'era modo di chiedere al binario la propria. Il difetto
-/// vero però non era la scomodità: la versione non compariva **nemmeno nel log**,
-/// che questo progetto tiene in vita oltre il rollback proprio perché è il
-/// post-mortem. Un log arrivato da una macchina cliente non diceva chi l'avesse
-/// scritto, e fra 2.1.0, 2.2.0 e 2.3.0 il comportamento differisce parecchio.
-///
-/// Non è «un'informazione che c'era e non è stata letta» — la firma solita di
-/// questo progetto — ma la sua variante: **un'informazione mai scritta**.
+/// one source, three consumers: the `-V` flag, the log's first line and the
+/// uninstall manifest. A-V3-16: `--version` is *Odoo's* version, so before this
+/// a log arriving from a customer machine did not say which installer had
+/// written it — and 2.1.0, 2.2.0 and 2.3.0 behave quite differently.
 pub const INSTALLER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 pub mod checks;

@@ -1,55 +1,46 @@
 # =============================================================================
-# .github/workflows/release.yml
-# Release automatica con binari LINUX precompilati.
+# releases, with precompiled LINUX binaries.
 #
-# A ogni tag di versione (es. v2.1.0), builda l'installer in release per due
-# target Linux x86_64 e allega gli archivi (+ checksum SHA-256) alla GitHub
-# Release. Così clienti e stagisti scaricano un eseguibile pronto, senza avere
-# Rust installato — "un file, lo lanci, funziona".
+# on a version tag, builds the installer for two x86_64 Linux targets and
+# attaches the archives and their checksums to the GitHub release, so customers
+# download a ready executable without having Rust: one file, run it, done.
 #
-# Target:
-#   - x86_64-unknown-linux-gnu   → standard (glibc), per la maggior parte dei server
-#   - x86_64-unknown-linux-musl  → STATICO, gira su qualsiasi distro (consigliato ai clienti)
+#   x86_64-unknown-linux-gnu   standard glibc, for most servers
+#   x86_64-unknown-linux-musl  STATIC, runs on any distribution
 #
-# Nota: l'installer è Linux-only per natura (useradd/apt/systemctl/sudo/nix): non
-# esistono target Windows/macOS sensati. Solo binari Linux, ed è voluto.
+# the installer is Linux-only by nature, so there is no sensible Windows or macOS
+# target. quality CI (formatting, lint, build, tests) stays in test.yml; only
+# artifacts are produced here, on a tag. tag commits that are already green.
 #
-# La CI di qualità (fmt/clippy/build/test) resta in test.yml, su push/PR.
-# Qui si producono solo gli artefatti, su tag. Tagga commit già verdi.
+# HOW A RELEASE IS MADE, and why this file looks like this.
 #
-# COME SI RILASCIA, e perché il file è fatto così.
+# the release and its tag are created by a HUMAN from the web UI: open a draft,
+# write the new tag in it with `main` as target, press Publish. the tag does NOT
+# exist until then — it is born at that moment. that single gesture fires TWO
+# events together:
 #
-# La release e il suo tag li crea un UMANO, dalla UI di GitHub: si apre una
-# bozza, ci si scrive dentro il tag nuovo (`v3.0.0`) con target `main`, e si
-# preme Publish. Il tag NON esiste finché non si pubblica: nasce in quel
-# momento. Quel singolo gesto fa scattare DUE eventi insieme, ed è la cosa da
-# tenere a mente leggendo il resto:
+#   tag push          -> the artifacts are BUILT and attached to the release
+#   release published -> the crate goes to the registry. IRREVERSIBLE: nothing
+#                        is deleted there, only yanked
 #
-#   push del tag (appena creato) → si COSTRUISCONO gli artefatti e si allegano
-#                                  alla release che hai appena pubblicato
-#   release published            → si pubblica su crates.io. IRREVERSIBILE: dal
-#                                  registro non si cancella, si può solo `yank`
+# every job declares WHICH of the two it belongs to with an `if` on the event
+# name. without that line GitHub runs them ALL on BOTH events. a test demands it
+# per job, because it is a line one forgets to add to the NEXT job and the
+# symptom would arrive only on release day.
 #
-# Ogni job dichiara a QUALE dei due appartiene con `if: github.event_name == ...`.
-# Senza quella riga GitHub li esegue TUTTI a ENTRAMBI gli eventi. C'è un test che
-# la pretende su ogni job (`tests/ci_config.rs`), perché è una riga che si
-# dimentica di aggiungere al PROSSIMO job e il sintomo arriverebbe solo il giorno
-# della release.
+# THERE IS NO JOB THAT CREATES THE RELEASE, and that is a deliberate removal:
+# there was one, written for the opposite flow — push the tag from the CLI, let
+# CI prepare the draft. with the real flow the two fought: publishing created the
+# tag, that job started and put the release BACK INTO DRAFT; republishing fired
+# the second event and re-ran the publish on a version already uploaded, giving a
+# red job on a publication that had succeeded the first time. a job that creates
+# what the user already created is not redundant: it is an antagonist.
 #
-# NON C'È UN JOB CHE CREA LA RELEASE, ed è una rimozione deliberata: ce n'era uno
-# (`create-gh-release-action` con `draft: true`) scritto per il flusso opposto —
-# spingi il tag da CLI, la CI ti prepara la bozza. Con il flusso vero i due si
-# combattevano: pubblicavi, nasceva il tag, quel job partiva e RIMETTEVA IN BOZZA
-# la release appena pubblicata; tu ripubblicavi, e il secondo `release: published`
-# rieseguiva `cargo publish` su una versione già caricata → `already exists`, job
-# rosso, con la pubblicazione in realtà riuscita al primo giro. Un job che crea
-# ciò che l'utente ha già creato non è ridondante: è un antagonista.
-#
-# Conseguenza dichiarata: gli asset compaiono qualche minuto DOPO che la release
-# è visibile, e il controllo «il README nomina questo file» gira a release già
-# pubblica. È il SECONDO livello di quella guardia, non il primo: il primo è
-# `cargo test`, che compone i nomi attesi da Cargo.toml a ogni push e ferma molto
-# prima del tag (A-V3-17).
+# declared consequence: the assets appear a few minutes AFTER the release is
+# visible, and the "the README names this file" check runs with the release
+# already public. that is the SECOND level of the guard, not the first: the first
+# is `cargo test`, composing the expected names from the manifest on every push,
+# long before the tag (A-V3-17).
 # =============================================================================
 
 name: Release
@@ -62,15 +53,14 @@ on:
     types: [published]
 
 permissions:
-  contents: write # necessario per creare la Release e caricare gli asset
+  contents: write # needed to upload the release assets
 
 jobs:
-  # Builda e carica un archivio per ogni target. L'action gestisce cross-build
-  # (musl) e genera archivio .tar.gz + file .sha256 accanto ad esso.
+  # builds and uploads one archive per target; the action handles the cross build
+  # and produces the archive plus its checksum file.
   #
-  # Nessun `needs`: la release esiste già quando questo job parte — l'hai creata
-  # tu, ed è il gesto di pubblicarla ad aver fatto nascere il tag che ci ha
-  # svegliati. Non c'è niente da aspettare.
+  # no `needs`: the release already exists when this job starts — publishing it is
+  # what created the tag that woke us. there is nothing to wait for.
   upload-assets:
     if: github.event_name == 'push'
     strategy:
@@ -87,20 +77,18 @@ jobs:
         with:
           bin: invok
           target: ${{ matrix.target }}
-          # Naming chiaro: invok-<target>.tar.gz
+          # a clear name: invok-<target>.tar.gz
           archive: $bin-$target
           checksum: sha256
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-  # Pacchetto .deb "nativo" per Debian/Ubuntu, ACCANTO ai tar.gz (non li
-  # sostituisce). Chi vuole `apt install ./invok_x.y.z_amd64.deb` e il
-  # comando nel PATH usa questo; chi vuole il binario nudo usa il tar.gz.
+  # the native .deb, ALONGSIDE the tarballs and not replacing them: for whoever
+  # wants the command in their PATH rather than a bare binary.
   #
-  # Il .deb impacchetta il TOOL, non Odoo: deposita solo /usr/bin/invok
-  # (+ doc). Nessun servizio, nessun utente, nessuna dipendenza su postgres/nginx
-  # — quelle le crea l'installer a runtime. Buildato da musl statico, così gira
-  # su qualsiasi distro.
+  # it packages the TOOL, not Odoo: only the binary and its docs. no service, no
+  # user, no dependency on the database or the proxy — the installer creates
+  # those at runtime. built from the static musl binary, so it runs anywhere.
   deb:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -125,17 +113,16 @@ jobs:
           deb="$(ls target/x86_64-unknown-linux-musl/debian/*.deb)"
           ( cd "$(dirname "$deb")" && sha256sum "$(basename "$deb")" > "$(basename "$deb").sha256" )
           echo "DEB=$deb" >> "$GITHUB_ENV"
-      # A-V3-17: il README promette un nome di file per intero, e finora nessuno
-      # confrontava quella promessa con il file davvero prodotto. Il `.deb` della
-      # v2.3.0 si chiamava `..._2.3.0-1_amd64.deb` e il README ne nominava uno
-      # senza `-1`: comando di installazione → 404, e il test unitario non poteva
-      # accorgersene perché ripeteva la stessa congettura del README.
+      # A-V3-17: the README promises a filename in full, and nobody compared that
+      # promise with the file actually produced. one release's package carried a
+      # revision suffix the README's name lacked, so the install command gave a
+      # 404 — and the unit test could not notice, because it repeated the same
+      # conjecture.
       #
-      # Qui il nome NON è congetturato: è il basename dell'artefatto che stiamo
-      # per pubblicare. È l'unico punto della catena in cui questo controllo può
-      # dire di no per il motivo giusto — e lo dice PRIMA dell'upload, perché una
-      # release pubblicata con il README sbagliato si corregge solo con un'altra
-      # release.
+      # here the name is NOT conjectured: it is the basename of the artifact
+      # about to be published, the only point in the chain where this check can
+      # say no for the right reason. and it says so BEFORE the upload, because a
+      # release published with a wrong README is fixed only by another release.
       - name: Il README nomina questo file
         run: |
           nome="$(basename "$DEB")"
@@ -150,13 +137,11 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" "$DEB" "$DEB.sha256" --clobber
 
-  # Il .rpm, per la famiglia Fedora: stessa promessa del .deb — impacchetta il
-  # TOOL, non Odoo. Chi vuole `dnf install ./invok-x.y.z.x86_64.rpm` e
-  # il comando nel PATH usa questo.
+  # the .rpm, for the other family: the same promise as the .deb — it packages
+  # the TOOL, not Odoo.
   #
-  # Nessuna dipendenza dichiarata: il binario è musl statico, ed è lo **stesso
-  # artefatto** che finisce nel .deb e nel tar.gz. Un solo binario, tre
-  # confezioni.
+  # no declared dependency: the binary is static, and it is the **same artifact**
+  # that goes into the .deb and the tarball. one binary, three wrappers.
   rpm:
     if: github.event_name == 'push'
     runs-on: ubuntu-latest
@@ -181,11 +166,10 @@ jobs:
           rpm="$(ls target/x86_64-unknown-linux-musl/generate-rpm/*.rpm)"
           ( cd "$(dirname "$rpm")" && sha256sum "$(basename "$rpm")" > "$(basename "$rpm").sha256" )
           echo "RPM=$rpm" >> "$GITHUB_ENV"
-      # Come per il `.deb` (A-V3-17): il nome viene dall'artefatto, non da noi.
-      # Sul `.rpm` il README era già giusto per fortuna, non per verifica — la
-      # revisione `-1` c'era perché qualcuno l'aveva copiata guardando la release
-      # precedente. Fortuna e controllo si distinguono solo quando cambia
-      # qualcosa.
+      # as for the .deb (A-V3-17): the name comes from the artifact, not from us.
+      # here the README happened to be right by luck and not by verification —
+      # the revision was there because somebody had copied it from the previous
+      # release. luck and checking look alike until something changes.
       - name: Il README nomina questo file
         run: |
           nome="$(basename "$RPM")"
@@ -200,56 +184,51 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "${GITHUB_REF_NAME}" "$RPM" "$RPM.sha256" --clobber
 
-  # Pubblicazione su crates.io — `cargo install invok` per chi ha già Rust.
-  # Quarta confezione dello stesso programma, con una differenza che governa
-  # tutto il resto di questo job: **è l'unica irreversibile.** Da una GitHub
-  # Release si cancella un asset; da crates.io no. Si può solo `yank`, che
-  # nasconde la versione a chi non l'ha ancora richiesta ma non la rimuove, e il
-  # NOME del crate resta preso per sempre.
+  # publishing to the registry — the fourth wrapper of the same program, with the
+  # difference that governs this whole job: **it is the only irreversible one.**
+  # a release asset can be deleted; a published version cannot. it can only be
+  # yanked, which hides it from whoever has not requested it yet, and the crate's
+  # NAME stays taken forever.
   #
-  # Da qui le tre cautele, in ordine di quando intervengono:
-  #   1. l'aggancio è `release: published`, non il tag: si pubblica quando un
-  #      umano ha guardato la bozza e l'ha pubblicata, non quando parte una CI;
-  #   2. una PRERELEASE non arriva su crates.io. Il registro non ha il concetto
-  #      di bozza, quindi una beta pubblicata lì è indistinguibile da una stabile
-  #      per chiunque faccia `cargo install invok`;
-  #   3. `--dry-run` PRIMA del publish vero: impacchetta e compila esattamente
-  #      come farebbe il publish, ma senza caricare nulla. Un manifesto
-  #      incompleto o una keyword fuori norma cadono lì, dove costa un job rosso,
-  #      invece che a metà upload.
+  # hence three cautions, in the order they act:
+  #   1. the trigger is the publication, not the tag: we publish when a human has
+  #      looked at the draft and published it, not when a CI starts;
+  #   2. a PRERELEASE does not reach the registry. it has no draft concept, so a
+  #      beta there is indistinguishable from a stable one to anyone installing;
+  #   3. a dry run BEFORE the real publish: it packages and compiles exactly as
+  #      the publish would, uploading nothing. an incomplete manifest or an
+  #      out-of-spec keyword falls there, where it costs a red job instead of
+  #      landing mid-upload.
   crates-io:
     if: github.event_name == 'release' && github.event.release.prerelease == false
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    # Restringe il default `contents: write` dichiarato in cima: questo job non
-    # tocca il repository, carica su un registro esterno. Il token che gli
-    # interessa è CARGO_REGISTRY_TOKEN, e non c'è motivo che abbia anche i
-    # permessi di scrittura sui contenuti.
+    # narrows the write permission declared at the top: this job does not touch
+    # the repository, it uploads to an external registry. the only token it needs
+    # is the registry's.
     permissions:
       contents: read
     steps:
-      # Il ref è ESPLICITO. Su un evento `release`, il checkout di default non
-      # è garantito essere il commit taggato, e pubblicare su un registro
-      # irreversibile un albero diverso da quello che è stato revisionato e
-      # taggato è il modo peggiore di scoprire la differenza.
+      # the ref is EXPLICIT. on a release event the default checkout is not
+      # guaranteed to be the tagged commit, and publishing to an irreversible
+      # registry a tree other than the one reviewed and tagged is the worst way
+      # to discover the difference.
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.event.release.tag_name }}
       - uses: dtolnay/rust-toolchain@stable
       - name: Cache di cargo
         uses: Swatinem/rust-cache@v2
-      # Stessa filosofia dei controlli "tag ↔ versione" già presenti sul .deb e
-      # sul .rpm: il numero non si congettura, si legge dalle due fonti e si
-      # confrontano. Qui però il verso è invertito rispetto a quei due — non
-      # componiamo un nome di file, confrontiamo un tag con un manifesto — e il
-      # danno di uno scarto è più grave: `invok 3.0.0` su crates.io costruito
-      # dal tag `v3.1.0` non si corregge ripubblicando, perché quella versione
-      # è occupata.
+      # the same philosophy as the tag-versus-version checks on the packages: the
+      # number is not conjectured, it is read from both sources and compared.
+      # here the direction is reversed — a tag against a manifest, not a composed
+      # filename — and a mismatch is worse: a version published from the wrong
+      # tag cannot be fixed by republishing, because that version is taken.
       #
-      # Il tag passa da una variabile d'ambiente e non da `${{ }}` dentro lo
-      # script: un valore interpolato nel corpo di un `run` è testo che diventa
-      # shell, ed è la classe di difetti che questo progetto ha già pagato
-      # altrove (mai `source`/`eval` su dati che vengono da fuori).
+      # the tag arrives through an environment variable and not through
+      # interpolation inside the script: a value interpolated into a `run` body
+      # is text that becomes shell, the class of defect this project has paid for
+      # elsewhere.
       - name: La versione del manifesto è quella del tag
         id: manifesto
         env:
@@ -267,23 +246,22 @@ jobs:
           echo "nome=$nome" >> "$GITHUB_OUTPUT"
           echo "versione=$reale" >> "$GITHUB_OUTPUT"
 
-      # Questa versione è GIÀ sul registro?
+      # is this version ALREADY on the registry?
       #
-      # Serve perché `release: published` può scattare più di una volta per la
-      # stessa release, e la seconda volta `cargo publish` esce 101 con
-      # `already exists`: un job rosso su una pubblicazione perfettamente
-      # riuscita al primo giro. Succede solo se qualcosa riporta la release in
-      # bozza e la si ripubblica — la ragione per cui `create-release` non esiste
-      # più — ma un evento ripetuto non è sotto il nostro controllo, e un rosso
-      # che non significa niente insegna a ignorare i rossi.
+      # the publication event can fire more than once for the same release, and
+      # the second time the publish exits with `already exists`: a red job on a
+      # publication that succeeded the first time. that only happens if something
+      # puts the release back into draft and it is republished — the reason the
+      # creating job no longer exists — but a repeated event is not under our
+      # control, and a red that means nothing teaches people to ignore reds.
       #
-      # È sicuro saltare perché il passo QUI SOPRA ha già stabilito che la
-      # versione del manifesto è quella del tag: se quella versione è sul
-      # registro, è la nostra, e ripubblicarla è impossibile per definizione.
-      # Fuori dal 200 e dal 404 NON si indovina: si prosegue e l'ultima parola
-      # resta a `cargo`, che i duplicati li rifiuta comunque. Questa guardia può
-      # solo trasformare un rosso inutile in un verde onesto — mai autorizzare
-      # una pubblicazione che altrimenti non avverrebbe.
+      # skipping is safe because the step ABOVE has established that the
+      # manifest's version is the tag's: if that version is on the registry it is
+      # ours, and republishing it is impossible by definition. outside a clear
+      # yes or no we do NOT guess: we proceed and let `cargo` have the last word,
+      # since it refuses duplicates anyway. this guard can only turn a useless
+      # red into an honest green — never authorise a publication that would not
+      # otherwise happen.
       - name: È già su crates.io?
         id: registro
         env:

@@ -1,5 +1,5 @@
-//! Coordinamento sorgenti/venv (Fase 6): al rollback venv e sorgenti spariscono,
-//! e il contenitore install_dir è gestito senza doppie rimozioni.
+//! sources and venv coordination: both disappear on rollback, and the container
+//! is handled without double removals.
 
 mod common;
 
@@ -41,7 +41,7 @@ fn rollback_removes_venv_then_sources_once() {
         Arc::clone(&log),
     );
 
-    // Ordine di produzione: clone → venv → (step che fallisce).
+    // production order: clone → venv → a failing step.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(CloneOdooRepo::with_ops(Box::new(clone_ops))),
         Box::new(CreateVirtualenv::with_ops(Box::new(venv_ops))),
@@ -84,8 +84,7 @@ fn rollback_removes_venv_then_sources_once() {
         "l'undo del venv precede quello dei sorgenti (ordine inverso)"
     );
 
-    // Il contenitore install_dir viene rimosso al massimo una volta (rmdir),
-    // senza doppie rimozioni conflittuali.
+    // the container is removed at most once, with no conflicting attempts.
     let container_removals = ops
         .iter()
         .filter(|o| matches!(o, Op::Rmdir(p) if *p == install_dir))

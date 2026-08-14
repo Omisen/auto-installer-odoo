@@ -1,14 +1,12 @@
-//! Preflight checks **non mutanti**: precondizioni verificate prima di qualsiasi
-//! step. Nessuna di queste funzioni tocca il sistema — misurano e basta.
+//! **non-mutating** preflight checks: preconditions verified before any step.
+//! none of these functions touches the system — they measure, and that is all.
 //!
-//! Sostituiscono `lib/checks.sh` del Bash. Correzione chiave rispetto al Bash
-//! (criticità **C4**): `check_disk` non crea più la directory per poterla
-//! misurare — misura il primo antenato esistente. La creazione di `/opt/odoo`
-//! è ora uno step reversibile ([`crate::steps::prepare_opt_root`]), non un
-//! effetto collaterale di un check.
+//! key correction over Bash (**C4**): `check_disk` no longer creates the
+//! directory in order to measure it, and creating `/opt/odoo` is now a
+//! reversible step rather than a check's side effect.
 //!
-//! I path (`os-release`, target disco) sono **iniettabili**: i test girano
-//! senza root e senza toccare `/opt/odoo`.
+//! the paths are **injectable**, so the tests run without root and without
+//! touching `/opt/odoo`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -18,29 +16,26 @@ use tracing::{info, warn};
 use crate::distro::OsFamily;
 use crate::packaging::{AlternatePython, Availability, DepId, PackageSpec};
 
-/// Path di default del file OS release.
+/// default `os-release` path.
 pub const OS_RELEASE_PATH: &str = "/etc/os-release";
-/// Soglia disco di default (GB).
+/// default free-space threshold, in GB.
 pub const DEFAULT_MIN_DISK_GB: u64 = 5;
 
-/// Informazioni sull'OS rilevate da `os-release` (servono, es., a wkhtmltopdf).
+/// OS details read from `os-release`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OsInfo {
     pub id: String,
     pub version: String,
     pub codename: Option<String>,
-    /// La famiglia a cui `id` appartiene.
+    /// the family `id` belongs to.
     ///
-    /// **Non è un ripiego mai**: un `id` di cui non conosciamo la famiglia viene
-    /// rifiutato da [`check_os_from`] prima che questa struct esista, quindi
-    /// questo campo non contiene mai un valore «di comodo». Vale la pena
-    /// notarlo, perché il tipo ha un `Default` — che serve alla
-    /// retrocompatibilità del manifesto (vedi [`crate::distro::OsFamily`]) e non
-    /// a riempire buchi qui.
+    /// **never a fallback**: an unknown `id` is rejected by [`check_os_from`]
+    /// before this struct exists. worth noting because the type has a
+    /// `Default`, which serves manifest compatibility, not holes here.
     pub family: OsFamily,
 }
 
-/// Errore di precondizione (non mutante). I check non hanno `undo`: non mutano.
+/// a precondition error. checks have no `undo`, because they do not mutate.
 #[derive(Debug, thiserror::Error)]
 pub enum CheckError {
     #[error("questo installer deve essere eseguito come root (EUID atteso 0, trovato {euid}). Riprova con: sudo ...")]
@@ -91,9 +86,9 @@ pub enum CheckError {
     MissingCommand { command: String },
 }
 
-// --- Root / sudo -------------------------------------------------------------
+// --- root and sudo ----------------------------------------------------------
 
-/// Logica pura: verifica che l'EUID sia 0. Testabile senza essere root.
+/// pure: is the EUID 0? testable without being root.
 pub fn ensure_root_euid(euid: u32) -> Result<(), CheckError> {
     if euid == 0 {
         Ok(())
@@ -102,15 +97,19 @@ pub fn ensure_root_euid(euid: u32) -> Result<(), CheckError> {
     }
 }
 
-/// Stiamo girando come root? Domanda, non verifica: nessun errore, nessun log.
+/// are we root? a question, not a check: no error, no log.
 ///
-/// Serve al `--dry-run`, che è lecito lanciare senza privilegi ma che in quel
-/// caso vede meno (A-V3-11).
+/// used by `--dry-run`, which may legitimately run unprivileged but then sees
+/// less (A-V3-11).
 pub fn running_as_root() -> bool {
     nix::unistd::geteuid().is_root()
 }
 
-/// Verifica che l'installer giri come root.
+/// requires the installer to run as root.
+///
+/// # errors
+///
+/// [`CheckError::NotRoot`] with the observed EUID.
 pub fn check_root() -> Result<(), CheckError> {
     let euid = nix::unistd::geteuid().as_raw();
     ensure_root_euid(euid)?;
@@ -118,7 +117,7 @@ pub fn check_root() -> Result<(), CheckError> {
     Ok(())
 }
 
-/// Logica pura: `SUDO_USER` deve essere presente e non vuoto.
+/// pure: `SUDO_USER` must be present and non-empty.
 pub fn ensure_sudo_user(value: Option<&str>) -> Result<(), CheckError> {
     match value {
         Some(user) if !user.is_empty() => Ok(()),
@@ -126,7 +125,11 @@ pub fn ensure_sudo_user(value: Option<&str>) -> Result<(), CheckError> {
     }
 }
 
-/// Verifica che l'installer sia lanciato via `sudo` da un utente normale.
+/// requires the installer to be started through `sudo` by a normal user.
+///
+/// # errors
+///
+/// [`CheckError::NoSudoUser`] under `sudo -i` or `su -`.
 pub fn check_sudo_user() -> Result<(), CheckError> {
     let value = std::env::var("SUDO_USER").ok();
     ensure_sudo_user(value.as_deref())?;
@@ -134,22 +137,26 @@ pub fn check_sudo_user() -> Result<(), CheckError> {
     Ok(())
 }
 
-/// Check sul **chiamante**: chi sta eseguendo l'installer.
+/// checks about the **caller**: who is running the installer.
 ///
-/// Separati dai check d'ambiente perché vanno fatti in un momento diverso
-/// (A-R9-1): questi rispondono a *chi sei*, e la risposta serve subito — il
-/// manifesto dell'installazione è `0600 root`, e senza questi controlli chi lo
-/// legge senza privilegi si vede un «permission denied» su un file di cui non sa
-/// nulla. I check d'ambiente rispondono invece a *la macchina è adatta*, e vanno
-/// fatti solo dopo aver stabilito che l'installazione debba avvenire.
+/// kept apart from the environment checks because they belong at a different
+/// moment (A-R9-1). these answer *who are you*, and the answer is needed at
+/// once: the manifest is `0600 root`, so without them an unprivileged reader
+/// gets "permission denied" on a file they know nothing about. the environment
+/// checks answer *is this machine suitable*, and only matter once we know the
+/// installation should happen at all.
+///
+/// # errors
+///
+/// propagates [`check_root`] and [`check_sudo_user`].
 pub fn check_caller() -> Result<(), CheckError> {
     check_root()?;
     check_sudo_user()
 }
 
-// --- OS ----------------------------------------------------------------------
+// --- OS ---------------------------------------------------------------------
 
-/// Estrae il valore di una chiave da un file `os-release`, togliendo gli apici.
+/// reads one key out of an `os-release` file, unquoted.
 fn os_release_value(content: &str, key: &str) -> Option<String> {
     for line in content.lines() {
         let line = line.trim();
@@ -162,7 +169,7 @@ fn os_release_value(content: &str, key: &str) -> Option<String> {
     None
 }
 
-/// Rimuove una sola coppia di apici che avvolga l'intero valore.
+/// strips one pair of quotes wrapping the whole value.
 fn strip_quotes(value: &str) -> String {
     let bytes = value.as_bytes();
     if bytes.len() >= 2 {
@@ -174,7 +181,12 @@ fn strip_quotes(value: &str) -> String {
     value.to_string()
 }
 
-/// Legge e valida l'OS da un file `os-release` (path iniettabile per i test).
+/// reads and validates the OS from an `os-release` file.
+///
+/// # errors
+///
+/// [`CheckError::OsReleaseNotFound`], [`CheckError::OsReleaseParse`],
+/// [`CheckError::UnsupportedOs`] or [`CheckError::UnsupportedVersion`].
 pub fn check_os_from(path: &Path) -> Result<OsInfo, CheckError> {
     let content = std::fs::read_to_string(path).map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
@@ -200,12 +212,9 @@ pub fn check_os_from(path: &Path) -> Result<OsInfo, CheckError> {
         })?;
     let codename = os_release_value(&content, "VERSION_CODENAME");
 
-    // La famiglia è il **primo** gate, e l'unico posto in cui si decide se una
-    // distribuzione ci sia nota: se `from_os_id` non la riconosce, non c'è
-    // nessuna famiglia da scrivere in `OsInfo` e non c'è nulla da validare.
-    // Tenere questa decisione in un solo punto evita che la lista delle
-    // distribuzioni note viva in due posti che possono divergere — `validate_os`
-    // si occupa **solo** delle soglie di versione.
+    // the family is the **first** gate and the only place that decides whether
+    // a distribution is known: keeping it here stops that list living in two
+    // places. `validate_os` handles version thresholds only.
     let family =
         OsFamily::from_os_id(&id).ok_or_else(|| CheckError::UnsupportedOs { id: id.clone() })?;
 
@@ -219,49 +228,43 @@ pub fn check_os_from(path: &Path) -> Result<OsInfo, CheckError> {
     Ok(info)
 }
 
-/// L'`ID` dichiarato da un file `os-release`, **senza validarlo**.
+/// the `ID` an `os-release` declares, **unvalidated**.
 ///
-/// Esiste separata da [`check_os_from`] perché il rollback deve poter girare
-/// anche su un sistema su cui *rifiuteremmo di installare*: disinstallare
-/// un'istanza non richiede che la macchina sia ancora adatta a ospitarla, e far
-/// passare il rollback da una validazione lo renderebbe impossibile proprio dove
-/// serve. Serve solo a decidere se **avvisare** di una discordanza con il
-/// manifesto (`distro::family_mismatch`), mai a decidere un'azione.
+/// separate from [`check_os_from`] because a rollback must run even on a system
+/// we would refuse to install on: uninstalling does not require the machine to
+/// still be suitable. only ever used to **warn** about a mismatch with the
+/// manifest, never to decide an action.
 pub fn os_id_from(path: &Path) -> Option<String> {
     let content = std::fs::read_to_string(path).ok()?;
     os_release_value(&content, "ID").map(|s| s.to_ascii_lowercase())
 }
 
-/// L'ultima Ubuntu su cui la CI di integrazione installa davvero.
+/// newest Ubuntu the integration CI really installs on.
 pub const NEWEST_TESTED_UBUNTU: (u32, u32) = (24, 4);
-/// L'ultima Debian su cui la CI di integrazione gira davvero (job `container`).
+/// newest Debian the integration CI really runs on.
 pub const NEWEST_TESTED_DEBIAN: (u32, u32) = (12, 0);
-/// L'ultima Fedora su cui la CI di integrazione gira davvero.
+/// newest Fedora the integration CI really runs on, full cycle, in a container
+/// with systemd as PID 1.
 ///
-/// Il job `fedora` di `integration.yml` esegue il ciclo completo — installazione,
-/// servizio attivo, rollback — in un container con systemd come PID 1. Come per
-/// le altre due famiglie, questa costante **insegue la matrice del workflow**, e
-/// un test lo rende obbligatorio invece che auspicabile: se divergessero,
-/// l'avviso di [`is_newer_than_tested`] mentirebbe in una delle due direzioni.
+/// this constant **follows the workflow matrix**, and a test makes that
+/// mandatory: if they diverged, [`is_newer_than_tested`]'s warning would lie in
+/// one direction or the other.
 ///
-/// Da M11 vale **44**, ed è una release che si installa in un modo diverso dalla
-/// 41: lì il `python3` di sistema è coperto dai pin di Odoo, qui è 3.14 e il
-/// venv nasce su `python3.13` installato apposta. Due voci di matrice, i due
-/// rami di [`choose_python`] — e la costante non promette nulla sul Python di
-/// sistema di quella release, che resta scoperto: quello lo dice
-/// [`NEWEST_TESTED_PYTHON`], che infatti **non** sale con questa.
+/// **44** since M11, and it installs differently from 41: there the system
+/// `python3` is covered by Odoo's pins, here it is 3.14 and the venv is built
+/// on `python3.13`. it promises nothing about that release's system Python —
+/// that is [`NEWEST_TESTED_PYTHON`], which deliberately does not rise with it.
 pub const NEWEST_TESTED_FEDORA: (u32, u32) = (44, 0);
 
-/// L'ultima release provata per la distribuzione `id`, col suo nome per esteso.
+/// the newest tested release for `id`, with its display name.
 ///
-/// **Tabella unica**, e non per brevità: `is_newer_than_tested` decide *se*
-/// avvisare e [`untested_release_warning`] decide *cosa dire*. Con due tabelle
-/// le due risposte possono divergere in silenzio — che è esattamente A-MD-5:
-/// la soglia era giusta e il messaggio nominava un'altra famiglia.
+/// **one table**, and not for brevity: `is_newer_than_tested` decides *whether*
+/// to warn and [`untested_release_warning`] decides *what to say*. two tables
+/// can diverge in silence, which is exactly A-MD-5 — the threshold was right
+/// and the message named another family.
 ///
-/// Un `ID` di famiglia ignota non ci arriva: [`OsFamily::from_os_id`] l'ha già
-/// rifiutato dentro [`check_os_from`]. Il `None` non è quindi un ripiego, è
-/// l'assenza di una soglia superiore da confrontare.
+/// an unknown `ID` never reaches here, so `None` means "no upper threshold to
+/// compare against", not a fallback.
 fn tested_release(id: &str) -> Option<(&'static str, (u32, u32))> {
     match id {
         "ubuntu" => Some(("Ubuntu", NEWEST_TESTED_UBUNTU)),
@@ -271,15 +274,13 @@ fn tested_release(id: &str) -> Option<(&'static str, (u32, u32))> {
     }
 }
 
-/// Rende `(major, minor)` come lo scrive la distribuzione: `24.04`, non `24.4`.
+/// renders `(major, minor)` the way the distribution writes it: `24.04`, not
+/// `24.4`.
 ///
-/// Pubblica per essere provata su valori che oggi nessuna costante ha (una
-/// `(25, 10)` deve dare `25.10`, non `25.010`): il caso interessante non è
-/// raggiungibile passando dalle costanti, e verificarlo solo attraverso quelle
-/// significherebbe provare la formattazione su un unico esempio.
-///
-/// `minor == 0` si omette perché è così che si scrivono Debian e Fedora — una
-/// «Fedora 41.0» non l'ha mai chiamata così nessuno.
+/// public so it can be exercised on values no constant currently has — `(25,
+/// 10)` must give `25.10`, not `25.010` — which is unreachable through the
+/// constants alone. `minor == 0` is omitted, because nobody writes "Fedora
+/// 41.0".
 pub fn format_release((major, minor): (u32, u32)) -> String {
     if minor == 0 {
         format!("{major}")
@@ -288,50 +289,37 @@ pub fn format_release((major, minor): (u32, u32)) -> String {
     }
 }
 
-/// La release è **più recente** dell'ultima che abbiamo davvero provato?
+/// is this release **newer** than the last one we really exercised?
 ///
-/// Le soglie di [`validate_os`] sono aperte verso l'alto, e devono restarci: un
-/// rifiuto senza prova blocca il caso buono, e un'installazione impedita è un
-/// danno certo mentre quello evitato è ipotetico (la lezione di A5.1-bis). Ma
-/// «accettiamo» non deve voler dire «tacciamo»: chi installa su Ubuntu 26.04 o
-/// Debian 13 ha diritto di sapere che quella release non è fra quelle su cui
-/// giriamo la CI, perché è l'informazione che gli serve quando qualcosa va
-/// storto (A5.3).
-///
-/// Pura: la soglia superiore si verifica senza avere quell'OS sotto mano.
+/// A5.3. [`validate_os`]'s thresholds are open upwards and must stay so — a
+/// refusal without evidence blocks the good case — but "we accept" must not
+/// mean "we keep quiet": whoever installs on an unexercised release needs that
+/// fact when something goes wrong. pure, so the upper bound is checkable
+/// without that OS at hand.
 pub fn is_newer_than_tested(id: &str, version: &str) -> bool {
     release_to_flag(id, version).is_some()
 }
 
-/// La release provata **da citare**, se c'è qualcosa da segnalare.
+/// the tested release **to cite**, when there is something to report.
 ///
-/// Un punto solo in cui si decide *se* avvisare, e restituisce già ciò che serve
-/// per dirlo. Le due funzioni pubbliche qui sotto sono involucri: così non
-/// esiste un caso in cui una risponde «sì» e l'altra non ha nulla da nominare —
-/// né il ramo irraggiungibile che si otterrebbe facendole interrogare la tabella
-/// una per conto proprio.
+/// one place decides *whether* to warn and already returns what is needed to
+/// say it, so there is no case where one function says "yes" and the other has
+/// nothing to name.
 fn release_to_flag(id: &str, version: &str) -> Option<(&'static str, (u32, u32))> {
     let (nome, provata) = tested_release(id)?;
     (parse_version(version) > provata).then_some((nome, provata))
 }
 
-/// Il testo dell'avviso, o `None` se non c'è nulla da segnalare.
+/// the warning text, or `None` when there is nothing to report.
 ///
-/// **A-MD-5.** Prima era una stringa cablata dentro [`check_os`] che nominava
-/// «Ubuntu 24.04, Debian 12» a chiunque — quindi anche a un utente **Fedora**,
-/// al quale l'unica informazione utile in quel momento (Fedora 41 è la release
-/// che proviamo davvero) non veniva detta. Le costanti esistevano ed erano
-/// giuste: il messaggio non le leggeva. È la classe ricorrente del progetto —
-/// *un'informazione che c'era e non è stata letta*.
+/// **A-MD-5**: this used to be a string hardcoded inside [`check_os`] naming
+/// "Ubuntu 24.04, Debian 12" to everyone — including Fedora users, who were
+/// never told the one release that had actually been exercised. the constants
+/// existed and were right; the message did not read them.
 ///
-/// Si nomina **solo la famiglia su cui si sta installando**: le altre due non
-/// aiutano chi legge, e nominarle è il modo in cui il difetto si ripresenta.
-///
-/// Pura e con il messaggio come valore di ritorno invece che come effetto: un
-/// avviso emesso da dentro `check_os` sarebbe verificabile solo catturando i
-/// log, e quello che qui conta è proprio il *testo* (la lezione di A-R9-1:
-/// quando il valore di un controllo sta nel perché, verificarne l'esito non
-/// verifica niente).
+/// names **only the family being installed on**, and returns the text rather
+/// than logging it: when a check's value is in its wording, asserting its
+/// outcome asserts nothing (A-R9-1).
 pub fn untested_release_warning(id: &str, version: &str) -> Option<String> {
     let (nome, provata) = release_to_flag(id, version)?;
     Some(format!(
@@ -343,33 +331,27 @@ pub fn untested_release_warning(id: &str, version: &str) -> Option<String> {
     ))
 }
 
-// --- L'interprete Python (A-MD-7) --------------------------------------------
+// --- the Python interpreter (A-MD-7) ----------------------------------------
 
-/// L'ultimo CPython su cui un'installazione **arriva in fondo**.
+/// the newest CPython an installation **reaches the end** on.
 ///
-/// Non è la versione più recente che esista, né quella che «dovrebbe andare»: è
-/// quella su cui la CI di integrazione porta a termine il ciclo completo. Oggi
-/// vale 3.13, che è il Python di `fedora:41` — la release più avanzata della
-/// matrice; i job Ubuntu si fermano a 3.12.
+/// not the newest that exists, nor the one that "should work": the one the
+/// integration CI completes a full cycle on. **revisit it when the matrix
+/// moves** — this is the only place the number lives.
 ///
-/// **Va rivista quando la matrice si muove**, ed è l'unico punto in cui questo
-/// numero vive. A differenza di [`NEWEST_TESTED_FEDORA`] non esiste un test che
-/// la leghi al workflow: nel file della CI compare l'*immagine*, non il Python
-/// che ci sta dentro, e inventare una tabella immagine→Python significherebbe
-/// scrivere una seconda fonte di verità che può divergere in silenzio — cioè
-/// A-MD-5 un livello più sotto.
+/// unlike [`NEWEST_TESTED_FEDORA`] no test ties it to the workflow: the CI file
+/// names the *image*, not the Python inside it, and inventing an image→Python
+/// table would be a second source of truth that can diverge in silence.
 pub const NEWEST_TESTED_PYTHON: (u32, u32) = (3, 13);
 
 /// `Python 3.14.0` → `(3, 14)`.
 ///
-/// `None` se la riga non è quella che ci si aspetta: da un output che non si sa
-/// leggere non si conclude **niente**, e in particolare non «va tutto bene». È
-/// la differenza fra «so che è vecchio abbastanza» e «non lo so», e qui i due
-/// casi hanno esiti diversi (avviso vs silenzio).
+/// `None` when the line is not what we expect: from output we cannot read,
+/// **nothing** is concluded — least of all "all is well". "old enough" and
+/// "unknown" have different outcomes here.
 pub fn parse_python_version(output: &str) -> Option<(u32, u32)> {
-    // `python3 --version` stampa `Python 3.14.0`; alcune build aggiungono un
-    // suffisso (`3.14.0rc1`, `+`, `free-threading build`), quindi si prendono le
-    // prime due componenti numeriche e si scarta il resto.
+    // some builds add a suffix (`3.14.0rc1`, `+`, `free-threading build`), so
+    // take the first two numeric components and drop the rest.
     let rest = output.split_whitespace().nth(1)?;
     let mut parts = rest.split('.');
     let major: u32 = parts.next()?.parse().ok()?;
@@ -381,43 +363,34 @@ pub fn parse_python_version(output: &str) -> Option<(u32, u32)> {
     Some((major, minor))
 }
 
-/// Il Python provato **da citare**, se c'è qualcosa da segnalare.
+/// the tested Python **to cite**, when there is something to report.
 ///
-/// Un punto solo in cui si decide *se* parlare, che restituisce già ciò che
-/// serve per dirlo — la stessa forma di [`release_to_flag`], e per la stessa
-/// ragione: due tabelle possono divergere in silenzio.
+/// same shape as [`release_to_flag`], and for the same reason: two tables can
+/// diverge in silence.
 fn python_to_flag(python: (u32, u32)) -> Option<(u32, u32)> {
     (python > NEWEST_TESTED_PYTHON).then_some(NEWEST_TESTED_PYTHON)
 }
 
-/// `true` se questo interprete è più recente dell'ultimo su cui l'installer
-/// arriva in fondo. Puro: il caso interessante non richiede quel Python.
+/// `true` when this interpreter is newer than the last one the installer
+/// reaches the end on. pure: the interesting case needs no such Python.
 pub fn python_is_newer_than_tested(python: (u32, u32)) -> bool {
     python_to_flag(python).is_some()
 }
 
-/// Come si scrive una versione di Python: `3.14`, mai `3.140`.
+/// how a Python version is written: `3.14`, never `3.140`.
 pub fn format_python((major, minor): (u32, u32)) -> String {
     format!("{major}.{minor}")
 }
 
-/// Il testo dell'avviso, o `None` se non c'è nulla da segnalare.
+/// the warning text, or `None` when there is nothing to report.
 ///
-/// **A-MD-7.** Su Fedora 44 (Python 3.14) l'installazione muore allo step 13
-/// compilando `gevent`, dopo aver creato utente, database e sorgenti: il
-/// rollback ripulisce tutto correttamente, ma la diagnosi — «Odoo non pinna una
-/// versione di gevent per questo interprete» — non è ricavabile da un muro di
-/// errori `gcc`. Qui la si dice **prima**, quando serve a decidere se andare
-/// avanti.
+/// **A-MD-7**: on an interpreter newer than Odoo's pins the installation dies
+/// building `gevent`, and the diagnosis — "Odoo pins no gevent for this Python"
+/// — is not recoverable from a wall of `gcc` errors. said **here**, before the
+/// decision to go ahead.
 ///
-/// È un avviso e **non** un rifiuto, per la lezione di A5.1-bis: una soglia
-/// cablata invecchia nella direzione peggiore. Il giorno in cui Odoo alzerà il
-/// pin, un rifiuto bloccherebbe un'installazione che funziona; un avviso, al
-/// più, dice una cosa in meno di quanto potrebbe.
-///
-/// Pura, e col testo come valore di ritorno invece che come effetto: quando il
-/// valore di un controllo sta nel *perché*, verificarne l'esito non verifica
-/// niente (A-R9-1).
+/// a warning and **not** a refusal (A5.1-bis): the day Odoo raises the pin, a
+/// refusal would block a working installation.
 pub fn untested_python_warning(python: (u32, u32)) -> Option<String> {
     let provato = python_to_flag(python)?;
     Some(format!(
@@ -431,43 +404,39 @@ pub fn untested_python_warning(python: (u32, u32)) -> Option<String> {
     ))
 }
 
-/// La versione di **questo** interprete, o `None` se non si sa.
+/// the version of **this** interpreter, or `None` when unknown.
 ///
-/// Il nome è un parametro e non `python3` cablato (M11): da quando il venv può
-/// nascere su un interprete alternativo, «che versione di Python c'è» e «che
-/// versione di Python useremo» sono due domande diverse, e chi chiede deve dire
-/// quale sta facendo. Cablarne una sola vorrebbe dire, per esempio, diagnosticare
-/// un fallimento di gevent citando il Python di sistema mentre il venv gira su
-/// un altro.
+/// the name is a parameter rather than a hardcoded `python3` (M11): "which
+/// Python is installed" and "which Python will we use" became two questions,
+/// and the caller must say which one it is asking.
 pub fn python_version(command: &str) -> Option<(u32, u32)> {
     let out = capture(Command::new(command).arg("--version"))?;
     parse_python_version(&out)
 }
 
-// --- La scelta dell'interprete (M11) -----------------------------------------
+// --- choosing the interpreter (M11) -----------------------------------------
 
-/// L'interprete su cui nascerà il venv, e ciò che serve perché esista.
+/// the interpreter the venv will be built on, and what it takes to have it.
 ///
-/// È **configurazione decisa al preflight**, non un risultato di step: vive in
-/// [`Context`](crate::context::Context) come `os_family`, perché due step
-/// diversi devono usare la stessa risposta — `install-system-dependencies`
-/// installa l'interprete e `create-virtualenv` lo invoca. Dedurla due volte è il
-/// modo in cui due letture divergono in silenzio.
+/// **configuration decided at preflight**, not a step result: it lives in the
+/// [`Context`](crate::context::Context) like `os_family`, because two steps
+/// must use the same answer — one installs the interpreter, the other invokes
+/// it.
 ///
-/// Il `Default` è il comportamento storico — `python3`, nessun pacchetto in più
-/// — quindi ogni percorso che non decide nulla si comporta come prima di M11.
+/// the `Default` is the historical behaviour, so any path that decides nothing
+/// behaves as it did before M11.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PythonPlan {
-    /// Il comando che crea il venv: `python3`, oppure `python3.13`.
+    /// the command that creates the venv: `python3`, or `python3.13`.
     pub command: String,
-    /// I pacchetti da installare perché quel comando esista **e** possa
-    /// compilare estensioni. Vuoto quando si usa l'interprete di sistema.
+    /// packages needed for that command to exist **and** be able to build
+    /// extensions. empty when using the system interpreter.
     pub packages: Vec<String>,
-    /// I nomi che questo piano rende inutili: gli header del Python di sistema,
-    /// quando il venv nasce su un altro interprete.
+    /// what this plan makes pointless: the system Python's headers, when the
+    /// venv is built on another interpreter.
     ///
-    /// Non sono cablati qui: li chiede il preflight al catalogo della famiglia,
-    /// che è l'unico a sapere come si chiamano.
+    /// not hardcoded here — the preflight asks the family's catalogue, which is
+    /// the only thing that knows their names.
     pub supersedes: Vec<String>,
 }
 
@@ -482,21 +451,20 @@ impl Default for PythonPlan {
 }
 
 impl PythonPlan {
-    /// `true` se si usa l'interprete di sistema (nulla da installare).
+    /// `true` when the system interpreter is used, so nothing is installed.
     pub fn is_system(&self) -> bool {
         self.packages.is_empty()
     }
 
-    /// Adatta una lista di gruppi di pacchetti all'interprete scelto.
+    /// adapts a list of package groups to the chosen interpreter.
     ///
-    /// Con l'interprete di sistema restituisce la lista **identica**: è ciò che
-    /// rende M11 invisibile a Debian, a Ubuntu e a ogni Fedora fino alla 42.
+    /// with the system interpreter it returns the list **unchanged**, which is
+    /// what makes M11 invisible to Debian, Ubuntu and every Fedora up to 42.
     ///
-    /// Con un interprete alternativo: escono i gruppi che porterebbero gli
-    /// header del Python di sistema — su un venv 3.13 non servono a nessuno, e
-    /// installarli gonfierebbe il delta con roba che nessuno usa — ed entrano
-    /// l'interprete e i suoi header. Pura, così la regola si verifica senza
-    /// avere né dnf né una Fedora sotto mano.
+    /// with an alternative one the system Python's headers drop out — nothing
+    /// would use them, and they would pad the delta — and the interpreter and
+    /// its own headers come in. pure, so the rule is checkable without dnf or a
+    /// Fedora at hand.
     pub fn adapt_specs(&self, specs: &[PackageSpec]) -> Vec<PackageSpec> {
         if self.is_system() {
             return specs.to_vec();
@@ -516,25 +484,23 @@ impl PythonPlan {
     }
 }
 
-/// Sceglie l'interprete. **Pura**: input misurati, output una decisione.
+/// chooses the interpreter. **pure**: measured inputs, a decision out.
 ///
-/// La regola, in una riga: *il Python di sistema se i pin di Odoo lo coprono,
-/// altrimenti il più recente interprete impacchettato che lo sia.*
-/// [`NEWEST_TESTED_PYTHON`] — introdotta in M10 per **avvisare** — diventa qui
-/// l'input della **scelta**: un numero solo, due usi, nessuna seconda tabella
-/// che possa divergere in silenzio (la lezione di A-MD-5).
+/// the rule in one line: *the system Python if Odoo's pins cover it, otherwise
+/// the newest packaged interpreter that they do.* [`NEWEST_TESTED_PYTHON`],
+/// introduced to **warn**, is here the input of the **choice** — one number,
+/// two uses, no second table to diverge (A-MD-5).
 ///
-/// Tre casi, e nessuno di essi è un rifiuto:
-/// - sistema coperto → si usa quello, e non si installa nulla;
-/// - sistema non coperto, alternativa disponibile → si usa l'alternativa;
-/// - sistema non coperto, nessuna alternativa → **si usa comunque quello di
-///   sistema**, con l'avviso di M10 e, se poi il build salta, la diagnosi. Un
-///   rifiuto senza prova blocca il caso buono (A5.1-bis), e questo è per
-///   costruzione il caso in cui non sappiamo offrire di meglio.
+/// three cases, none of them a refusal:
+/// - system covered → use it, install nothing;
+/// - not covered, alternative available → use the alternative;
+/// - not covered, no alternative → **use the system one anyway**, with the
+///   warning and, if the build then fails, the diagnosis. a refusal without
+///   evidence blocks the good case (A5.1-bis).
 ///
-/// `system == None` («non so che Python ci sia») si comporta come «coperto»: da
-/// un'informazione assente non si conclude niente, e men che meno si installa un
-/// secondo interprete su una macchina cliente.
+/// `system == None` behaves as "covered": nothing is concluded from absent
+/// information, least of all installing a second interpreter on a customer's
+/// machine.
 pub fn choose_python(
     system: Option<(u32, u32)>,
     available: &[AlternatePython],
@@ -560,20 +526,15 @@ pub fn choose_python(
     }
 }
 
-/// Decide il piano interrogando il sistema, e **lo dice**.
+/// decides the plan by interrogating the system, and **says so**.
 ///
-/// L'involucro impuro di [`choose_python`]: legge la versione di sistema, chiede
-/// al catalogo quali interpreti alternativi esistono su questa famiglia e al
-/// gestore quali di quelli sono davvero installabili qui.
+/// the impure wrapper around [`choose_python`]: reads the system version, asks
+/// the catalogue which alternative interpreters this family has, and asks the
+/// package manager which of those are actually installable here.
 ///
-/// # Cecità ≠ assenza, anche qui
-///
-/// Se l'indice non è interrogabile (`index_is_queryable`), «non risulta
-/// disponibile» non significa «non esiste»: si prosegue con l'interprete di
-/// sistema **dicendo che la sonda era cieca**, invece di far credere che questa
-/// famiglia non abbia alternative. È lo stesso errore che A5.1-bis ha fatto
-/// pagare sui nomi dei pacchetti, e l'esito qui è comunque coperto: se il Python
-/// non è coperto dai pin, l'avviso c'è e la diagnosi arriverà al momento giusto.
+/// blindness is not absence: with an unqueryable index, "not available" does
+/// not mean "does not exist", so we carry on with the system interpreter
+/// **saying the probe was blind** (A5.1-bis).
 pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
     let system = ops.python_version("python3");
     let catalog = ops.packages().catalog();
@@ -604,17 +565,17 @@ pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
     plan
 }
 
-/// Dice quale interprete si userà e perché. Non decide nulla: **riporta**.
+/// says which interpreter will be used and why. decides nothing: it
+/// **reports**.
 ///
-/// Separata da [`plan_python`] perché il testo è ciò che l'utente legge per
-/// capire cosa sta per succedere alla sua macchina, e un messaggio verificabile
-/// solo catturando i log è un messaggio che nessun test guarda (A-R9-1).
+/// separate from [`plan_python`] because a message only checkable by capturing
+/// logs is a message no test looks at (A-R9-1).
 fn announce_python_plan(system: Option<(u32, u32)>, plan: &PythonPlan) {
     match (system, plan.is_system()) {
         (None, _) => info!("ℹ versione di Python non determinabile in questa fase: proseguo"),
         (Some(v), true) => match untested_python_warning(v) {
-            // Sistema non coperto e nessuna alternativa: è il caso di M10, e
-            // l'avviso resta quello — dice cosa si romperà e dove.
+            // not covered and no alternative: the M10 case, where the warning
+            // already says what will break and where.
             Some(avviso) => warn!(python = %format_python(v), "{avviso}"),
             None => info!(python = %format_python(v), "✔ interprete Python"),
         },
@@ -628,29 +589,25 @@ fn announce_python_plan(system: Option<(u32, u32)>, plan: &PythonPlan) {
     }
 }
 
-// `check_python` (M10) non esiste più: l'avviso non è un controllo a sé, è un
-// ramo di `announce_python_plan`. Dopo M11 la stessa misura — «che Python c'è» —
-// porta a due esiti diversi (avvisare, oppure installare un altro interprete), e
-// tenerli in due funzioni li avrebbe fatti divergere in silenzio. Il `None`
-// resta silenzioso come allora: su un'immagine minimale `python3` arriva con
-// `install-system-dependencies`, cioè dopo il preflight, e un avviso che compare
-// a ogni installazione insegna solo a ignorare gli avvisi (A-V3-10).
+// `check_python` is gone: the warning is not a check of its own but a branch of
+// `announce_python_plan`. after M11 the same measurement leads to two outcomes
+// — warn, or install another interpreter — and two functions would have
+// diverged. `None` stays silent: on a minimal image `python3` arrives with the
+// packages, i.e. after the preflight.
 
-/// Applica le soglie di versione minima: Ubuntu ≥ 22.04, Debian ≥ 11.
+/// applies the minimum version thresholds.
 ///
-/// **Non** decide se la distribuzione ci sia nota: quello lo ha già fatto
-/// [`OsFamily::from_os_id`] dentro [`check_os_from`], che è l'unico gate. Qui il
-/// `match` sulla famiglia è esaustivo per costruzione, quindi non c'è nessun
-/// ramo «distribuzione sconosciuta» che in produzione non potrebbe mai eseguire.
+/// **does not** decide whether the distribution is known: [`check_os_from`] is
+/// the only gate for that, so the `match` here is exhaustive by construction
+/// and has no unreachable "unknown distribution" branch.
 ///
-/// La soglia Fedora è **40**, ed è una scelta prudente più che misurata: è la più
-/// vecchia release ancora supportata da upstream al momento in cui il backend dnf
-/// è stato scritto, e sotto quella nessuno ha provato nulla. Come per le altre
-/// famiglie la soglia è aperta verso l'alto, con l'avviso di
-/// [`is_newer_than_tested`], che su Fedora tace fino alla 41 compresa: la CI di
-/// integrazione esegue il ciclo completo su `fedora:41`, in due scenari (con e
-/// senza nginx), quindi [`NEWEST_TESTED_FEDORA`] descrive una release davvero
-/// provata e non una speranza.
+/// the Fedora threshold of **40** is prudent rather than measured: the oldest
+/// release still supported upstream when the dnf backend was written. as for
+/// the others it is open upwards, with [`is_newer_than_tested`]'s warning.
+///
+/// # errors
+///
+/// [`CheckError::UnsupportedVersion`] below a family's threshold.
 pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
     let (major, minor) = parse_version(&info.version);
     match info.family {
@@ -680,8 +637,8 @@ pub fn validate_os(info: &OsInfo) -> Result<(), CheckError> {
     }
 }
 
-/// Estrae `(major, minor)` da una stringa versione tipo `"22.04"` o `"12"`.
-/// Componenti mancanti o non numeriche valgono 0.
+/// extracts `(major, minor)` from a version string like `"22.04"` or `"12"`.
+/// missing or non-numeric components count as 0.
 fn parse_version(version: &str) -> (u32, u32) {
     let mut parts = version.split('.');
     let major = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -689,7 +646,11 @@ fn parse_version(version: &str) -> (u32, u32) {
     (major, minor)
 }
 
-/// Verifica l'OS leggendo il path di default (`/etc/os-release`).
+/// validates the OS from the default `os-release` path.
+///
+/// # errors
+///
+/// as [`check_os_from`].
 pub fn check_os() -> Result<OsInfo, CheckError> {
     let info = check_os_from(Path::new(OS_RELEASE_PATH))?;
     info!(
@@ -704,10 +665,11 @@ pub fn check_os() -> Result<OsInfo, CheckError> {
     Ok(info)
 }
 
-// --- Disco (NON mutante: C4 corretta) ---------------------------------------
+// --- disk (non-mutating: C4 fixed) ------------------------------------------
 
-/// Risale al primo antenato **esistente** di `path` (al limite `/`).
-/// Non crea nulla: è il fix di C4 (misurare senza dover creare la directory).
+/// walks up to the first **existing** ancestor of `path`, `/` at worst.
+///
+/// creates nothing: this is the C4 fix — measure without creating.
 fn nearest_existing_ancestor(path: &Path) -> PathBuf {
     let mut current = path;
     loop {
@@ -721,8 +683,12 @@ fn nearest_existing_ancestor(path: &Path) -> PathBuf {
     }
 }
 
-/// Verifica lo spazio libero sul filesystem di `target`, **senza creare**
-/// `target`: se non esiste, misura il primo antenato esistente.
+/// checks free space on `target`'s filesystem **without creating** `target`.
+///
+/// # errors
+///
+/// [`CheckError::InsufficientDisk`] below the threshold, or
+/// [`CheckError::DiskProbe`] when `statvfs` fails.
 pub fn check_disk(target: &Path, required_gb: u64) -> Result<(), CheckError> {
     let measure = nearest_existing_ancestor(target);
 
@@ -732,7 +698,7 @@ pub fn check_disk(target: &Path, required_gb: u64) -> Result<(), CheckError> {
             reason: e.to_string(),
         })?;
 
-    // Spazio disponibile all'utente non privilegiato: blocchi * frammento.
+    // space available to an unprivileged user: blocks * fragment size.
     let available_bytes =
         (stat.blocks_available() as u64).saturating_mul(stat.fragment_size() as u64);
     let available_gb = available_bytes / (1024 * 1024 * 1024);
@@ -755,20 +721,23 @@ pub fn check_disk(target: &Path, required_gb: u64) -> Result<(), CheckError> {
     Ok(())
 }
 
-// --- Porte -------------------------------------------------------------------
+// --- ports ------------------------------------------------------------------
 
-/// Esito della verifica di una porta.
+/// outcome of probing one port.
 #[derive(Debug, PartialEq, Eq)]
 pub enum PortStatus {
     Free,
     InUse,
-    /// Nessuno strumento disponibile (ss/netstat/lsof): non bloccante.
+    /// no probe tool available: non-blocking.
     Unknown,
 }
 
-/// Verifica che le porte richieste siano libere: `odoo_port` e, se
-/// `with_nginx`, anche 80 e 443. Una porta `Unknown` è trattata come libera
-/// (warning non bloccante, come nel Bash).
+/// checks that the required ports are free. an `Unknown` port counts as free,
+/// with a non-blocking warning.
+///
+/// # errors
+///
+/// [`CheckError::PortInUse`] naming the busy port.
 pub fn check_ports(
     odoo_port: u16,
     with_nginx: bool,
@@ -789,32 +758,20 @@ pub fn check_ports(
     Ok(())
 }
 
-/// Quali porte vanno controllate. Decisione **pura**, separata dalla sonda.
+/// which ports are worth checking. a **pure** decision, split from the probe.
 ///
-/// Separata perché il caso interessante — «nginx già in ascolto sulla 80» — non
-/// è riproducibile in un test: dipende da cosa gira sulla macchina che esegue i
-/// test, e su una macchina dove la 80 è libera un controllo sbagliato passerebbe
-/// lo stesso. Con la scelta delle porte come valore di ritorno, la regola si
-/// verifica in entrambe le direzioni e senza dipendere dall'ambiente. Stesso
-/// motivo di `ensure_root_euid` e `state::trust_verdict`.
+/// split because the interesting case — nginx already listening on 80 — is not
+/// reproducible in a test: it depends on what runs on the test machine, where a
+/// wrong check would pass anyway. as a return value the rule is checkable in
+/// both directions.
 pub fn ports_to_check(odoo_port: u16, with_nginx: bool, nginx_already_serving: bool) -> Vec<u16> {
     let mut ports = vec![odoo_port];
-    // 80 e 443 si controllano solo se dovranno essere prese da un nginx che
-    // **non sta già servendo** (A-V3-15).
-    //
-    // Il controllo pretendeva la 80 libera ogni volta che si chiedeva
-    // `--with-nginx`. Ma lo scenario supportato — e quello che gli step nginx
-    // gestiscono esplicitamente, con `NginxInstall` che marca `Preexisting` un
-    // nginx già installato e attivo e non lo tocca — è proprio *aggiungere un
-    // vhost a un nginx che sta già girando*. Su quella macchina la 80 è occupata
-    // **da nginx**, cioè dal programma che stiamo per configurare, e rifiutare
-    // l'installazione significava rendere impossibile il caso d'uso normale:
-    // un reverse proxy esistente a cui si aggiunge Odoo.
-    //
-    // È la stessa distinzione di `InstallState::owns_the_http_port`: una porta
-    // occupata da noi non è un conflitto. Se invece nginx non sta servendo e la
-    // 80 è presa, il conflitto è reale (Apache, un altro proxy) e il controllo
-    // deve dire di no — perché lì nginx non riuscirebbe nemmeno a fare il bind.
+    // 80 and 443 are only checked when they must be taken by an nginx that is
+    // **not already serving** (A-V3-15). adding a vhost to a running reverse
+    // proxy is the supported scenario, and there port 80 is held by the very
+    // program we are configuring — same distinction as
+    // `InstallState::owns_the_http_port`. if nginx is not serving and 80 is
+    // taken, the conflict is real and the check must say no.
     if with_nginx && !nginx_already_serving {
         ports.push(80);
         ports.push(443);
@@ -824,7 +781,7 @@ pub fn ports_to_check(odoo_port: u16, with_nginx: bool, nginx_already_serving: b
     ports
 }
 
-/// Sonda una porta con cascata `ss → netstat → lsof`.
+/// probes a port through the `ss → netstat → lsof` cascade.
 fn probe_port(port: u16) -> PortStatus {
     if command_exists("ss") {
         if let Some(out) = capture(Command::new("ss").args(["-lntuH"])) {
@@ -849,7 +806,7 @@ fn probe_port(port: u16) -> PortStatus {
     PortStatus::Unknown
 }
 
-/// Cerca `:PORT` seguito da spazio nell'output di ss/netstat.
+/// looks for `:PORT` followed by a space in ss/netstat output.
 fn classify_listing(listing: &str, port: u16) -> PortStatus {
     let needle = format!(":{port} ");
     if listing.lines().any(|line| line.contains(&needle)) {
@@ -859,17 +816,18 @@ fn classify_listing(listing: &str, port: u16) -> PortStatus {
     }
 }
 
-/// Esegue un comando catturandone lo stdout; `None` se non eseguibile.
+/// runs a command capturing stdout; `None` when it is not executable.
 fn capture(cmd: &mut Command) -> Option<String> {
     cmd.output()
         .ok()
         .map(|o| String::from_utf8_lossy(&o.stdout).into_owned())
 }
 
-// --- Comandi -----------------------------------------------------------------
+// --- commands ---------------------------------------------------------------
 
-/// `true` se `command` esiste ed è eseguibile in una delle dir di `PATH`.
-/// Non esegue il comando: scandisce solo il filesystem.
+/// `true` when `command` exists and is executable somewhere on `PATH`.
+///
+/// does not run it: only scans the filesystem.
 fn command_exists(command: &str) -> bool {
     use std::os::unix::fs::PermissionsExt;
     let Some(paths) = std::env::var_os("PATH") else {
@@ -884,19 +842,15 @@ fn command_exists(command: &str) -> bool {
     })
 }
 
-/// I comandi che **devono** esserci, per questa famiglia.
+/// the commands that **must** be present, for this family.
 ///
-/// Puro: la scelta si verifica senza avere quei comandi sulla macchina che
-/// esegue i test — e senza la separazione sarebbe verificabile solo su una
-/// Fedora vera, cioè in nessun test.
+/// pure, so the choice is checkable without those commands on the test machine
+/// — otherwise it would only be checkable on a real Fedora, i.e. in no test at
+/// all.
 ///
-/// # Perché è il primo punto che un'esecuzione su Fedora incontrava
-///
-/// Fino a M2 questa lista conteneva `apt-get` **per nome**, quindi su Fedora
-/// l'installazione si fermava qui — prima di ogni altra cosa — con un messaggio
-/// che diceva «serve un sistema Debian/Ubuntu». Il gestore di pacchetti è per
-/// definizione ciò che cambia fra famiglie: chiederne uno per nome è la stessa
-/// classe di errore del `match os_id` che questo lavoro sta smontando.
+/// until M2 this list named `apt-get` outright, so a Fedora run stopped here,
+/// before anything else. the package manager is by definition what differs
+/// between families.
 pub fn required_commands(family: OsFamily) -> [&'static str; 2] {
     match family {
         OsFamily::Debian => ["apt-get", "systemctl"],
@@ -904,9 +858,13 @@ pub fn required_commands(family: OsFamily) -> [&'static str; 2] {
     }
 }
 
-/// Verifica i prerequisiti di sistema **non installabili** dallo script: il
-/// gestore di pacchetti della famiglia e `systemctl`. `nginx`/`certbot` sono
-/// opzionali (solo info).
+/// checks the system prerequisites the installer cannot install itself: the
+/// family's package manager and `systemctl`. `nginx` and `certbot` are
+/// optional, so they are info only.
+///
+/// # errors
+///
+/// [`CheckError::MissingCommand`] naming the first one missing.
 pub fn check_commands(family: OsFamily) -> Result<(), CheckError> {
     for command in required_commands(family) {
         if command_exists(command) {

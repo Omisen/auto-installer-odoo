@@ -1,37 +1,28 @@
-//! [`NginxSelinux`]: lascia che nginx raggiunga Odoo, dove SELinux lo vieta.
+//! [`NginxSelinux`]: lets nginx reach Odoo where SELinux forbids it.
 //!
-//! # Il difetto che chiude (trovato in campo su Fedora 41)
+//! # the defect it closes, found in the field
 //!
-//! Su Fedora SELinux è in enforcing e nega a nginx di aprire una connessione
-//! verso un servizio locale su una porta non riservata:
+//! SELinux is enforcing and denies nginx a connection to a local service on an
+//! unreserved port:
 //!
 //! ```text
 //! avc: denied { name_connect } for comm="nginx" dest=8069
 //!      scontext=httpd_t tcontext=unreserved_port_t permissive=0
 //! ```
 //!
-//! Il vhost è corretto, `nginx -t` passa, `nginx-reload` riesce — e il browser
-//! riceve **502 Bad Gateway**. Nei log dell'installer non c'è niente di anomalo
-//! da leggere: è un difetto senza sintomo fino al primo utente, cioè la classe
-//! che questo progetto ha imparato a temere di più (A-V3-7).
+//! the vhost is correct, `nginx -t` passes, the reload succeeds — and the
+//! browser gets **502**. nothing looks wrong in the installer's logs: a defect
+//! with no symptom until the first user, the class this project fears most
+//! (A-V3-7).
 //!
-//! # Perché è uno step e non un comando in più
+//! a step and not one more command, because `setsebool -P` writes the policy
+//! **persistently** and survives a reboot. it is a mutation of the customer's
+//! system like any other and needs its own `PreState`, or it would be something
+//! we switch on and nobody switches off.
 //!
-//! `setsebool -P` scrive la politica **in modo persistente**: sopravvive al
-//! riavvio. È quindi una mutazione del sistema del cliente come le altre, e
-//! richiede un `PreState` proprio — altrimenti sarebbe qualcosa che accendiamo
-//! noi e che nessuno spegne (A-R5-3, applicato a una politica di sicurezza).
-//!
-//! Il caso `Preexisting` non è teorico: su una macchina che ospita già un
-//! reverse proxy quel boolean è quasi certamente acceso, e spegnerlo al rollback
-//! romperebbe il proxy di qualcun altro.
-//!
-//! # Perché non esisteva prima
-//!
-//! Perché fino alla prima installazione reale con nginx su Fedora **nessuno
-//! l'aveva osservato**. Scriverlo prima sarebbe stato mitigare un problema
-//! ipotetico, e questo progetto ha una regola contro i rami che nessuno ha visto
-//! eseguire.
+//! the `Preexisting` case is not theoretical: on a machine already hosting a
+//! reverse proxy that boolean is almost certainly on, and turning it off during
+//! a rollback would break somebody else's proxy.
 
 use tracing::{info, warn};
 
@@ -41,7 +32,7 @@ use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
-/// Accende il boolean SELinux che permette il proxy, in modo reversibile.
+/// turns on the SELinux boolean that permits the proxy, reversibly.
 pub struct NginxSelinux {
     ops: Box<dyn SystemOps>,
     prestate: PreState,
@@ -75,9 +66,8 @@ impl Step for NginxSelinux {
 
         let boolean = selinux.nginx_proxy_boolean();
         match selinux.is_enabled(boolean) {
-            // Già acceso: non è nostro. Su una macchina che ospita altri servizi
-            // web lo è quasi sempre, e spegnerlo al rollback romperebbe il proxy
-            // di qualcun altro.
+            // already on means not ours, and turning it off would break
+            // somebody else's proxy.
             Some(true) => {
                 self.prestate = PreState::Preexisting;
                 info!(
@@ -92,9 +82,8 @@ impl Step for NginxSelinux {
                     "snapshot: boolean SELinux spento, lo accenderemo noi"
                 );
             }
-            // Non interrogabile ≠ spento. Senza una risposta non si tocca la
-            // politica di sicurezza di un sistema che non sappiamo leggere: è la
-            // stessa distinzione fra cecità e assenza di A5.1-bis.
+            // unqueryable is not "off": without an answer we do not touch the
+            // security policy of a system we cannot read.
             None => {
                 self.prestate = PreState::Untracked;
                 warn!(
@@ -123,9 +112,8 @@ impl Step for NginxSelinux {
         };
         let boolean = selinux.nginx_proxy_boolean();
 
-        // Se lo snapshot non ha potuto leggere la politica, non la scriviamo:
-        // `Untracked` qui vale sia «spento» sia «non lo so», e nel dubbio non si
-        // muta il sistema di qualcun altro.
+        // with a policy the snapshot could not read we write nothing:
+        // `Untracked` covers both "off" and "unknown".
         if selinux.is_enabled(boolean).is_none() {
             return Ok(());
         }
@@ -145,8 +133,8 @@ impl Step for NginxSelinux {
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
-        // PROTEZIONE: si spegne SOLO ciò che abbiamo acceso noi. Un boolean già
-        // attivo prima di noi serve a qualcun altro.
+        // PROTECTION: turn off ONLY what we turned on. one that was already on
+        // serves somebody else.
         if self.prestate != PreState::CreatedByUs {
             info!(
                 prestate = ?self.prestate,

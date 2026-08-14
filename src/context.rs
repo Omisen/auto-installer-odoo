@@ -1,9 +1,9 @@
-//! Il [`Context`]: configurazione risolta passata a ogni step.
+//! the [`Context`]: resolved configuration handed to every step.
 //!
-//! Gli step leggono **solo** da qui: non sanno se i valori vengano da flag CLI,
-//! da un file `.env` o da prompt interattivi (la risoluzione avviene in
-//! [`crate::config`]). Questo disaccoppiamento è ciò che permette allo stesso
-//! installer di girare interattivo o non-interattivo con un unico flusso.
+//! steps read **only** from here: they do not know whether a value came from a
+//! CLI flag, a `.env` file or an interactive prompt (resolution happens in
+//! [`crate::config`]). that decoupling is what lets one installer run
+//! interactively or not through a single flow.
 
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
@@ -14,95 +14,89 @@ use crate::config::ResolvedConfig;
 use crate::distro::OsFamily;
 use crate::secret::Secret;
 
-/// Configurazione risolta dell'installazione + stato runtime del motore.
+/// resolved installation config plus the engine's runtime state.
 ///
-/// La `admin_passwd` è un [`Secret`]: il suo `Debug` è redatto, quindi un
-/// eventuale log di `Context` non espone la password.
+/// `admin_passwd` is a [`Secret`]: its `Debug` is redacted, so logging a
+/// `Context` never exposes the password.
 #[derive(Debug, Clone, Default)]
 pub struct Context {
-    /// Versione Odoo completa (es. `"18.0"`).
+    /// full Odoo version, e.g. `"18.0"`.
     pub odoo_version: String,
-    /// Versione Odoo short (es. `"18"`), per nomi di file/unit.
+    /// short Odoo version, e.g. `"18"`, used in file and unit names.
     pub odoo_version_short: String,
-    /// Utente di sistema che possiederà l'installazione.
+    /// system user that will own the installation.
     pub odoo_user: String,
-    /// Utente PostgreSQL.
+    /// PostgreSQL role.
     pub db_user: String,
-    /// Password del ruolo PostgreSQL (redatta nei log); vuota = peer auth.
+    /// password of the PostgreSQL role; empty means peer auth.
     pub db_password: Secret,
-    /// Home dell'installazione: costante `/opt/odoo`.
+    /// installation home: the constant `/opt/odoo`.
     pub odoo_home: PathBuf,
-    /// Porta HTTP di Odoo.
+    /// Odoo's HTTP port.
     pub port: u16,
-    /// Nome del database Odoo.
+    /// Odoo database name.
     pub db_name: String,
-    /// Directory di installazione (sotto `odoo_home`).
+    /// install directory, always under `odoo_home`.
     pub install_dir: PathBuf,
-    /// Password admin Odoo (redatta nei log).
+    /// Odoo master password, redacted in the logs.
     pub admin_passwd: Secret,
-    /// Logfile Odoo; `None` = log su journal/stdout. Determina se
-    /// [`crate::steps::setup_log_dir`] crea una directory o è no-op.
+    /// Odoo log file; `None` logs to journal/stdout. decides whether
+    /// [`crate::steps::setup_log_dir`] creates a directory or is a no-op.
     pub odoo_logfile: Option<PathBuf>,
-    /// Se configurare Nginx come reverse proxy.
+    /// whether to configure Nginx as a reverse proxy.
     pub with_nginx: bool,
-    /// Nome server/dominio del vhost Nginx (default `_`).
+    /// `server_name` of the Nginx vhost, `_` by default.
     pub nginx_server_name: String,
-    /// Se abilitare SSL nel vhost e aprire la 443 sul firewall.
-    /// Apre la 443 sul firewall; non abilita TLS (A-V3-6).
+    /// opens 443 on the firewall; it does **not** enable TLS (A-V3-6).
     pub nginx_open_https_port: bool,
-    /// Se `true`, `run`/`undo` non devono mutare il sistema né persistere stato.
+    /// when set, `run` and `undo` must neither mutate nor persist state.
     pub dry_run: bool,
-    /// Se `true`, il rollback purga anche pacchetti che di norma lascerebbe
-    /// (utility bootstrap comuni, PostgreSQL). Default `false`.
+    /// when set, the rollback also purges what it would normally leave: common
+    /// bootstrap utilities and PostgreSQL.
     pub aggressive_rollback: bool,
-    /// Percorso del file di stato persistito. Configurabile per i test.
+    /// path of the persisted state file; configurable for the tests.
     pub state_path: PathBuf,
-    /// Info OS rilevate dai preflight checks; popolate in `main` dopo `check_os`
-    /// e usate dalle fasi successive (es. wkhtmltopdf). `None` finché non note.
+    /// OS details from the preflight checks, filled in after `check_os`.
     ///
-    /// Resta `Option` perché resta ciò che è sempre stato: informazione di
-    /// dettaglio che serve **solo** a `run`. La famiglia, che serve anche agli
-    /// `undo`, sta in [`Self::os_family`] e non è opzionale — vedi lì il perché.
+    /// stays an `Option` because it is what it has always been: detail needed
+    /// **only** by `run`. the family, which the undos need too, lives in
+    /// [`Self::os_family`] and is not optional — see there for why.
     pub os_info: Option<OsInfo>,
-    /// La famiglia della distribuzione: quali comandi e quali convenzioni valgono
-    /// su questa macchina.
+    /// which commands and conventions apply on this machine.
     ///
-    /// **Non è `Option`, di proposito.** In ogni percorso c'è una risposta: nel
-    /// percorso di installazione la dà il sistema (`check_os`), nel rollback da
-    /// disco la dà il **manifesto** (`InstallConfig::to_context`). Un `Option`
-    /// qui rifarebbe il buco che questo campo esiste per chiudere: `os_info` è
-    /// `None` nel rollback perché «serve solo a `run`», e finché nessun `undo`
-    /// dipendeva dall'OS non era falso. Con due gestori di pacchetti lo
-    /// diventerebbe, e l'undo del delta non saprebbe quale comando invocare.
-    ///
-    /// Vedi [`crate::distro::OsFamily`] per la regola: si **rilegge**, non si
-    /// rideduce.
+    /// **not an `Option`, deliberately**: every path has an answer — the system
+    /// while installing, the manifest while rolling back. an `Option` would
+    /// reopen the hole this field closes, leaving the delta's undo without a
+    /// package manager to invoke. the family is **re-read**, not re-derived —
+    /// see [`crate::distro::OsFamily`].
     pub os_family: OsFamily,
-    /// Utente che ha lanciato `sudo` (`SUDO_USER`), proprietario del
-    /// control-script e del `.bashrc`. Popolato in `main`. `None` se assente.
+    /// user who ran `sudo` (`SUDO_USER`), owner of the control script and of
+    /// the patched `.bashrc`.
     pub sudo_user: Option<String>,
-    /// Risultato condiviso pubblicato da `CreateDatabase` e letto da
-    /// `InitializeOdooDatabase`: `true` = il DB è nostro (non preesistente),
-    /// quindi è lecito inizializzarne lo schema. **Default `false`** = rifiuta
-    /// (safe: senza propagazione, l'init è vietato). Interior mutability così
-    /// può essere impostato da uno step che riceve `&Context`.
+    /// shared verdict published by `CreateDatabase` and read by
+    /// `InitializeOdooDatabase`: `true` means the database is ours, so
+    /// initialising its schema is allowed.
+    ///
+    /// defaults to `false` = refuse, which is the safe direction: without
+    /// propagation the init is forbidden. interior mutability lets a step set
+    /// it while holding `&Context`.
     pub db_created_by_us: Arc<AtomicBool>,
-    /// L'interprete su cui nascerà il virtualenv, e i pacchetti che lo portano.
+    /// interpreter the virtualenv will be built on, and the packages that
+    /// provide it.
     ///
-    /// **Configurazione, non risultato di step** (M11): la decide `main` al
-    /// preflight con [`crate::checks::plan_python`], come `os_family`. Deve
-    /// essere una risposta sola per due lettori — `install-system-dependencies`
-    /// installa l'interprete, `create-virtualenv` lo invoca — e dedurla due
-    /// volte è il modo in cui due letture divergono in silenzio.
+    /// **configuration, not a step result** (M11): decided at preflight by
+    /// [`crate::checks::plan_python`], like `os_family`. two readers need one
+    /// answer — one installs the interpreter, the other invokes it — and
+    /// deriving it twice is how two readings diverge in silence.
     ///
-    /// Il `Default` è `python3` senza pacchetti: ogni percorso che non decide
-    /// nulla (il rollback da disco, i test) si comporta come prima di M11.
+    /// the `Default` is `python3` with no packages, so any path that decides
+    /// nothing behaves as it did before M11.
     pub python: PythonPlan,
 }
 
 impl Context {
-    /// Costruisce il `Context` a partire dalla config risolta, aggiungendo lo
-    /// stato runtime del motore (`dry_run`, `state_path`).
+    /// builds the context from the resolved config, adding the engine's runtime
+    /// state (`dry_run`, `state_path`).
     pub fn from_resolved(config: ResolvedConfig, dry_run: bool, state_path: PathBuf) -> Self {
         Context {
             odoo_version: config.version,
@@ -123,19 +117,16 @@ impl Context {
             aggressive_rollback: false,
             state_path,
             os_info: None,
-            // Valorizzata in `main` insieme a `os_info`, subito dopo `check_os`:
-            // prima di allora non c'è nulla da installare e nessuno step gira.
+            // both are filled in by `main` at preflight; before that no step
+            // runs, and the defaults are the pre-M11 behaviour.
             os_family: OsFamily::default(),
             sudo_user: None,
             db_created_by_us: Arc::new(AtomicBool::new(false)),
-            // Come `os_family`: valorizzato in `main` al preflight. Prima di
-            // allora nessuno step gira, e il default è il comportamento storico.
             python: PythonPlan::default(),
         }
     }
 
-    /// Override del path del file di stato (usato dai test; lo userà il resume
-    /// quando sarà implementato — vedi [`crate::state`]).
+    /// overrides the state file path, for the tests and for the resume path.
     pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.state_path = path.into();
         self

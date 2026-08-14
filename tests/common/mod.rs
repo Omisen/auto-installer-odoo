@@ -1,9 +1,9 @@
-//! Mock di [`SystemOps`] condiviso dai test degli step privilegiati (Fase 3).
+//! the [`SystemOps`] mock shared by the privileged steps' tests.
 //!
-//! Non esegue nulla: registra le operazioni richieste in un log condiviso e
-//! risponde alle query da una configurazione statica. Così i test verificano la
-//! logica di decisione (quale comando, con quali argomenti, in quale ramo
-//! `PreState`) senza root e senza mutare il sistema.
+//! it executes nothing: it records the requested operations in a shared log and
+//! answers queries from a static configuration. that lets the tests check the
+//! decision logic — which command, with which arguments, in which `PreState`
+//! branch — without root and without mutating anything.
 
 #![allow(dead_code)] // non tutti i test usano tutte le utility
 
@@ -21,7 +21,7 @@ use invok::packaging::{Availability, PackageCatalog, PackageManager};
 use invok::progress::ProgressReporter;
 use invok::system_ops::{Downloader, OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
 
-/// Operazione mutante registrata dal mock.
+/// a mutating operation recorded by the mock.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     CreateUser(UserSpec),
@@ -79,7 +79,7 @@ pub enum Op {
     AppendLine(PathBuf),
     PgCreateRole {
         role: String,
-        // Solo se la password è presente — MAI il valore, per non registrarlo.
+        // only whether a password is present — NEVER the value.
         has_password: bool,
     },
     PgDropRole(String),
@@ -107,15 +107,14 @@ pub enum Op {
         target: PathBuf,
     },
     CreateVenv {
-        /// L'interprete su cui il venv è stato creato (M11): senza registrarlo,
-        /// nessun test potrebbe accorgersi che si sta usando `python3` dove il
-        /// piano diceva `python3.13`.
+        /// the interpreter the venv was created on (M11): without recording
+        /// it, no test could notice the wrong one being used.
         python: String,
         venv: PathBuf,
     },
-    /// «Che versione ha questo interprete?» — con il nome interrogato, che è la
-    /// parte che conta: la diagnosi di A-MD-7 deve parlare del Python del venv,
-    /// non di quello di sistema.
+    /// "which version is this interpreter?", carrying the name asked about —
+    /// the part that matters, since A-MD-7's diagnosis must speak of the venv's
+    /// Python, not the system's.
     PythonVersion(String),
     WritePrivateFile(PathBuf),
     CreatePrivateFile(PathBuf),
@@ -134,124 +133,114 @@ pub enum Op {
     },
 }
 
-/// Risposte statiche del mock alle query di stato.
+/// the mock's static answers to state queries.
 #[derive(Debug, Clone)]
 pub struct MockConfig {
     pub user_exists: bool,
     pub path_exists: bool,
     pub owner: OwnerId,
     pub dir_empty: bool,
-    /// Pacchetti che `dpkg_is_installed` considera già installati.
+    /// packages considered already installed.
     pub installed_packages: HashSet<String>,
-    /// Pacchetti per cui apt NON ha un candidato installabile: modella un nome
-    /// che su questa release non esiste (`libtiff5-dev` su Debian 12, A5.1).
-    /// Vuoto per default → ogni nome è installabile.
+    /// packages with NO installable candidate: models a name that does not
+    /// exist on this release (A5.1). empty means everything is installable.
     pub packages_without_candidate: HashSet<String>,
-    /// Pacchetti **virtuali**: nessun candidato reale (`apt-cache policy` dice
-    /// `(none)`) ma `apt-get install` li sa risolvere via `Provides`. Modella
-    /// `libfreetype6-dev` su Ubuntu 24.04 (A5.1-bis).
+    /// **virtual** packages: no real candidate, but the manager resolves them
+    /// through a provider (A5.1-bis).
     pub virtual_packages: HashSet<String>,
-    /// L'indice apt è popolato? `false` modella una macchina su cui
-    /// `apt-get update` non è mai stato eseguito: **nessun** nome ha un
-    /// candidato finché l'update non gira. È lo stato che ha prodotto il falso
-    /// positivo A5.1-bis.
+    /// is the index populated? `false` models a machine never refreshed, where
+    /// **no** name has a candidate until it is — the state that produced the
+    /// A5.1-bis false positive.
     pub apt_index_populated: bool,
-    /// Versione riportata da `wkhtmltopdf_version` (None = non installato).
+    /// the reported wkhtmltopdf version; `None` means not installed.
     pub wk_version: Option<String>,
-    /// Stato iniziale del servizio (postgresql/odoo): enabled/active.
+    /// the service's initial state: enabled and active.
     pub service_enabled: bool,
     pub service_active: bool,
-    /// Se `true`, start/restart NON portano il servizio ad attivo (simula un
-    /// avvio fallito).
+    /// when set, starting does NOT make the service active.
     pub service_start_fails: bool,
-    /// Esistenza iniziale di ruolo/database PostgreSQL.
+    /// whether the PostgreSQL role and database already exist.
     pub role_exists: bool,
     pub db_exists: bool,
-    /// Database non-template restituiti da `pg_list_databases` (cautela cluster).
+    /// the non-template databases listed, for the cluster caution.
     pub pg_databases_list: Vec<String>,
-    /// Stato dei sorgenti Odoo rilevato da `detect_odoo_source`.
+    /// the detected state of the Odoo sources.
     pub source_state: OdooSourceState,
-    /// Numero di tentativi di `git_clone` che falliscono prima di riuscire.
+    /// how many clone attempts fail before one succeeds.
     pub git_clone_fail_times: u32,
-    /// Se `true`, `tarball_install` fallisce.
+    /// when set, the tarball fallback fails.
     pub tarball_fails: bool,
-    /// Se `true`, i fallimenti simulati delle operazioni di rete
-    /// (`git_clone`, `tarball_install`) sono **timeout** (`StepError::Timeout`)
-    /// invece di un exit code non-zero. Serve a verificare che un timeout sia
-    /// trattato come un fallimento ritentabile come gli altri.
+    /// when set, simulated network failures are **timeouts** rather than
+    /// non-zero exits, to check a timeout is treated as retryable like any
+    /// other failure.
     pub network_failures_are_timeouts: bool,
-    /// Il python del venv esiste già?
+    /// does the venv's interpreter already exist?
     pub venv_exists: bool,
-    /// `python3 -m venv` disponibile?
+    /// is virtualenv creation available?
     pub venv_available: bool,
-    /// Il PGDATA dichiarato dalla unit `postgresql.service` (A-MD-6).
-    /// `None` = «non lo so», il caso normale nei test.
+    /// the PGDATA the service unit declares (A-MD-6). `None` means "unknown",
+    /// the normal case in tests.
     pub pg_declared_data_dir: Option<PathBuf>,
-    /// Fa fallire la `run_as_user` i cui argomenti contengono questo frammento.
+    /// fails the user-run whose arguments contain this fragment.
     pub run_as_user_fails_on: Option<String>,
-    /// La versione dell'interprete, o `None` per «non si sa» (A-MD-7).
+    /// the interpreter's version, or `None` for "unknown" (A-MD-7).
     ///
-    /// Il default è un Python **coperto** dai pin di Odoo: così la diagnosi di
-    /// `explain_gevent_failure` non compare nei test che non la riguardano, e
-    /// quando compare è perché il test l'ha chiesta.
+    /// the default is a Python **covered** by Odoo's pins, so the diagnosis
+    /// never appears in tests that are not about it.
     pub python_version: Option<(u32, u32)>,
-    /// Contenuto di requirements.txt (None → read_to_string fallisce).
+    /// the requirements file's contents; `None` makes reading it fail.
     pub requirements_content: Option<String>,
-    /// Schema Odoo già presente nel DB?
+    /// is the Odoo schema already in the database?
     pub db_initialized: bool,
-    /// Se `true`, le operazioni su file (write/move/copy/remove) toccano il
-    /// filesystem reale (usare solo con path in una tempdir). chown resta finto.
+    /// when set, file operations touch the real filesystem — tempdir paths
+    /// only. the chown stays simulated.
     pub real_fs: bool,
-    /// Nginx: il default site (`sites-enabled/default`) esiste?
+    /// does the nginx default site exist?
     pub default_site_exists: bool,
-    /// Nginx: **cosa** c'è al posto del default site (A-V3-5).
+    /// **what** is at the default site (A-V3-5).
     ///
-    /// `None` = coerente con `default_site_exists`: un symlink al target
-    /// standard se esiste, altrimenti assente. Si valorizza esplicitamente per
-    /// modellare i casi che il `bool` non sapeva distinguere — un file regolare,
-    /// un symlink verso un target non standard.
+    /// `None` stays consistent with the boolean above. set explicitly to model
+    /// the cases that boolean could not tell apart: a regular file, or a
+    /// symlink towards a non-standard target.
     pub default_site_kind: Option<PathKind>,
-    /// Nginx: il nostro symlink `sites-enabled/odoo<N>` esiste già?
+    /// does our own enabling symlink already exist?
     pub our_link_exists: bool,
-    /// Firewall: ufw installato / attivo, e regole già presenti.
+    /// the firewall: installed, active, and its existing rules.
     pub ufw_available: bool,
     pub ufw_active: bool,
     pub existing_ufw_rules: HashSet<String>,
-    /// `nginx -t` passa?
+    /// does the config validate?
     pub nginx_test_ok: bool,
-    /// Home restituita da `getent_home` (None → utente non trovato).
+    /// the home returned for the user; `None` means not found.
     pub sudo_home: Option<String>,
-    /// `dpkg` parte in stato inconsistente: apt rifiuta di operare finché un
-    /// `apt-get install -f` o un `dpkg --configure -a` non lo sistema. È lo
-    /// stato osservato sulla VM di prova dopo un `dpkg -i` con deps mancanti.
+    /// the package database starts inconsistent, so the manager refuses to
+    /// operate until a repair fixes it — the state observed on the test VM.
     pub dpkg_broken: bool,
-    /// `apt-get install -f` non riesce a riparare (recovery davvero fallito).
+    /// the first repair cannot fix it.
     pub fix_broken_fails: bool,
-    /// `dpkg --configure -a` non riesce a riparare.
+    /// the deep repair cannot fix it either.
     pub dpkg_configure_fails: bool,
-    /// `apt-get install -y <deb>` fallisce (errore vero, non deps mancanti).
+    /// installing the local package fails for a real reason.
     pub apt_install_deb_fails: bool,
-    /// `apt-get update` esce non-zero. Da solo modella il repository di terze
-    /// parti irraggiungibile (l'indice resta popolato); insieme a
-    /// `apt_index_populated: false` modella il fallimento vero, senza rete.
+    /// the index refresh exits non-zero. alone it models an unreachable
+    /// third-party repository; with an unpopulated index, a real failure.
     pub apt_update_fails: bool,
-    /// Stato del boolean SELinux per il proxy nginx.
+    /// the SELinux boolean's state.
     ///
-    /// `None` = SELinux non interrogabile, che **non** è «spento»: da lì lo step
-    /// non conclude nulla e non tocca la politica.
+    /// `None` means unqueryable, which is **not** "off": the step concludes
+    /// nothing and touches no policy.
     pub selinux_boolean: Option<bool>,
-    /// Il cluster PostgreSQL è già inizializzato? (`<PGDATA>/PG_VERSION` esiste)
+    /// is the cluster already initialised?
     ///
-    /// Campo a sé e non `path_exists`: quello è un bool globale che risponde per
-    /// **tutti** i percorsi, e un test che accendesse quello per il cluster
-    /// direbbe che esiste anche `/opt/odoo`.
+    /// a field of its own rather than the global path flag, which answers for
+    /// **every** path: turning that on for the cluster would claim the home
+    /// exists too.
     pub pg_cluster_initialized: bool,
-    /// La famiglia della distribuzione modellata: decide **quale catalogo** il
-    /// gestore di pacchetti risponde.
+    /// the modelled family, which decides **which catalogue** the package
+    /// manager answers with.
     ///
-    /// Serve al test di equivalenza per famiglia: gli step che non passano dai
-    /// due confini devono comportarsi in modo identico su entrambe, e senza
-    /// poter cambiare questo campo non ci sarebbe modo di dimostrarlo.
+    /// needed by the family-equivalence test: steps that do not go through the
+    /// two boundaries must behave identically on both.
     pub family: OsFamily,
 }
 
@@ -305,30 +294,30 @@ impl Default for MockConfig {
     }
 }
 
-/// Handle condiviso al log delle operazioni, ispezionabile dai test dopo che lo
-/// step ha preso possesso del mock.
+/// a shared handle to the operations log, inspectable after the step has taken
+/// ownership of the mock.
 pub type OpLog = Arc<Mutex<Vec<Op>>>;
 
 pub struct MockSystemOps {
     log: OpLog,
     cfg: MockConfig,
-    // I due confini del supporto multi-distro. Sono campi e non oggetti a sé
-    // perché `SystemOps::packages`/`distro` restituiscono riferimenti: il mock
-    // deve possederli, e condividerne lo stato (vedi `MockPackageManager`).
+    // the two multi-distro boundaries. fields and not separate objects
+    // because the accessors return references: the mock must own them and
+    // share their state.
     packages: MockPackageManager,
     distro: MockDistro,
-    // Stato del servizio con interior mutability: start/stop/enable/disable lo
-    // aggiornano, così la verifica post-start di SetupPostgres funziona.
+    // service state with interior mutability, so the post-start check really
+    // sees what start did.
     active: Cell<bool>,
     enabled: Cell<bool>,
-    // Conteggio chiamate a git_clone (per simulare i fallimenti iniziali).
+    // clone attempt count, for the simulated initial failures.
     git_clone_calls: Cell<u32>,
-    // Schema DB: flippa a true dopo odoo_init_base.
+    // the schema flips to present after the init.
     db_initialized: Cell<bool>,
 }
 
-/// L'errore che apt restituisce quando `dpkg` è in stato inconsistente —
-/// verbatim da quello osservato sulla VM di prova.
+/// the error the manager returns on an inconsistent package database, verbatim
+/// from the one observed on the test VM.
 fn unmet_dependencies(command: &str) -> StepError {
     StepError::CommandFailed {
         command: command.to_string(),
@@ -340,13 +329,13 @@ fn unmet_dependencies(command: &str) -> StepError {
 }
 
 impl MockSystemOps {
-    /// Crea il mock e ritorna l'handle al log per le asserzioni.
+    /// creates the mock and returns the log handle for assertions.
     pub fn new(cfg: MockConfig) -> (Self, OpLog) {
         let log: OpLog = Arc::new(Mutex::new(Vec::new()));
         (Self::with_log(cfg, Arc::clone(&log)), log)
     }
 
-    /// Crea il mock su un log condiviso (per verificare l'ordine tra più step).
+    /// creates the mock over a shared log, to check ordering between steps.
     pub fn with_log(cfg: MockConfig, log: OpLog) -> Self {
         let active = Cell::new(cfg.service_active);
         let enabled = Cell::new(cfg.service_enabled);
@@ -390,8 +379,8 @@ impl MockSystemOps {
         }
     }
 
-    /// Il fallimento simulato di un'operazione di rete: timeout o exit code
-    /// non-zero, secondo `network_failures_are_timeouts`.
+    /// a simulated network failure: a timeout or a non-zero exit, per the
+    /// configuration.
     fn simulated_network_failure(&self, command: &str, stderr: &str) -> StepError {
         if self.cfg.network_failures_are_timeouts {
             StepError::Timeout {
@@ -408,13 +397,12 @@ impl MockSystemOps {
     }
 }
 
-/// Il gestore di pacchetti del mock.
+/// the mock's package manager.
 ///
-/// Vive accanto a [`MockSystemOps`] e ne **condivide** il log e lo stato
-/// mutabile (`dpkg_broken`, `index_populated`): i test asseriscono su una sola
-/// sequenza di `Op`, e la sequenza reale intreccia comandi di packaging e non.
-/// Due log separati renderebbero inverificabile proprio l'ordine — che è ciò
-/// che il pattern delta e il recovery di `dpkg` mettono in gioco.
+/// it **shares** the log and the mutable state with [`MockSystemOps`]: the
+/// tests assert on one sequence of operations, and the real sequence
+/// interleaves packaging commands with others. two separate logs would make
+/// exactly the ordering unverifiable.
 pub struct MockPackageManager {
     log: OpLog,
     cfg: MockConfig,
@@ -443,15 +431,16 @@ impl PackageManager for MockPackageManager {
                 stderr: "E: Some index files failed to download (simulato)".to_string(),
             });
         }
-        // L'update popola l'indice: da qui in poi le interrogazioni rispondono.
+        // the refresh populates the index: from here queries answer.
         self.index_populated.set(true);
         Ok(())
     }
-    /// Risponde come apt: prima il candidato reale, poi il ripiego virtuale.
+    /// answers like the real manager: the real candidate first, the virtual
+    /// fallback second.
     ///
-    /// Senza indice **nessuna** interrogazione risponde — è il caso che in campo
-    /// ha prodotto il falso positivo su un pacchetto standard (A5.1-bis), e il
-    /// mock deve saperlo riprodurre o quel difetto tornerebbe invisibile.
+    /// without an index **no** query answers — the case that produced the field
+    /// false positive, which the mock must reproduce or the defect would become
+    /// invisible again.
     fn availability(&self, pkg: &str) -> Availability {
         if !self.index_populated.get() {
             return Availability::Absent;
@@ -473,8 +462,8 @@ impl PackageManager for MockPackageManager {
     }
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
         self.record(Op::PkgRemove(pkgs.iter().map(|s| s.to_string()).collect()));
-        // Modella A-RT-2: con dpkg rotto apt si rifiuta di operare, finché un
-        // fix-broken (o un `dpkg --configure -a`) non lo rimette a posto.
+        // models A-RT-2: on a broken database the manager refuses to operate
+        // until a repair puts it right.
         if self.dpkg_broken.get() {
             return Err(unmet_dependencies("apt-get purge"));
         }
@@ -509,13 +498,13 @@ impl PackageManager for MockPackageManager {
                 stderr: "impossibile installare il .deb (simulato)".to_string(),
             });
         }
-        // apt risolve le dipendenze: dpkg resta consistente.
+        // the manager resolves the dependencies, leaving it consistent.
         self.dpkg_broken.set(false);
         Ok(())
     }
-    /// Il comando della famiglia modellata, come in produzione: un mock che
-    /// rispondesse sempre "apt-get update" renderebbe verde un messaggio che in
-    /// campo manderebbe l'utente Fedora a digitare un comando inesistente.
+    /// the modelled family's command, as in production: a mock that always
+    /// answered with one family's would make green a message that sends the
+    /// other's users to a command that does not exist.
     fn local_package_name(&self, version: &str, suffix: &str) -> String {
         match self.cfg.family {
             OsFamily::Debian => {
@@ -535,9 +524,8 @@ impl PackageManager for MockPackageManager {
     }
 
     fn catalog(&self) -> PackageCatalog {
-        // Il catalogo di **produzione** della famiglia modellata: i test sugli
-        // step devono vedere gli stessi nomi che vedrebbe un'installazione vera.
-        // Un catalogo finto qui renderebbe verdi test che in campo fallirebbero.
+        // the **production** catalogue of the modelled family: the step tests
+        // must see the names a real installation would.
         match self.cfg.family {
             OsFamily::Debian => invok::packaging::apt::AptBackend.catalog(),
             OsFamily::Fedora => invok::packaging::dnf::DnfBackend.catalog(),
@@ -545,7 +533,7 @@ impl PackageManager for MockPackageManager {
     }
 }
 
-/// Il firewall del mock.
+/// the mock's firewall.
 pub struct MockFirewall {
     log: OpLog,
     cfg: MockConfig,
@@ -560,9 +548,9 @@ impl MockFirewall {
 }
 
 impl Firewall for MockFirewall {
-    /// Il nome dello strumento **della famiglia modellata**: un mock che
-    /// rispondesse sempre "ufw" renderebbe verde un messaggio che su Fedora
-    /// manda a cercare uno strumento inesistente.
+    /// the **modelled family's** tool name: always answering with one family's
+    /// would make green a message that sends the other's users looking for a
+    /// tool they do not have.
     fn name(&self) -> &'static str {
         match self.cfg.family {
             OsFamily::Debian => "ufw",
@@ -576,14 +564,11 @@ impl Firewall for MockFirewall {
     fn is_active(&self) -> bool {
         self.cfg.ufw_active
     }
-    /// Risponde **come il vero `ufw`**: rende un output in stile `ufw status` a
-    /// partire dalle regole configurate e lo interroga con la stessa funzione
-    /// che usa la produzione.
+    /// answers **like the real tool**: renders status-style output from the
+    /// configured rules and queries it with the same function production uses.
     ///
-    /// Prima era `existing_ufw_rules.contains(rule)`, cioè un'appartenenza a un
-    /// insieme: una semantica ideale che il comando reale non ha. È il motivo
-    /// per cui nessun test poteva accorgersi di A-V3-7 — il confronto per
-    /// sottostringa sbagliava su `8080/tcp`, ma il mock non lo riproduceva.
+    /// it used to be set membership — an ideal semantics the real command does
+    /// not have, and the reason no test could notice A-V3-7.
     fn rule_exists(&self, rule: &str) -> Result<bool, StepError> {
         let mut status = String::from("Status: active\n\nTo   Action   From\n--   ------   ----\n");
         for existing in &self.cfg.existing_ufw_rules {
@@ -603,13 +588,13 @@ impl Firewall for MockFirewall {
     }
 }
 
-/// Le convenzioni di distribuzione del mock.
+/// the mock's distribution conventions.
 pub struct MockDistro {
     firewall: MockFirewall,
     selinux: MockSelinux,
     family: OsFamily,
     log: OpLog,
-    /// Il PGDATA che la unit dichiara (A-MD-6): `None` = non lo sappiamo.
+    /// the PGDATA the unit declares (A-MD-6); `None` means unknown.
     declared_pgdata: Option<PathBuf>,
 }
 
@@ -621,7 +606,7 @@ impl MockDistro {
     }
 }
 
-/// SELinux del mock: esiste solo sulle famiglie che lo hanno davvero.
+/// the mock's SELinux: present only on families that really have it.
 pub struct MockSelinux {
     log: OpLog,
     cfg: MockConfig,
@@ -650,8 +635,8 @@ impl Distro for MockDistro {
         &self.firewall
     }
 
-    /// Segue la famiglia: su Debian SELinux non è in uso, e uno step che lo
-    /// trovasse comunque muterebbe la politica di un sistema che non ce l'ha.
+    /// follows the family: where SELinux is not in use, a step that found it
+    /// anyway would mutate a policy the system does not have.
     fn selinux(&self) -> Option<&dyn invok::distro::Selinux> {
         match self.family {
             OsFamily::Debian => None,
@@ -659,12 +644,11 @@ impl Distro for MockDistro {
         }
     }
 
-    /// Segue la famiglia modellata, come in produzione: un mock che rispondesse
-    /// sempre `Some` farebbe inizializzare un cluster anche su Debian, dove il
-    /// pacchetto lo crea da sé.
-    /// Il layout **di produzione** della famiglia modellata: un layout finto
-    /// renderebbe verdi test che in campo scriverebbero il vhost in una
-    /// directory che nginx non legge.
+    /// follows the modelled family: always answering `Some` would initialise a
+    /// cluster where the package already creates one.
+    /// the **production** layout of the modelled family: a fake one would make
+    /// green tests that in the field write the vhost where nginx never
+    /// reads.
     fn nginx_layout(&self) -> invok::distro::NginxLayout {
         match self.family {
             OsFamily::Debian => invok::distro::debian::Debian::new().nginx_layout(),
@@ -672,9 +656,9 @@ impl Distro for MockDistro {
         }
     }
 
-    /// Il PGDATA che la unit dichiarerebbe (A-MD-6). `None` = non lo sappiamo,
-    /// che è il default: la stragrande maggioranza dei test non ha nulla a che
-    /// fare con questa domanda e non deve rispondervi per sbaglio.
+    /// the PGDATA the unit would declare (A-MD-6). `None` — unknown — is the
+    /// default: most tests have nothing to do with this question and must not
+    /// answer it by accident.
     fn declared_postgres_data_dir(&self) -> Option<std::path::PathBuf> {
         self.declared_pgdata.clone()
     }
@@ -699,8 +683,8 @@ impl SystemOps for MockSystemOps {
         self.cfg.user_exists
     }
     fn path_exists(&self, path: &Path) -> bool {
-        // Il marcatore del cluster ha una risposta sua: `path_exists` è un bool
-        // globale, e usarlo per il cluster legherebbe due domande scollegate.
+        // the cluster marker has its own answer: the global path flag would
+        // tie two unrelated questions together.
         if path.ends_with("PG_VERSION") {
             return self.cfg.pg_cluster_initialized;
         }
@@ -865,7 +849,7 @@ impl SystemOps for MockSystemOps {
         Ok(self.cfg.db_exists)
     }
     fn pg_create_role(&self, role: &str, password: Option<&str>) -> Result<(), StepError> {
-        // Registra SOLO la presenza della password, mai il valore.
+        // records ONLY that a password was present, never its value.
         self.record(Op::PgCreateRole {
             role: role.to_string(),
             has_password: password.is_some(),
@@ -897,10 +881,9 @@ impl SystemOps for MockSystemOps {
             program: program.to_string(),
             args: args.iter().map(|s| s.to_string()).collect(),
         });
-        // Fallimento simulato di UNA invocazione precisa, scelta per un
-        // frammento dei suoi argomenti: serve a provare cosa succede *dopo* il
-        // fallimento (la diagnosi di A-MD-7), che è verificabile solo se il
-        // comando fallisce davvero passando dallo step.
+        // fails ONE precise invocation, selected by a fragment of its
+        // arguments: needed to exercise what happens *after* the failure, which
+        // is only observable if the command really fails through the step.
         if let Some(frammento) = &self.cfg.run_as_user_fails_on {
             if args.iter().any(|a| a.contains(frammento.as_str())) {
                 return Err(StepError::CommandFailed {
@@ -1018,7 +1001,7 @@ impl SystemOps for MockSystemOps {
         if self.cfg.real_fs {
             use std::io::Write;
             use std::os::unix::fs::OpenOptionsExt;
-            // Stesse garanzie del reale: O_EXCL | O_NOFOLLOW.
+            // the same guarantees as the real one.
             let mut f = std::fs::OpenOptions::new()
                 .write(true)
                 .create_new(true)
@@ -1105,8 +1088,8 @@ impl SystemOps for MockSystemOps {
     }
 }
 
-/// Downloader mock: scrive `bytes` in `dest` (per far calcolare uno SHA-256
-/// reale nei test) e registra il download nel log condiviso.
+/// the mock downloader: writes known bytes so the tests compute a real
+/// SHA-256, and records the download.
 pub struct MockDownloader {
     bytes: Vec<u8>,
     log: OpLog,
@@ -1131,12 +1114,12 @@ impl Downloader for MockDownloader {
     }
 }
 
-/// Snapshot del log per le asserzioni.
+/// a snapshot of the log, for assertions.
 pub fn ops_of(log: &OpLog) -> Vec<Op> {
     log.lock().expect("lock").clone()
 }
 
-/// Reporter di progresso che registra gli eventi come stringhe (per i test).
+/// a progress reporter that records its events as strings.
 pub type EventLog = Arc<Mutex<Vec<String>>>;
 
 pub struct RecordingReporter {

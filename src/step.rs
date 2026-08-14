@@ -1,101 +1,92 @@
-//! Il trait [`Step`]: il contratto che ogni step dell'installer deve rispettare.
+//! the [`Step`] trait: the contract every installer step implements.
 //!
-//! Questo trait è la fondazione su cui poggiano tutte le fasi successive. Il
-//! motore ([`crate::engine::Installer`]) lo orchestra senza conoscere i dettagli
-//! del singolo step. **Non deve cambiare** quando si aggiungono nuovi step: se
-//! un caso reale non ci sta, va segnalato, non forzato dentro a martellate.
+//! [`crate::engine::Installer`] orchestrates it without knowing any step's
+//! details. it **must not change** to accommodate a new step: if a real case
+//! does not fit, raise it instead of widening the trait.
 
 use serde::de::DeserializeOwned;
 
 use crate::context::Context;
 use crate::error::StepError;
 
-/// Un passo reversibile dell'installazione.
+/// one reversible installation step.
 ///
-/// # Contratto (le 4 invarianti di `CLAUDE.md`)
+/// # contract
 ///
-/// 1. **`snapshot` sempre prima di `run`.** Il motore chiama `snapshot` prima di
-///    `run`. In `snapshot` lo step rileva e registra il proprio `PreState`
-///    (`Preexisting` vs `CreatedByUs`): è la sola fonte di verità per l'undo.
-/// 2. **Undo in ordine inverso.** Il motore esegue gli `undo` degli step
-///    completati dall'ultimo al primo.
-/// 3. **Undo idempotente e best-effort.** `undo` non deve fallire se l'artefatto
-///    è già assente, e deve agire **solo** se lo step ha creato l'artefatto
-///    (`PreState == CreatedByUs`); su `Preexisting` è un NO-OP. Un `undo` che
-///    fallisce non blocca la pulizia degli altri step (il motore logga e
-///    prosegue).
-/// 4. **Stato persistito.** Dopo un `run` riuscito il motore persiste il record
-///    dello step (nome + [`Step::snapshot_value`]) su disco. Lo stato ha un
-///    consumatore: `invok rollback` lo rilegge, ricostruisce gli step
-///    con [`Step::rehydrate`] e ne esegue gli `undo` in ordine inverso (vedi
-///    [`crate::rollback`]).
+/// the four invariants of `CLAUDE.md`:
 ///
-/// # `dry_run`
+/// 1. **`snapshot` always before `run`.** the step detects and records its own
+///    `PreState` (`Preexisting` vs `CreatedByUs`) there: the only source of
+///    truth for the undo.
+/// 2. **undo in reverse order**, from the last completed step to the first.
+/// 3. **undo idempotent and best-effort.** it must not fail when the artifact
+///    is already gone, and must act **only** on `PreState == CreatedByUs`; on
+///    `Preexisting` it is a no-op. a failing undo does not block the other
+///    steps' cleanup — the engine logs and carries on.
+/// 4. **state persisted.** after a successful `run` the engine persists the
+///    step's record (name + [`Step::snapshot_value`]). `invok rollback` reads
+///    it back, rebuilds the steps with [`Step::rehydrate`] and runs their
+///    undos in reverse order (see [`crate::rollback`]).
 ///
-/// Quando [`Context::dry_run`] è `true`, `run` e `undo` non devono mutare il
-/// sistema: si limitano a loggare cosa *avrebbero* fatto.
+/// # dry run
+///
+/// when [`Context::dry_run`] is set, `run` and `undo` must not mutate: they log
+/// what they *would* have done.
 pub trait Step {
-    /// Nome stabile e univoco dello step (usato nei log e nello stato persistito).
+    /// stable, unique name, used in the logs and in the persisted state.
     fn name(&self) -> &str;
 
-    /// Rileva e registra lo stato preesistente (`PreState`) prima di mutare.
-    /// Chiamato dal motore **prima** di [`Step::run`].
+    /// records the pre-existing state. called before [`Step::run`].
     fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError>;
 
-    /// Esegue la mutazione. Deve rispettare `dry_run` (nessuna mutazione reale).
+    /// performs the mutation, honouring `dry_run`.
     fn run(&mut self, ctx: &Context) -> Result<(), StepError>;
 
-    /// Annulla la mutazione. Best-effort, idempotente, e attivo solo su
-    /// `PreState == CreatedByUs`. Prende `&self`: eventuali contatori interni
-    /// per i test usano interior mutability.
+    /// undoes the mutation: best-effort, idempotent, active only on `PreState
+    /// == CreatedByUs`.
+    ///
+    /// takes `&self`; test counters rely on interior mutability.
     fn undo(&self, ctx: &Context) -> Result<(), StepError>;
 
-    /// Snapshot serializzabile da persistere insieme al record dello step.
+    /// serialisable snapshot, persisted with the step's record.
     ///
-    /// Il valore è opaco al motore (JSON). Il default è `null` per step senza
-    /// stato; gli step reali serializzano qui il proprio `PreState`.
+    /// the value is opaque to the engine. the default suits stateless steps;
+    /// real steps serialise their `PreState` here.
     fn snapshot_value(&self) -> serde_json::Value {
         serde_json::Value::Null
     }
 
-    /// Ricarica lo stato interno da uno `snapshot_value` persistito, **senza**
-    /// re-ispezionare il sistema.
+    /// reloads the internal state from a persisted [`Step::snapshot_value`],
+    /// **without** re-inspecting the system.
     ///
-    /// # Perché esiste (R4)
+    /// R4. re-running `snapshot` would photograph the system *after* our
+    /// mutations, so an artifact we created would read as `Preexisting` — or,
+    /// worse, a customer's database would read as ours and be dropped.
     ///
-    /// `undo` decide cosa fare leggendo il `PreState` che `snapshot` ha
-    /// registrato *prima* del run. Per annullare da disco — Ctrl-C, `kill -9`,
-    /// o un `invok rollback` a installazione conclusa — quel
-    /// `PreState` va rimesso nello step **così com'era all'epoca**. Rieseguire
-    /// `snapshot` darebbe la risposta sbagliata: fotograferebbe il sistema
-    /// *dopo* le nostre mutazioni, e un artefatto che abbiamo creato noi
-    /// risulterebbe `Preexisting` (undo NO-OP) o viceversa — nel caso peggiore
-    /// un database del cliente marcato come nostro e droppato.
+    /// must be the **exact inverse** of [`Step::snapshot_value`]:
+    /// `rehydrate(snapshot_value(s))` must yield an undo indistinguishable from
+    /// `s`'s. `tests/rehydrate.rs` checks it step by step.
     ///
-    /// # Contratto
+    /// # errors
     ///
-    /// `rehydrate` deve essere l'**inversa esatta** di [`Step::snapshot_value`]:
-    /// per ogni stato interno `s`, `rehydrate(snapshot_value(s))` deve
-    /// riprodurre un `undo` indistinguibile da quello di `s`. È la proprietà
-    /// che rende affidabile il rollback da disco, ed è verificata step per step
-    /// in `tests/rehydrate.rs`.
+    /// [`StepError::SnapshotFailed`] when the snapshot cannot be decoded; the
+    /// caller then skips that undo, rather than undoing on invented state.
     ///
-    /// Il default è un NO-OP, corretto per gli step il cui `undo` non consulta
-    /// alcuno stato interno (`initialize-odoo-database`,
-    /// `install-python-requirements`). Uno snapshot illeggibile è un errore:
-    /// meglio dichiarare che quello step non è annullabile che annullarlo con
-    /// uno stato inventato.
+    /// the default no-op suits steps whose undo consults no internal state
+    /// (`initialize-odoo-database`, `install-python-requirements`).
     fn rehydrate(&mut self, _snapshot: &serde_json::Value) -> Result<(), StepError> {
         Ok(())
     }
 }
 
-/// Deserializza uno snapshot persistito nel tipo interno di uno step,
-/// trasformando un errore di formato in [`StepError::SnapshotFailed`].
+/// deserialises a persisted snapshot into a step's internal type.
 ///
-/// Helper condiviso da tutte le implementazioni di [`Step::rehydrate`]: il
-/// motivo per cui la reidratazione è una riga per step invece di venti righe di
-/// gestione errori ripetute.
+/// # errors
+///
+/// turns a format error into [`StepError::SnapshotFailed`], naming `step`.
+///
+/// shared by every [`Step::rehydrate`] implementation: the reason rehydration
+/// is one line per step rather than repeated error handling.
 pub fn decode_snapshot<T: DeserializeOwned>(
     step: &str,
     snapshot: &serde_json::Value,

@@ -1,5 +1,5 @@
-//! Test di [`CreateDatabase`] (Fase 5): la protezione anti-drop, IL test da non
-//! sbagliare — un DB preesistente non viene MAI droppato.
+//! [`CreateDatabase`]: the anti-drop protection — a pre-existing database is
+//! NEVER dropped.
 
 mod common;
 
@@ -24,7 +24,7 @@ fn prestate(step: &CreateDatabase) -> PreState {
 
 #[test]
 fn preexisting_database_is_never_dropped() {
-    // IL test critico: DB già esistente → undo rigorosamente NO-OP.
+    // THE critical test: an existing database makes the undo a strict no-op.
     let cfg = MockConfig {
         db_exists: true,
         ..Default::default()
@@ -44,7 +44,7 @@ fn preexisting_database_is_never_dropped() {
         !ops.iter().any(|o| matches!(o, Op::DropDb(_))),
         "un database preesistente non deve MAI essere droppato: {ops:?}"
     );
-    // Non è stato nemmeno creato (esisteva già).
+    // it was not even created: it was already there.
     assert!(!ops.iter().any(|o| matches!(o, Op::CreateDb { .. })));
 }
 
@@ -76,8 +76,8 @@ fn absent_database_is_created_and_dropped() {
 
 #[test]
 fn preexisting_database_never_dropped_even_after_run() {
-    // Verifica diretta che nessun percorso porti a dropdb su Preexisting:
-    // anche invocando undo più volte.
+    // no path leads to a drop on a pre-existing database, not even calling the
+    // undo repeatedly.
     let cfg = MockConfig {
         db_exists: true,
         ..Default::default()

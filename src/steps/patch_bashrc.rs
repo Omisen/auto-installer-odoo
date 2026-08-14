@@ -1,15 +1,14 @@
-//! [`PatchBashrc`] (14b): la mutazione chirurgica del file più personale
-//! dell'utente — la **terza protezione critica** (C3).
+//! [`PatchBashrc`]: the surgical mutation of the user's most personal file —
+//! the **third critical protection** (C3).
 //!
-//! Appende `export PATH="$HOME/.local/bin:$PATH"` al `.bashrc` di `SUDO_USER`,
-//! **solo se non c'è già** (match di riga esatto). Regole ferme di `CLAUDE.md`:
-//! **mai riscrivere/troncare il file intero**, solo append/rimozione della
-//! singola riga (o ripristino da backup).
+//! appends one `PATH` line to `SUDO_USER`'s `.bashrc`, **only if it is not
+//! already there**, matched exactly. firm rules from `CLAUDE.md`: **never
+//! rewrite or truncate the whole file**, only append or remove that single
+//! line, or restore the backup.
 //!
-//! L'undo riporta il `.bashrc` **byte per byte** com'era: tutti gli alias e le
-//! funzioni dell'utente intatti, senza la nostra riga, senza cicatrici. Il
-//! metodo primario è il **ripristino da backup** (più robusto); il match-esatto
-//! è il fallback.
+//! the undo brings the file back **byte for byte**: every alias and function
+//! intact, without our line and without scars. restoring from the backup is the
+//! primary method; the exact match is the fallback.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -21,17 +20,17 @@ use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
 use crate::system_ops::SystemOps;
 
-/// La riga esatta che aggiungiamo (match `grep -Fqx`).
+/// the exact line we add.
 const PATH_LINE: &str = r#"export PATH="$HOME/.local/bin:$PATH""#;
 const BASHRC_MODE: u32 = 0o644;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct PatchBashrcSnapshot {
-    /// `CreatedByUs` = riga aggiunta da noi; `Preexisting` = c'era già (no-op).
+    /// whether we added the line, or it was already there.
     pub prestate: PreState,
-    /// Il `.bashrc` esisteva prima di noi?
+    /// did the `.bashrc` exist before us?
     pub bashrc_existed: bool,
-    /// Path del backup creato nel run (per il ripristino).
+    /// path of the backup taken during the run.
     pub backup_path: Option<String>,
 }
 
@@ -61,8 +60,8 @@ impl PatchBashrc {
     }
 }
 
-/// Rimuove **solo** le righe che corrispondono **esattamente** a `line` (mai un
-/// match parziale/fuzzy: una riga simile scritta a mano dall'utente resta).
+/// removes **only** the lines matching `line` **exactly**: never a fuzzy match,
+/// so a similar handwritten line of the user's survives.
 pub fn remove_exact_line(content: &str, line: &str) -> String {
     let kept: Vec<&str> = content.lines().filter(|l| *l != line).collect();
     let mut out = kept.join("\n");
@@ -81,8 +80,7 @@ impl Step for PatchBashrc {
         let (_user, bashrc) = self.user_and_bashrc(ctx)?;
         self.snap.bashrc_existed = self.ops.path_exists(&bashrc);
 
-        // La nostra riga è già presente? (match esatto). Se sì → Preexisting:
-        // non è nostra, non la tocchiamo.
+        // our line already there means it is not ours to touch.
         let line_present = if self.snap.bashrc_existed {
             let content = self.ops.read_to_string(&bashrc)?;
             content.lines().any(|l| l == PATH_LINE)
@@ -109,7 +107,7 @@ impl Step for PatchBashrc {
             return Ok(());
         }
 
-        // Backup prima di modificare (se il file esisteva).
+        // back up before modifying, when the file existed.
         if self.snap.bashrc_existed {
             let backup = format!("{}.bak.{}", bashrc.display(), unix_timestamp());
             self.ops.copy_file(&bashrc, std::path::Path::new(&backup))?;
@@ -117,7 +115,7 @@ impl Step for PatchBashrc {
             info!(backup = %backup, "run: backup del .bashrc creato");
         }
 
-        // Append della SINGOLA riga (mai riscrivere il file intero).
+        // append the SINGLE line; never rewrite the whole file.
         self.ops.append_line(&bashrc, PATH_LINE)?;
         self.ops.chown_to_user(&bashrc, &user)?;
 
@@ -127,7 +125,7 @@ impl Step for PatchBashrc {
     }
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
-        // Agisce solo se la riga l'abbiamo aggiunta noi.
+        // acts only on a line we added.
         if self.snap.prestate != PreState::CreatedByUs {
             info!("undo NO-OP: la riga PATH non è stata aggiunta da noi");
             return Ok(());
@@ -138,7 +136,7 @@ impl Step for PatchBashrc {
             return Ok(());
         }
 
-        // Se il file non esisteva prima di noi, l'abbiamo creato: rimuovilo.
+        // a file that did not exist before us is ours to remove.
         if !self.snap.bashrc_existed {
             if let Err(e) = self.ops.remove_file(&bashrc) {
                 warn!(error = %e, "undo: rimozione .bashrc creato da noi fallita, proseguo");
@@ -146,7 +144,7 @@ impl Step for PatchBashrc {
             return Ok(());
         }
 
-        // Metodo primario: ripristino da backup → file identico all'originale.
+        // primary method: restore the backup, giving an identical file.
         if let Some(backup) = &self.snap.backup_path {
             let backup_path = std::path::Path::new(backup);
             if self.ops.path_exists(backup_path) {
@@ -161,7 +159,7 @@ impl Step for PatchBashrc {
             }
         }
 
-        // Fallback: rimuovi SOLO la riga esatta, senza toccare il resto.
+        // fallback: remove ONLY the exact line, touching nothing else.
         match self.ops.read_to_string(&bashrc) {
             Ok(content) => {
                 let cleaned = remove_exact_line(&content, PATH_LINE);
@@ -179,11 +177,11 @@ impl Step for PatchBashrc {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Terza protezione critica anche da disco. I tre campi contano tutti:
-    /// `prestate` decide *se* toccare il file, `bashrc_existed` distingue
-    /// "rimuovi la riga" da "rimuovi il file che abbiamo creato noi", e
-    /// `backup_path` è ciò che rende il ripristino byte-per-byte. Un solo campo
-    /// perso e l'undo o non agisce, o cancella un `.bashrc` che non era nostro.
+    /// the third critical protection, from disk too. all three fields matter:
+    /// the `PreState` decides *whether* to touch the file, `bashrc_existed`
+    /// tells "remove the line" from "remove the file we created", and
+    /// `backup_path` is what makes the restore byte-for-byte. lose one and the
+    /// undo either does nothing or deletes a `.bashrc` that was not ours.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;

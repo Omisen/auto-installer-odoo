@@ -1,4 +1,4 @@
-//! Test di [`WriteControlScript`] (Fase 10): ownership SUDO_USER, non globale.
+//! [`WriteControlScript`]: owned by SUDO_USER, and never global.
 
 mod common;
 
@@ -17,7 +17,7 @@ fn ctx(sudo_user: Option<&str>) -> Context {
     }
 }
 
-/// Estrae tutti i path referenziati dalle operazioni (per il check "non globale").
+/// every path the operations reference, for the "not global" check.
 fn all_paths(ops: &[Op]) -> Vec<String> {
     ops.iter()
         .flat_map(|o| match o {
@@ -56,7 +56,7 @@ fn absent_creates_owned_by_sudo_user_and_undo_removes() {
     step.run(&c).expect("run");
 
     let ops = ops_of(&log);
-    // Script + symlink creati.
+    // script and symlink created.
     assert!(ops
         .iter()
         .any(|o| matches!(o, Op::WritePrivateFile(p) if p.ends_with(".scripts/odoo.sh"))));
@@ -64,7 +64,7 @@ fn absent_creates_owned_by_sudo_user_and_undo_removes() {
         .iter()
         .any(|o| matches!(o, Op::CreateSymlink { link, .. } if link.ends_with(".local/bin/odoo"))));
 
-    // Ownership: SUDO_USER (alice), MAI odoo o root.
+    // ownership is SUDO_USER, NEVER `odoo` or root.
     let chowns: Vec<&String> = ops
         .iter()
         .filter_map(|o| match o {
@@ -78,13 +78,13 @@ fn absent_creates_owned_by_sudo_user_and_undo_removes() {
         "owner deve essere SUDO_USER, trovato: {chowns:?}"
     );
 
-    // Non globale: nulla in /usr/local/bin o path di sistema.
+    // not global: nothing under a system path.
     assert!(
         all_paths(&ops).iter().all(|p| !p.contains("/usr/")),
         "il comando non va installato globalmente"
     );
 
-    // Undo rimuove i nostri artefatti.
+    // the undo removes our artifacts.
     step.undo(&c).expect("undo");
     let ops = ops_of(&log);
     assert!(ops
@@ -113,15 +113,14 @@ fn preexisting_artifacts_are_not_recreated_or_removed() {
 
     let ops = ops_of(&log);
 
-    // A-V3-9: lo script si riscrive SEMPRE. Il suo contenuto lo generiamo noi e
-    // porta dentro il nome del servizio: saltarlo perché "esiste già" lasciava
-    // l'helper `odoo` a pilotare il servizio di un'installazione precedente
-    // (`SERVICE_NAME=odoo17` mentre gira `odoo18`).
+    // A-V3-9: the script is ALWAYS rewritten. its contents are ours and carry
+    // the service name, so skipping it left the helper driving an earlier
+    // installation's service.
     assert!(
         ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
         "lo script va riscritto: il suo contenuto dipende dalla versione installata"
     );
-    // Ma non si distrugge quello che c'era: prima si mette da parte.
+    // but what was there is not destroyed: it is set aside first.
     assert!(
         ops.iter()
             .any(|o| matches!(o, Op::CopyFile { src, .. } if src.ends_with(".scripts/odoo.sh"))),
@@ -132,7 +131,7 @@ fn preexisting_artifacts_are_not_recreated_or_removed() {
         !ops.iter().any(|o| matches!(o, Op::CreateSymlink { .. })),
         "symlink preesistente: non ricreato (punta comunque allo stesso script)"
     );
-    // L'undo non rimuove ciò che non era nostro: lo rimette com'era.
+    // the undo does not remove what was not ours: it puts it back.
     assert!(
         !ops.iter().any(|o| matches!(o, Op::RemoveFile(_))),
         "non rimuoviamo artefatti non nostri"

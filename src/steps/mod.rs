@@ -1,12 +1,9 @@
-//! Gli step dell'installer.
+//! the installer's steps, one per file.
 //!
-//! Ogni step vive in un proprio file: le fasi successive aggiungono un modulo
-//! qui senza toccare il motore né gli altri step.
-//!
-//! Il modulo espone anche i due punti d'accesso alla sequenza:
-//! [`build_steps`] (l'ordine canonico dell'installazione) e [`step_by_name`]
-//! (la ricostruzione di un singolo step dal suo nome, usata dal rollback da
-//! disco). I due devono coprire lo stesso insieme di step: un test lo verifica.
+//! also the two entry points to the sequence: [`build_steps`], the canonical
+//! installation order, and [`step_by_name`], which rebuilds one step from its
+//! name for the rollback from disk. the two must cover the same set, and a test
+//! verifies it.
 
 use tracing::{info, warn};
 
@@ -14,39 +11,28 @@ use crate::packaging::PackageManager;
 use crate::step::Step;
 use crate::system_ops::{Downloader, RealDownloader, SystemOps};
 
-/// Rimuove pacchetti in un `undo`, **recuperando il gestore** se è in stato
-/// inconsistente. Best-effort: non fallisce mai, logga cosa resta.
+/// removes packages in an undo, **repairing the manager** when it is
+/// inconsistent. best-effort: it never fails, and logs what is left.
 ///
-/// # Perché serve (A-RT-2, trovato in campo)
+/// A-RT-2, found in the field: a rollback always runs *after* a failure, and
+/// that failure may have left `dpkg` halfway. apt then refuses to operate and
+/// **every** purge fails, leaving the packages we installed behind — the
+/// surgical promise broken in the very scenario it matters most. on the test
+/// VM, 24 packages stayed.
 ///
-/// Il rollback arriva sempre *dopo* un fallimento, e quel fallimento può aver
-/// lasciato `dpkg` a metà. In quello stato apt si rifiuta di operare
-/// (`E: Unmet dependencies. Try 'apt --fix-broken install'`) e **ogni** purge
-/// del rollback fallisce: i pacchetti che avevamo installato restano lì e il
-/// sistema non torna pulito — la promessa chirurgica violata proprio nello
-/// scenario in cui serve di più. Sulla VM di prova restarono 24 pacchetti.
+/// so: repair before removing (a harmless no-op on a healthy manager), and if
+/// the removal still fails, a second attempt after the deep repair. failing
+/// that we carry on, listing **exactly** what remains for the user to remove.
 ///
-/// Perciò: riparazione prima della rimozione (no-op innocuo se il gestore è già
-/// sano) e, se la rimozione fallisce lo stesso, un secondo tentativo dopo la
-/// riparazione profonda. Se nemmeno così funziona si prosegue — l'undo è
-/// best-effort (invariante 3) — ma si elenca **esattamente** cosa è rimasto,
-/// perché è materiale che l'utente dovrà rimuovere a mano.
-///
-/// # È politica, non comando
-///
-/// Vive qui e non dietro [`PackageManager`] perché è **politica di rollback**:
-/// il confine resta una mappatura 1:1 sui comandi, e i test possono asserire la
-/// sequenza esatta. Su un gestore senza uno stato «scompattato ma non
-/// configurato», `try_repair`/`try_deep_repair` sono no-op e la sequenza
-/// degenera in «prova a rimuovere, riprova una volta, poi elenca i residui»:
-/// un degrado onesto, in cui la parte che conta davvero — **il report dei
-/// residui** — resta identica per tutte le famiglie.
+/// this is **policy**, not a command, which is why it lives here and not behind
+/// [`PackageManager`]: that boundary stays 1:1 onto commands so tests can
+/// assert exact sequences.
 pub fn remove_with_recovery(pm: &dyn PackageManager, step: &str, pkgs: &[&str]) {
     if pkgs.is_empty() {
         return;
     }
 
-    // Recovery preventivo: apt non opera su un dpkg rotto.
+    // pre-emptive recovery: apt does not operate on a broken dpkg.
     if let Err(e) = pm.try_repair() {
         warn!(step, error = %e, "undo: riparazione preventiva fallita, tento comunque la rimozione");
     }
@@ -56,8 +42,8 @@ pub fn remove_with_recovery(pm: &dyn PackageManager, step: &str, pkgs: &[&str]) 
     };
     warn!(step, error = %first, "undo: rimozione fallita, tento il recovery del gestore e riprovo");
 
-    // `dpkg --configure -a` copre i pacchetti scompattati ma non configurati,
-    // dove `apt-get install -f` da solo non basta.
+    // covers unpacked-but-unconfigured packages, where the first repair alone
+    // is not enough.
     if let Err(e) = pm.try_deep_repair() {
         warn!(step, error = %e, "undo: riparazione profonda fallita");
     }
@@ -81,17 +67,16 @@ pub fn remove_with_recovery(pm: &dyn PackageManager, step: &str, pkgs: &[&str]) 
     }
 }
 
-/// Il primo livello **inesistente** scendendo da `home` verso `target`: la
-/// radice di ciò che un `mkdir -p` creerà, e quindi l'unica cosa che un undo può
-/// rimuovere senza toccare roba di altri.
+/// the first **missing** level going down from `home` towards `target`: the
+/// root of what a `mkdir -p` will create, and so the only thing an undo can
+/// remove without touching somebody else's things.
 ///
-/// `None` se `target` non è sotto `home` o se esiste già tutto.
+/// `None` when `target` is not under `home`, or when everything already exists.
 ///
-/// Vive qui perché la usano due step — il filestore
-/// ([`setup_data_dir`]) e la cache ([`setup_cache_dir`]) — e sono entrambi casi
-/// dello stesso problema: creare una sottodirectory dentro la home dell'utente
-/// `odoo`, che è `Preexisting` e non va svuotata, sapendo *esattamente* quanto
-/// di quell'albero abbiamo aggiunto noi.
+/// shared by the filestore and the cache steps, which are two cases of one
+/// problem: creating a subdirectory inside the `odoo` user's home — which is
+/// `Preexisting` and must not be emptied — while knowing *exactly* how much of
+/// that tree we added.
 pub fn highest_missing_level(
     ops: &dyn SystemOps,
     home: &std::path::Path,
@@ -108,16 +93,15 @@ pub fn highest_missing_level(
     None
 }
 
-/// Rimuove ricorsivamente `created_root`, con la **rete sul perimetro**.
+/// removes `created_root` recursively, with the **perimeter safety net**.
 ///
-/// L'undo di questi step cancella un albero a partire da un path che arriva
-/// **dal disco** (lo snapshot persistito). Uno stato corrotto — o scritto da
-/// un'altra installazione — non deve poter diventare un `rm -rf` altrove:
-/// il target dev'essere un discendente *stretto* di `home`, altrimenti si logga
-/// e non si tocca nulla. Meglio un residuo da rimuovere a mano.
+/// these undos delete a tree rooted at a path that comes **from disk**. a
+/// corrupted state, or one written by another installation, must not become an
+/// `rm -rf` elsewhere: the target must be a *strict* descendant of `home`,
+/// otherwise it is logged and nothing is touched.
 ///
-/// Best-effort come ogni undo (invariante 3): un fallimento è un `warn!`, non un
-/// errore che ferma la pulizia degli altri step.
+/// best-effort like every undo: a failure is a `warn!`, not an error that stops
+/// the other steps' cleanup.
 pub fn remove_created_root(
     ops: &dyn SystemOps,
     step: &str,
@@ -149,12 +133,10 @@ pub fn remove_created_root(
     }
 }
 
-/// Secondi dall'epoch, per i nomi dei file di backup.
+/// seconds since the epoch, for backup file names.
 ///
-/// Vive qui perché la usano quattro step (`patch-bashrc`, `generate-config`,
-/// `nginx-enable-site`, `write-control-script`) e la convenzione dei backup —
-/// `<file>.bak.<epoch>` — è una sola: quattro copie della stessa funzione erano
-/// quattro occasioni di farle divergere.
+/// shared by four steps: the `<file>.bak.<epoch>` convention is one thing, and
+/// four copies were four chances to diverge.
 pub fn unix_timestamp() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -162,51 +144,41 @@ pub fn unix_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-/// Fabbrica di [`SystemOps`]: ogni step ne riceve una propria istanza.
+/// a [`SystemOps`] factory: every step gets its own instance.
 ///
-/// È un `Fn` e non un singolo `Box<dyn SystemOps>` perché gli step possiedono le
-/// proprie `ops`: servono N istanze, non N riferimenti. In produzione ritorna
-/// `RealSystemOps`; nei test ritorna handle allo stesso `SystemModel`, così le
-/// mutazioni di uno step sono viste dagli undo degli altri.
+/// an `Fn` and not one `Box<dyn SystemOps>` because steps own their `ops`: N
+/// instances are needed, not N references. in tests it hands out handles to one
+/// `SystemModel`, so one step's mutations are visible to another's undo.
 pub type OpsFactory<'a> = &'a dyn Fn() -> Box<dyn SystemOps>;
 
-/// Costruisce la sequenza di produzione degli step, **nell'ordine di
-/// esecuzione**. Il rollback li annulla in ordine inverso (invariante 2).
+/// builds the production sequence, **in execution order**. the rollback undoes
+/// it in reverse (invariant 2).
 ///
-/// Vive qui e non in `main` perché è la definizione canonica della sequenza:
-/// [`step_by_name`] deve coprirla per intero perché il rollback da disco
-/// funzioni, e un test di parità lo verifica — aggiungere uno step qui senza
-/// aggiungerlo là fa fallire la build dei test, non un rollback su una macchina
-/// cliente.
+/// the canonical definition lives here and not in `main`: [`step_by_name`] must
+/// cover it entirely for the rollback from disk to work, and a parity test
+/// checks that — so adding a step in one place only breaks the test build, not
+/// a rollback on a customer's machine.
 ///
-/// # Perché prende la fabbrica delle `ops`
+/// it takes the `ops` factory because that is how the distribution family
+/// enters the program **once**, from `main`, instead of being decided inside
+/// twenty-two constructors. a blind `Step::new()` handing apt to everyone would
+/// be the silent default multi-distro support exists to avoid.
 ///
-/// Perché è così che la famiglia della distribuzione entra nel programma **una
-/// volta**, da `main`, invece di essere decisa dentro ventidue costruttori.
-/// `Step::new()` non esiste più: un costruttore cieco che desse apt a chiunque
-/// sarebbe il default silenzioso che il supporto multi-distro esiste per
-/// evitare.
+/// the sequence is **one** for every family: a family changes *what a step
+/// does*, never *which steps exist*. an inert step keeps its `PreState`
+/// `Untracked`, which is the truth, while per-family sequences would mean
+/// manifests of different shapes and a rollback that had to guess which.
 ///
-/// # La sequenza è **una sola** per tutte le famiglie
-///
-/// La famiglia cambia *cosa fa* uno step, mai *quali step esistono*. Uno step
-/// inerte su una famiglia è un pattern che il progetto ha già (i cinque step
-/// nginx senza `--with-nginx`, `setup-log-dir` senza logfile) e il suo
-/// `PreState` resta `Untracked`, che è la verità. Sequenze diverse per famiglia
-/// significherebbero manifesti di forma diversa, e un rollback che deve
-/// indovinare con quale sequenza l'installazione era stata fatta.
-///
-/// **I nomi degli step non si rinominano, mai**: sono la chiave con cui si
-/// ricostruiscono gli step di installazioni già in campo.
+/// **step names are never renamed**: they are the key that rebuilds the steps
+/// of installations already in the field.
 pub fn build_steps(make_ops: OpsFactory<'_>) -> Vec<Box<dyn Step>> {
     vec![
         Box::new(prepare_opt_root::PrepareOptRoot::with_ops(make_ops())),
         Box::new(create_odoo_user::CreateOdooUser::with_ops(make_ops())),
         Box::new(setup_log_dir::SetupLogDir::with_ops(make_ops())),
-        // Presto di proposito: lo snapshot deve vedere la home PRIMA che
-        // qualunque programma lanciato come `odoo` ci scriva una cache. Essere
-        // presto qui significa essere tardi nell'undo, che è dove serve
-        // (A-R5-3).
+        // early on purpose: the snapshot must see the home BEFORE anything
+        // running as `odoo` writes a cache there. early here means late in the
+        // undo, which is where it matters (A-R5-3).
         Box::new(setup_cache_dir::SetupCacheDir::with_ops(make_ops())),
         Box::new(apt_packages::AptPackagesStep::bootstrap_with_ops(make_ops())),
         Box::new(apt_packages::AptPackagesStep::odoo_dependencies_with_ops(
@@ -218,40 +190,39 @@ pub fn build_steps(make_ops: OpsFactory<'_>) -> Vec<Box<dyn Step>> {
             install_wkhtmltopdf::default_checksums(),
             std::env::temp_dir(),
         )),
-        // PostgreSQL: undo inverso CreateDatabase → CreateDbRole → SetupPostgres.
+        // undone in reverse: database, then role, then the service.
         Box::new(setup_postgres::SetupPostgres::with_ops(make_ops())),
         Box::new(create_db_role::CreateDbRole::with_ops(make_ops())),
         Box::new(create_database::CreateDatabase::with_ops(make_ops())),
-        // Sorgenti: clone → venv → pip (undo pip no-op; venv rm; clone rm).
-        //
-        // `for_run` e non `with_ops`: il clone di produzione ha retry con
-        // backoff, quello dei test no. Vedi il doc di `CloneOdooRepo::for_run`.
+        // sources: clone → venv → pip. pip's undo is a no-op, absorbed by the
+        // venv's. `for_run` because the production clone retries with backoff.
         Box::new(clone_odoo_repo::CloneOdooRepo::for_run(make_ops())),
         Box::new(create_virtualenv::CreateVirtualenv::with_ops(make_ops())),
         Box::new(install_python_requirements::InstallPythonRequirements::with_ops(make_ops())),
-        // Config + init schema (undo init no-op: pulizia dal dropdb di Fase 5).
+        // the init's undo is a no-op: the dropdb cleans the schema up.
         Box::new(generate_config::GenerateConfig::with_ops(make_ops())),
-        // Il filestore va creato prima che Odoo lo crei da sé: solo così è un
-        // artefatto registrato, e quindi annullabile (A-R5-3). Deve stare dopo
-        // `create-database`, da cui legge se il DB è nostro.
+        // the filestore must be created before Odoo creates it itself, or it is
+        // unrecorded and un-undoable (A-R5-3). after `create-database`, whose
+        // verdict it reads.
         Box::new(setup_data_dir::SetupDataDir::with_ops(make_ops())),
         Box::new(initialize_odoo_database::InitializeOdooDatabase::with_ops(
             make_ops(),
         )),
-        // Servizio systemd (undo: stop → disable → rm → daemon-reload).
-        // `for_run`: in produzione si attende che il servizio si assesti.
+        // undone as stop → disable → rm → daemon-reload. `for_run` waits for
+        // the service to settle in production.
         Box::new(setup_systemd::SetupSystemd::for_run(make_ops())),
-        // Nginx (opzionale, gated): install → vhost → enable → firewall → reload.
+        // nginx, gated: install → vhost → enable → selinux → firewall → reload.
         Box::new(nginx_install::NginxInstall::with_ops(make_ops())),
         Box::new(nginx_write_config::NginxWriteConfig::with_ops(make_ops())),
         Box::new(nginx_enable_site::NginxEnableSite::with_ops(make_ops())),
-        // SELinux prima del reload: senza il boolean, nginx viene ricaricato
-        // correttamente e poi **risponde 502**, perché la politica gli nega la
-        // connessione verso Odoo. No-op dove SELinux non è in uso.
+        // SELinux before the reload: without the boolean nginx reloads fine and
+        // then **answers 502**, because the policy denies it the connection. a
+        // no-op where SELinux is not in use.
         Box::new(nginx_selinux::NginxSelinux::with_ops(make_ops())),
         Box::new(nginx_firewall::NginxFirewall::with_ops(make_ops())),
         Box::new(nginx_reload::NginxReload::with_ops(make_ops())),
-        // Comando helper `odoo` + patch PATH nel .bashrc dell'utente.
+        // the `odoo` helper command, plus the PATH line in the user's
+        // `.bashrc`.
         Box::new(write_control_script::WriteControlScript::with_ops(
             make_ops(),
         )),
@@ -259,26 +230,20 @@ pub fn build_steps(make_ops: OpsFactory<'_>) -> Vec<Box<dyn Step>> {
     ]
 }
 
-/// Ricostruisce uno step dal suo **nome persistito**, con `SystemOps` iniettabili.
+/// rebuilds a step from its **persisted name**, with injectable `SystemOps`.
 ///
-/// È la metà "identità" della reidratazione: dato uno `StepRecord`,
-/// `step_by_name` produce l'oggetto e [`crate::step::Step::rehydrate`] ne
-/// rimette lo stato. Insieme rendono eseguibile l'`undo` di un'installazione
-/// che questo processo non ha mai eseguito.
+/// the "identity" half of rehydration: this produces the object and
+/// [`crate::step::Step::rehydrate`] puts its state back. together they make
+/// executable the undo of an installation this process never ran.
 ///
-/// Ritorna `None` per un nome sconosciuto — uno stato scritto da una versione
-/// con step che qui non esistono più. Il chiamante lo tratta come residuo da
-/// segnalare, non come errore fatale: gli altri step vanno comunque annullati.
+/// `None` for an unknown name — a state written by a version with steps that no
+/// longer exist here. the caller reports it as a leftover rather than failing:
+/// the other steps still need undoing.
 ///
-/// Il downloader di `install-wkhtmltopdf` è sempre quello reale: l'undo purga un
-/// pacchetto, non scarica nulla, quindi non c'è nulla da iniettare. Stessa
-/// ragione per la tabella dei checksum, presa dai pin di produzione.
-///
-/// Per lo stesso motivo `clone-odoo-repo` e `setup-systemd` si costruiscono con
-/// `with_ops` e non con `for_run`: i parametri che li distinguono — backoff fra i
-/// retry del clone, attesa di assestamento del servizio — servono al `run`, e qui
-/// si sta ricostruendo uno step **per annullarlo**. Rimuovere una directory e
-/// fermare un servizio non hanno bisogno di attese.
+/// the wkhtmltopdf downloader and checksum table are always the production
+/// ones: the undo purges a package and downloads nothing. for the same reason
+/// the clone and systemd steps are built without their run-time parameters —
+/// removing a directory and stopping a service need no waiting.
 pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step>> {
     let step: Box<dyn Step> = match name {
         "prepare-opt-root" => Box::new(prepare_opt_root::PrepareOptRoot::with_ops(make_ops())),
@@ -328,11 +293,11 @@ pub fn step_by_name(name: &str, make_ops: OpsFactory<'_>) -> Option<Box<dyn Step
     Some(step)
 }
 
-/// I nomi degli step della sequenza canonica, nell'ordine di esecuzione.
+/// the canonical sequence's step names, in execution order.
 ///
-/// Derivato da [`build_steps`] invece che scritto a mano: una lista parallela
-/// diventerebbe stantìa senza che nulla se ne accorga, e qui il costo è un giro
-/// di costruttori senza effetti collaterali.
+/// derived from [`build_steps`] rather than written by hand: a parallel list
+/// would go stale with nothing noticing, and the cost here is one pass of
+/// side-effect-free constructors.
 pub fn canonical_step_names(make_ops: OpsFactory<'_>) -> Vec<String> {
     build_steps(make_ops)
         .iter()

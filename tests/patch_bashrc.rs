@@ -1,4 +1,4 @@
-//! Test di [`PatchBashrc`] (Fase 10): la mutazione chirurgica del .bashrc (C3).
+//! [`PatchBashrc`]: the surgical `.bashrc` mutation (C3).
 
 mod common;
 
@@ -9,7 +9,7 @@ use invok::steps::patch_bashrc::{remove_exact_line, PatchBashrc};
 
 const PATH_LINE: &str = r#"export PATH="$HOME/.local/bin:$PATH""#;
 
-/// La home è iniettata nel mock via `cfg.sudo_home`; il Context porta l'utente.
+/// the home is injected into the mock; the context carries the user.
 fn ctx_home() -> Context {
     Context {
         sudo_user: Some("alice".to_string()),
@@ -28,8 +28,8 @@ fn cfg_home(home: &std::path::Path) -> MockConfig {
 
 #[test]
 fn round_trip_restores_file_byte_for_byte() {
-    // IL test critico: dopo run+undo il .bashrc è IDENTICO all'originale, con
-    // alias e funzioni dell'utente intatti.
+    // THE critical test: after run and undo the file is IDENTICAL to the
+    // original, aliases and functions intact.
     let dir = tempfile::tempdir().expect("tempdir");
     let bashrc = dir.path().join(".bashrc");
     let original = "alias ll='ls -la'\nfunction greet() { echo hi; }\nexport EDITOR=vim\n";
@@ -42,7 +42,7 @@ fn round_trip_restores_file_byte_for_byte() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    // Il run ha SOLO appeso (mai riscritto l'intero file).
+    // the run only appended, never rewrote the whole file.
     let ops = ops_of(&log);
     assert!(
         ops.iter().any(|o| matches!(o, Op::AppendLine(_))),
@@ -52,7 +52,7 @@ fn round_trip_restores_file_byte_for_byte() {
         !ops.iter().any(|o| matches!(o, Op::WritePrivateFile(_))),
         "mai riscrivere il .bashrc intero"
     );
-    // Dopo il run la nostra riga c'è.
+    // after the run our line is there.
     let after_run = std::fs::read_to_string(&bashrc).expect("read");
     assert!(after_run.contains(PATH_LINE));
     assert!(
@@ -84,7 +84,7 @@ fn line_already_present_is_noop() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    // Nessun append (niente duplicati), nessuna modifica del file dell'utente.
+    // no append, so no duplicates and no change to the user's file.
     assert!(!ops_of(&log).iter().any(|o| matches!(o, Op::AppendLine(_))));
     assert_eq!(
         std::fs::read_to_string(&bashrc).expect("read"),
@@ -95,7 +95,7 @@ fn line_already_present_is_noop() {
 
 #[test]
 fn created_bashrc_is_removed_on_undo() {
-    // .bashrc inesistente → lo creiamo con la riga → undo lo rimuove.
+    // a missing file is created with the line, and removed by the undo.
     let dir = tempfile::tempdir().expect("tempdir");
     let bashrc = dir.path().join(".bashrc");
     assert!(!bashrc.exists());
@@ -128,7 +128,7 @@ fn missing_sudo_user_is_error() {
 
 #[test]
 fn remove_exact_line_is_not_fuzzy() {
-    // Una riga PATH DIVERSA scritta a mano dall'utente NON viene rimossa.
+    // a DIFFERENT handwritten PATH line is NOT removed.
     let content = format!("alias x='y'\nexport PATH=\"$HOME/bin:$PATH\"\n{PATH_LINE}\n");
     let cleaned = remove_exact_line(&content, PATH_LINE);
 

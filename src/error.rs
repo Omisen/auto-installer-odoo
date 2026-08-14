@@ -1,19 +1,17 @@
-//! Errori tipizzati del motore e degli step.
+//! typed errors for the engine and the steps.
 //!
-//! Ogni step ritorna un [`StepError`] (dominio, tipizzato con `thiserror`); a
-//! livello `main` questi vengono promossi ad `anyhow::Error`. Le varianti sono
-//! volutamente generiche in Fase 0 ed estendibili fase per fase, ma ognuna deve
-//! sempre portare contesto sufficiente per un post-mortem su macchina cliente
-//! (nome comando, exit status, path coinvolto).
+//! every step returns a [`StepError`], promoted to `anyhow::Error` in `main`.
+//! each variant must carry enough context for a post-mortem on a customer
+//! machine: command name, exit status, path involved.
 
 use std::path::PathBuf;
 
 use thiserror::Error;
 
-/// Errore di dominio prodotto da uno step (snapshot / run / undo).
+/// a domain error produced by a step (snapshot, run or undo).
 #[derive(Debug, Error)]
 pub enum StepError {
-    /// Un comando esterno (git/apt/psql/systemctl/...) è terminato con errore.
+    /// an external command (git, apt, psql, systemctl, …) exited non-zero.
     #[error("comando `{command}` fallito (exit {status}): {stderr}")]
     CommandFailed {
         command: String,
@@ -21,17 +19,13 @@ pub enum StepError {
         stderr: String,
     },
 
-    /// Un comando esterno non è terminato entro il timeout ed è stato ucciso.
+    /// an external command outlived its timeout and was killed.
     ///
-    /// Riguarda le sole operazioni di **rete** (clone, tarball, download del
-    /// `.deb`): un mirror che non chiude la connessione appenderebbe altrimenti
-    /// l'installer a tempo indefinito. È un errore **ritentabile**: il retry del
-    /// clone lo tratta come un fallimento qualsiasi e passa al tentativo
-    /// successivo, poi al fallback tarball.
-    ///
-    /// Il nome della variabile citato nel messaggio è
-    /// [`crate::system_ops::NETWORK_TIMEOUT_ENV`]; un test verifica che i due
-    /// non divergano.
+    /// only **network** operations carry one, against a mirror that never
+    /// closes the connection. **retryable**: the clone's retry treats it like
+    /// any other failure, then falls back to the tarball. the variable named in
+    /// the message is [`crate::system_ops::NETWORK_TIMEOUT_ENV`], and a test
+    /// keeps the two in step.
     #[error(
         "comando `{command}` non terminato entro {secs}s: interrotto (timeout di rete). \
          Se la connessione è lenta alza il limite con ODOO_NETWORK_TIMEOUT_SECS=<secondi> \
@@ -39,14 +33,14 @@ pub enum StepError {
     )]
     Timeout { command: String, secs: u64 },
 
-    /// La fase di snapshot non è riuscita a rilevare lo stato preesistente.
+    /// the snapshot phase could not determine the pre-existing state.
     ///
-    /// È un errore grave: senza snapshot affidabile l'undo non ha una fonte di
-    /// verità (`PreState`) e il rollback non è sicuro.
+    /// serious: without a reliable snapshot the undo has no source of truth
+    /// (`PreState`) and the rollback is not safe.
     #[error("snapshot fallito per lo step `{step}`: {reason}")]
     SnapshotFailed { step: String, reason: String },
 
-    /// Errore di I/O con il path coinvolto per la diagnostica.
+    /// I/O error, carrying the path for diagnosis.
     #[error("errore di I/O su `{path}`: {source}")]
     Io {
         path: PathBuf,
@@ -54,27 +48,25 @@ pub enum StepError {
         source: std::io::Error,
     },
 
-    /// Una precondizione non negoziabile è stata violata (es. hard-stop su
-    /// init di un DB preesistente). Non è recuperabile: l'installer si ferma.
+    /// a non-negotiable precondition was violated, such as the hard stop on
+    /// initialising a pre-existing database. not recoverable: the installer
+    /// stops.
     #[error("precondizione violata: {0}")]
     Precondition(String),
 
-    /// Il build di gevent è fallito su un interprete più recente di quelli per
-    /// cui Odoo pinna (A-MD-7).
+    /// the gevent build failed on an interpreter newer than Odoo's pins
+    /// (A-MD-7).
     ///
-    /// Non è una variante «di comodo» per un caso particolare: è un fallimento
-    /// che **non si può diagnosticare dal messaggio del comando**. Chi legge
-    /// vede trecento righe di `gcc` che parlano di `_PyLong_AsByteArray`, e la
-    /// causa vera — «questa versione di Odoo non ha un pin per questo Python» —
-    /// non compare da nessuna parte. Qui la diagnosi precede l'errore originale,
-    /// che resta per intero: aggiungere una spiegazione non è togliere una
-    /// prova.
+    /// its own message cannot diagnose it: the reader sees three hundred lines
+    /// of `gcc` about `_PyLong_AsByteArray`, and "this Odoo version has no pin
+    /// for this Python" appears nowhere. the diagnosis precedes the original
+    /// error, which is kept in full — explaining is not hiding the evidence.
     #[error("{diagnosis}\n\n--- errore originale ---\n{original}")]
     PythonTooNew { diagnosis: String, original: String },
 }
 
 impl StepError {
-    /// Costruttore comodo per errori di I/O che allega il path coinvolto.
+    /// builds an [`StepError::Io`] carrying the path involved.
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         StepError::Io {
             path: path.into(),

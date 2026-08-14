@@ -1,18 +1,18 @@
-//! A-V3-7 e A-V3-8: due controlli che sembravano fare il loro lavoro.
+//! A-V3-7 and A-V3-8: two checks that looked like they were doing their job.
 //!
-//! Sono finding diversi con la stessa forma: un confronto **troppo largo**.
-//! Il primo chiedeva «questa stringa compare da qualche parte?» invece di
-//! «questa regola c'è?»; il secondo confrontava due valori che arrivavano
-//! **dallo stesso file**, quindi concordavano sempre.
+//! different findings of the same shape — a comparison that is **too loose**.
+//! the first asked "does this string appear somewhere?" instead of "is this
+//! rule present?"; the second compared two values that both came **from the
+//! same file**, so they always agreed.
 
 use std::path::PathBuf;
 
 use invok::distro::ufw::rule_in_status as ufw_rule_in_status;
 use invok::state::{trust_verdict, InstallConfig};
 
-// --- A-V3-7: `80/tcp` non è dentro `8080/tcp` --------------------------------
+// --- A-V3-7: `80/tcp` is not inside `8080/tcp` ------------------------------
 
-/// Output realistico di `ufw status`.
+/// realistic `ufw status` output.
 fn ufw_status(rules: &[&str]) -> String {
     let mut out = String::from("Status: active\n\nTo                         Action      From\n--                         ------      ----\n");
     for r in rules {
@@ -21,13 +21,13 @@ fn ufw_status(rules: &[&str]) -> String {
     out
 }
 
-/// **Il difetto.** `status.contains("80/tcp")` risponde `true` su una macchina
-/// che ha solo `8080/tcp` — un'altra app web, un reverse proxy, un runner.
+/// **the defect.** a substring check answers `true` on a machine that only has
+/// `8080/tcp` — another web app, a reverse proxy, a runner.
 ///
-/// La conseguenza non è cosmetica: la regola per la 80 non entra nel delta, il
-/// `run` non la apre, e nginx viene configurato e ricaricato correttamente ma
-/// resta **irraggiungibile dall'esterno**. Nel report non c'è niente di anomalo
-/// da leggere, ed è la parte peggiore.
+/// the consequence is not cosmetic: the rule never enters the delta, the run
+/// never opens it, and nginx is configured and reloaded correctly while staying
+/// **unreachable from outside**. nothing looks wrong in the report, which is
+/// the worst part.
 #[test]
 fn port_80_is_not_found_inside_port_8080() {
     let status = ufw_status(&["8080/tcp", "22/tcp"]);
@@ -40,16 +40,15 @@ fn port_80_is_not_found_inside_port_8080() {
     assert!(ufw_rule_in_status(&status, "22/tcp"));
 }
 
-/// La variante IPv6 della stessa porta combacia: `ufw` la stampa come
-/// `80/tcp (v6)`, ed è la stessa regola — riaprirla sarebbe un duplicato, e
-/// rimuoverla all'undo toccherebbe qualcosa che non abbiamo aggiunto noi.
+/// the IPv6 variant of the same port matches: it is the same rule, so reopening
+/// it would duplicate and removing it would touch something we did not add.
 #[test]
 fn the_ipv6_variant_is_the_same_rule() {
     let status = ufw_status(&["80/tcp", "80/tcp (v6)"]);
     assert!(ufw_rule_in_status(&status, "80/tcp"));
 }
 
-/// Una regola assente resta assente, anche su un output vuoto o inattivo.
+/// an absent rule stays absent, even on empty or inactive output.
 #[test]
 fn an_absent_rule_is_reported_absent() {
     assert!(!ufw_rule_in_status(&ufw_status(&[]), "443/tcp"));
@@ -57,7 +56,7 @@ fn an_absent_rule_is_reported_absent() {
     assert!(!ufw_rule_in_status("Status: inactive\n", "443/tcp"));
 }
 
-/// L'intestazione di `ufw status` non deve mai combaciare con una regola.
+/// the status heading must never match a rule.
 #[test]
 fn the_header_is_not_mistaken_for_a_rule() {
     let status = ufw_status(&["80/tcp"]);
@@ -69,7 +68,7 @@ fn the_header_is_not_mistaken_for_a_rule() {
     }
 }
 
-// --- A-V3-8: il perimetro ancorato a qualcosa che non arriva dal file --------
+// --- A-V3-8: anchoring the perimeter to something not from the file ---------
 
 fn config_with(home: &str, install_dir: &str) -> InstallConfig {
     InstallConfig {
@@ -89,12 +88,11 @@ fn config_with(home: &str, install_dir: &str) -> InstallConfig {
     }
 }
 
-/// **Il difetto.** La rete sul perimetro (`remove_created_root`) pretende che il
-/// target stia sotto `home` — ma `home` e `target` arrivano **entrambi dal file
-/// di stato**, quindi la guardia concordava sempre con sé stessa. Con
-/// `odoo_home: "/"` un `created_root: "/etc"` passava senza obiezioni.
+/// **the defect.** the perimeter net demands the target sit under the home —
+/// but both come **from the same state file**, so the guard always agreed with
+/// itself: with a home of `/`, a target of `/etc` passed without objection.
 ///
-/// L'unico ancoraggio possibile è un valore che dal file **non** arriva.
+/// the only possible anchor is a value that does **not** come from the file.
 #[test]
 fn a_manifest_declaring_another_home_is_refused() {
     let bugiardo = config_with("/", "/etc");
@@ -109,9 +107,9 @@ fn a_manifest_declaring_another_home_is_refused() {
     );
 }
 
-/// Anche una home *plausibile* ma diversa viene rifiutata: `ODOO_HOME` è
-/// dichiarata costante architetturale e non sovrascrivibile, quindi qualunque
-/// altro valore descrive un'installazione che non abbiamo fatto noi.
+/// a *plausible* but different home is refused too: the constant is
+/// architectural and not overridable, so any other value describes an
+/// installation we did not make.
 #[test]
 fn even_a_plausible_but_different_home_is_refused() {
     assert!(config_with("/srv/odoo", "/srv/odoo/odoo18")
@@ -119,8 +117,8 @@ fn even_a_plausible_but_different_home_is_refused() {
         .is_err());
 }
 
-/// La directory di installazione deve stare **sotto** la home, e non coincidere
-/// con essa: coinciderebbe con l'intera home, e il suo undo la porterebbe via.
+/// the install directory must sit **below** the home and not equal it, or its
+/// undo would take the whole home away.
 #[test]
 fn the_install_dir_must_live_strictly_inside_the_home() {
     assert!(config_with("/opt/odoo", "/opt/altro")
@@ -134,43 +132,44 @@ fn the_install_dir_must_live_strictly_inside_the_home() {
         .is_ok());
 }
 
-// --- A-V3-8: il file di stato come fonte fidata ------------------------------
+// --- A-V3-8: the state file as a trusted source -----------------------------
 
-/// Il caso buono: root, `0600`, in una directory non scrivibile da terzi.
+/// the good case: root-owned, `0600`, in a directory third parties cannot
+/// write.
 ///
-/// Verificabile solo perché la regola prende i permessi come parametri: un file
-/// creato da un test appartiene all'utente che esegue i test, mai a root.
+/// checkable only because the rule takes the permissions as parameters: a file
+/// created by a test belongs to whoever runs it, never to root.
 #[test]
 fn a_root_owned_private_file_is_trusted() {
     assert!(trust_verdict(0, 0o100600, Some(0o40755)).is_ok());
     assert!(trust_verdict(0, 0o100640, Some(0o40750)).is_ok());
 }
 
-/// Un file di un altro utente non guida operazioni distruttive.
+/// another user's file does not drive destructive operations.
 #[test]
 fn a_file_owned_by_someone_else_is_refused() {
     let err = trust_verdict(1000, 0o100600, Some(0o40755)).expect_err("uid non-root");
     assert!(err.contains("root"), "{err}");
 }
 
-/// Scrivibile da gruppo o da altri: chi può riscriverlo sceglie cosa cancelliamo.
+/// group- or world-writable: whoever can rewrite it chooses what we delete.
 #[test]
 fn a_world_or_group_writable_file_is_refused() {
     assert!(trust_verdict(0, 0o100666, Some(0o40755)).is_err());
     assert!(trust_verdict(0, 0o100620, Some(0o40755)).is_err());
 }
 
-/// La directory conta quanto il file: in una directory scrivibile da terzi il
-/// file si **sostituisce** senza bisogno di poterlo modificare.
+/// the directory matters as much as the file: in a world-writable one it can be
+/// **replaced** without being writable.
 #[test]
 fn a_file_in_a_world_writable_directory_is_refused() {
     let err = trust_verdict(0, 0o100600, Some(0o40777)).expect_err("directory aperta a tutti");
     assert!(err.contains("directory"), "{err}");
 }
 
-/// …a meno che non sia sticky: è esattamente ciò che lo sticky bit impedisce, e
-/// `/tmp` è il caso di tutti i giorni. Un controllo che rifiutasse anche questo
-/// bloccherebbe casi legittimi senza guadagnare nulla.
+/// …unless it is sticky, which is exactly what the sticky bit prevents, and
+/// `/tmp` is the everyday case. refusing that too would block legitimate cases
+/// for nothing.
 #[test]
 fn the_sticky_bit_makes_a_shared_directory_acceptable() {
     assert!(trust_verdict(0, 0o100600, Some(0o41777)).is_ok());

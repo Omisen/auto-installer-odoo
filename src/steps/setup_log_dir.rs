@@ -1,11 +1,11 @@
-//! [`SetupLogDir`]: crea la directory del logfile, **solo se** `ODOO_LOGFILE` è
-//! configurato.
+//! [`SetupLogDir`]: creates the log file's directory, **only if**
+//! `ODOO_LOGFILE` is set.
 //!
-//! Default di progetto: nessun logfile → Odoo logga su journal/stdout, quindi
-//! non c'è alcuna directory da creare e lo step è interamente `Untracked`/no-op.
+//! by default Odoo logs to journal/stdout, so there is nothing to create and
+//! the step is entirely `Untracked`.
 //!
-//! Gira **dopo** [`CreateOdooUser`](crate::steps::create_odoo_user), quindi
-//! l'utente `odoo` esiste già e la log dir può essere chownata a lui.
+//! runs **after** [`CreateOdooUser`](crate::steps::create_odoo_user), so the
+//! directory can be chowned to a user that exists.
 
 use tracing::{info, warn};
 
@@ -15,17 +15,17 @@ use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
-/// Permessi della log dir (owner rwx, group r-x, other ---).
+/// log directory permissions.
 const LOG_DIR_MODE: u32 = 0o750;
 
-/// Crea la directory del logfile (reversibile) se `ODOO_LOGFILE` è impostato.
+/// creates the log directory, reversibly, when `ODOO_LOGFILE` is set.
 pub struct SetupLogDir {
     ops: Box<dyn SystemOps>,
     prestate: PreState,
 }
 
 impl SetupLogDir {
-    /// Costruttore con `SystemOps` iniettabile (usato dai test con un mock).
+    /// constructor with injectable `SystemOps`, for the tests.
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -70,7 +70,7 @@ impl Step for SetupLogDir {
         };
         let user = &ctx.odoo_user;
 
-        // La dir esisteva già: non è nostra, non la tocchiamo (né owner né log).
+        // already there and not ours: left untouched.
         if self.prestate == PreState::Preexisting {
             info!(dir = %dir.display(), "run: log dir già presente, skip");
             return Ok(());
@@ -96,7 +96,7 @@ impl Step for SetupLogDir {
             return Ok(());
         }
 
-        // Se siamo CreatedByUs, il logfile e la sua dir sono sicuramente definiti.
+        // being `CreatedByUs` guarantees the log file and its dir are set.
         let dir = match ctx.odoo_logfile.as_ref().and_then(|f| f.parent()) {
             Some(dir) => dir,
             None => return Ok(()),
@@ -107,7 +107,7 @@ impl Step for SetupLogDir {
             return Ok(());
         }
 
-        // Rimuovi solo se vuota: mai cancellare log già scritti; niente rm -rf.
+        // only if empty: never delete logs already written.
         match self.ops.dir_is_empty(dir) {
             Ok(true) => match self.ops.rmdir(dir) {
                 Ok(()) => info!(dir = %dir.display(), "undo: log dir rimossa"),

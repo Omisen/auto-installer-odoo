@@ -1,5 +1,5 @@
-//! Test di lockfile (G5) e degrado del logging su file (G1), più le guardie
-//! su **dove** lock e log hanno diritto di vivere (A-V3-2).
+//! the lock file (G5) and the file logger's graceful degradation (G1), plus the
+//! guards on **where** they are allowed to live (A-V3-2).
 
 use std::path::{Path, PathBuf};
 
@@ -15,7 +15,7 @@ fn second_concurrent_lock_is_refused_and_released_on_drop() {
     let path = dir.path().join("installer.lock");
 
     let guard = lockfile::acquire(&path).expect("primo lock acquisito");
-    // Una seconda esecuzione (nuovo descriptor sullo stesso file) è rifiutata.
+    // a second run, a new descriptor on the same file, is refused.
     assert!(
         lockfile::acquire(&path).is_err(),
         "una seconda installazione deve essere rifiutata"
@@ -28,32 +28,31 @@ fn second_concurrent_lock_is_refused_and_released_on_drop() {
 #[test]
 fn log_file_open_degrades_without_failing() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // Percorso scrivibile → Some.
+    // a writable path yields a file.
     assert!(logging::try_open(&dir.path().join("installer.log")).is_some());
-    // Percorso non scrivibile → None (degrada, non panica).
+    // an unwritable one yields none: it degrades rather than panics.
     assert!(
         logging::try_open(Path::new("/proc/nonexistent-dir-xyz/installer.log")).is_none(),
         "un percorso non scrivibile deve degradare a None"
     );
 }
 
-// --- A-V3-2: lock e log non devono far nascere `/opt/odoo` -------------------
+// --- A-V3-2: the lock and the log must not create the home ------------------
 //
-// Il difetto stava tutto in `main`, fra pezzi che i test coprivano
-// singolarmente: `lockfile::acquire` creava `/opt/odoo` prima che il motore
-// partisse, e da lì `PrepareOptRoot` vedeva la directory come `Preexisting` —
-// undo NO-OP, `/opt/odoo` sopravvive a ogni rollback. Le tre guardie qui sotto
-// coprono le tre forme in cui il difetto può tornare: il percorso, la creazione
-// implicita, e l'ordine reale delle operazioni.
+// the defect lived entirely in `main`, between pieces each covered on its own:
+// acquiring the lock created the home before the engine started, so the first
+// step saw it as pre-existing, its undo became a no-op, and the directory
+// survived every rollback. the three guards below cover the three shapes the
+// defect can return in: the path, the implicit creation, and the real order of
+// operations.
 
-/// Guardia sul **percorso**: nessun artefatto di contabilità dell'installer può
-/// stare dentro il perimetro che il motore deve saper rimuovere.
+/// the **path** guard: no bookkeeping artifact may live inside the perimeter
+/// the engine has to remove.
 ///
-/// È la forma più diretta del difetto: basta riportare una di queste costanti
-/// sotto `/opt/odoo` e l'undo di `PrepareOptRoot` torna irraggiungibile — o
-/// perché la directory nasce prima del motore (lock, log), o perché all'ultimo
-/// undo la trova occupata (manifesto). Vale contro `config::ODOO_HOME`, che è
-/// dichiarata non sovrascrivibile.
+/// the most direct form of the defect: move any of these constants back under
+/// the home and the first step's undo becomes unreachable — either because the
+/// directory is born before the engine, or because the last undo finds it
+/// occupied.
 #[test]
 fn installer_bookkeeping_lives_outside_the_reversible_perimeter() {
     let home = Path::new(config::ODOO_HOME);
@@ -70,7 +69,7 @@ fn installer_bookkeeping_lives_outside_the_reversible_perimeter() {
         );
     }
 
-    // Il percorso storico invece ci sta dentro: è la ragione per cui è storico.
+    // the historical path does sit inside, which is why it is historical.
     assert!(
         Path::new(state::LEGACY_STATE_PATH).starts_with(home),
         "se il percorso storico non fosse più dentro {}, questa costante non \
@@ -79,16 +78,14 @@ fn installer_bookkeeping_lives_outside_the_reversible_perimeter() {
     );
 }
 
-/// Il manifesto storico resta **leggibile**: un'istanza installata da una
-/// versione precedente deve restare disinstallabile. Regola verificata con
-/// percorsi di prova, non contro il filesystem della macchina.
+/// the historical manifest stays **readable**: an instance installed by an
+/// earlier version must stay uninstallable. checked against fixture paths, not
+/// the machine's filesystem.
 #[test]
 fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
     let dir = tempfile::tempdir().expect("tempdir");
     let current = dir.path().join("var-lib-invok").join("state.json");
-    // I due posti storici, dal più recente al più vecchio: `odoo-installer` è
-    // dove scrivevano le versioni 2.2.0–2.4.0, `/opt/odoo` quelle fino alla
-    // 2.1.0. Il rename in `invok` ha aggiunto il primo.
+    // the two historical places, newest first: the rename added the first.
     let rinominato = dir.path().join("var-lib-odoo-installer").join("state.json");
     let storico = dir.path().join("opt-odoo").join(".installer-state.json");
     for p in [&current, &rinominato, &storico] {
@@ -96,11 +93,11 @@ fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
     }
     let legacy: Vec<&Path> = vec![&rinominato, &storico];
 
-    // Nessuno esiste → si nomina quello corrente, così il messaggio "nessuna
-    // installazione da annullare" indica dove l'utente deve guardare.
+    // none exists: name the current one, so the "nothing to undo" message
+    // points where the user should look.
     assert_eq!(state::pick_state_path(&current, &legacy), current);
 
-    // Solo il più vecchio esiste → si consuma quello (istanza pre-migrazione).
+    // only the oldest exists: that one is consumed.
     std::fs::write(&storico, b"{}").expect("write storico");
     assert_eq!(
         state::pick_state_path(&current, &legacy),
@@ -108,8 +105,8 @@ fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
         "un manifesto scritto da una versione precedente deve restare consumabile"
     );
 
-    // Esiste anche quello del nome precedente → vince il più recente dei due.
-    // È il caso REALE del rename: una macchina installata dalla 2.4.0.
+    // the previous name's manifest exists too: the more recent wins. the REAL
+    // rename case.
     std::fs::write(&rinominato, b"{}").expect("write rinominato");
     assert_eq!(
         state::pick_state_path(&current, &legacy),
@@ -117,18 +114,17 @@ fn the_legacy_manifest_is_still_found_when_the_current_one_is_absent() {
         "fra due manifesti storici si consuma il più recente"
     );
 
-    // Esiste il corrente → vince lui, sempre.
+    // the current one exists: it always wins.
     std::fs::write(&current, b"{}").expect("write current");
     assert_eq!(state::pick_state_path(&current, &legacy), current);
 }
 
-/// Il manifesto della versione `odoo-installer` è ancora nell'elenco storico.
+/// the pre-rename manifest is still in the historical list.
 ///
-/// Guardia esplicita perché la conseguenza di perderlo non è visibile qui: le
-/// macchine dei clienti non si rinominano insieme al repository, e un manifesto
-/// che smette di essere letto è un'istanza che nessuno sa più disinstallare
-/// senza indovinare i nomi degli artefatti — cioè la violazione dell'anti-drop
-/// per un'altra strada.
+/// an explicit guard, because losing it has no visible consequence here:
+/// customer machines are not renamed along with the repository, and a manifest
+/// that stops being read is an instance nobody can uninstall without guessing
+/// artifact names.
 #[test]
 fn the_pre_rename_manifest_path_is_still_read() {
     assert!(
@@ -151,8 +147,8 @@ fn the_pre_rename_manifest_path_is_still_read() {
     );
 }
 
-/// `clear` non deve rimuovere la directory genitrice di un `--state`
-/// qualunque: la pulizia è ristretta alla costante del progetto.
+/// clearing must not remove the parent of an arbitrary `--state`: the cleanup
+/// is restricted to the project's own constant.
 #[test]
 fn clear_does_not_remove_an_arbitrary_parent_directory() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -170,12 +166,11 @@ fn clear_does_not_remove_an_arbitrary_parent_directory() {
     );
 }
 
-/// Le due costanti devono essere coerenti, o la pulizia della directory è
-/// codice che non può eseguire — la firma ricorrente dei difetti di questo
-/// progetto (un controllo che non poteva fallire).
+/// the two constants must agree, or the directory cleanup is code that cannot
+/// execute — this project's recurring signature.
 ///
-/// Non si verifica il caso positivo eseguendo `clear` sul percorso reale: gli
-/// unici test che questo progetto esegue non toccano il sistema.
+/// the positive case is not exercised against the real path: these tests never
+/// touch the system.
 #[test]
 fn the_state_dir_constant_is_actually_the_parent_of_the_state_file() {
     assert_eq!(
@@ -186,9 +181,9 @@ fn the_state_dir_constant_is_actually_the_parent_of_the_state_file() {
     );
 }
 
-/// Guardia sulla **creazione implicita**: prendere un lock non deve far nascere
-/// directory. Anche con un percorso corretto, un `create_dir_all` di cortesia
-/// rimetterebbe in piedi il difetto il giorno in cui il percorso cambia.
+/// the **implicit creation** guard: taking a lock must not bring directories
+/// into existence. even with the right path, a courtesy `create_dir_all` would
+/// rebuild the defect the day the path changes.
 #[test]
 fn acquire_does_not_create_the_parent_directory() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -208,35 +203,35 @@ fn acquire_does_not_create_the_parent_directory() {
     );
 }
 
-/// Guardia sull'**ordine reale**: replica la sequenza di `run_install` — prima
-/// il lock, poi il motore — e verifica che `PrepareOptRoot` arrivi a
-/// `CreatedByUs` e che il suo undo rimuova davvero la directory.
+/// the **real order** guard: replays the install sequence — lock first, then
+/// the engine — and checks the first step reaches `CreatedByUs` and its undo
+/// really removes the directory.
 ///
-/// È il test che mancava: `tests/prepare_opt_root.rs` esercita lo step su una
-/// tempdir vergine, ma nessuno metteva il lockfile davanti al motore, che è
-/// esattamente ciò che succede in produzione.
+/// the missing test: the step's own file exercises it on a pristine tempdir,
+/// but nobody put the lock in front of the engine, which is exactly what
+/// happens in production.
 #[test]
 fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
     let root = tempfile::tempdir().expect("tempdir");
 
-    // `/run` finto: esiste già, è fuori dalla home, e non lo tocca nessuno.
+    // a fake runtime dir: already there, outside the home, untouched.
     let run_dir = root.path().join("run");
     std::fs::create_dir(&run_dir).expect("mkdir run");
     let lock_path = run_dir.join("invok.lock");
 
-    // `/opt/odoo` finto: NON esiste, come su una macchina vergine.
+    // a fake home that does NOT exist, as on a pristine machine.
     let home = root.path().join("opt").join("odoo");
     std::fs::create_dir(home.parent().expect("parent")).expect("mkdir opt");
     assert!(!home.exists());
 
-    // Ordine di `run_install`: prima il lock…
+    // the install order: the lock first…
     let _guard = lockfile::acquire(&lock_path).expect("lock acquisito");
     assert!(
         !home.exists(),
         "l'acquisizione del lock non deve aver creato la home"
     );
 
-    // …poi il motore.
+    // …then the engine.
     let ctx = Context {
         odoo_home: home.clone(),
         dry_run: false,
@@ -261,19 +256,18 @@ fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
     );
 }
 
-/// Il difetto originale, riprodotto per **contrasto**: se il lock vive dentro la
-/// home, l'undo diventa NO-OP e la directory sopravvive.
+/// the original defect, reproduced **by contrast**: with the lock inside the
+/// home, the undo becomes a no-op and the directory survives.
 ///
-/// Questo test non descrive un comportamento voluto — descrive il bug. Serve a
-/// dimostrare che le guardie sopra misurano qualcosa di reale: senza di esse
-/// questo è ciò che succedeva in produzione a ogni singola esecuzione.
+/// this does not describe wanted behaviour — it describes the bug, to show the
+/// guards above measure something real.
 #[test]
 fn lock_inside_the_home_is_what_made_the_undo_dead_code() {
     let root = tempfile::tempdir().expect("tempdir");
     let home = root.path().join("odoo");
     let lock_path = home.join(".installer.lock");
 
-    // Il vecchio `acquire` faceva esattamente questo, implicitamente.
+    // the old acquire did exactly this, implicitly.
     std::fs::create_dir_all(home.parent().expect("parent")).expect("mkdir");
     std::fs::create_dir(&home).expect("mkdir home");
     let _guard = lockfile::acquire(&lock_path).expect("lock acquisito");
@@ -297,9 +291,9 @@ fn lock_inside_the_home_is_what_made_the_undo_dead_code() {
     );
 }
 
-/// Il logger non deve creare la home: alla prima installazione `/opt/odoo` non
-/// esiste ancora, ed è per questo che A-R5-2 lasciava l'utente senza
-/// post-mortem su file. Con il log in `/var/log` il file nasce **subito**.
+/// the logger must not create the home: on a first installation it does not
+/// exist yet, which is why A-R5-2 left the user without a file post-mortem.
+/// outside it, the file appears **immediately**.
 #[test]
 fn log_does_not_depend_on_a_directory_the_installer_must_still_create() {
     let root = tempfile::tempdir().expect("tempdir");
@@ -307,12 +301,12 @@ fn log_does_not_depend_on_a_directory_the_installer_must_still_create() {
     let var_log = root.path().join("var-log");
     std::fs::create_dir(&var_log).expect("mkdir var-log");
 
-    // Un log dentro la home non nasce (è il vecchio comportamento)…
+    // a log inside the home never appears, the old behaviour…
     assert!(
         logging::try_open(&home.join(".installer.log")).is_none(),
         "senza la home, un log al suo interno non può nascere"
     );
-    // …uno fuori sì, e senza far comparire la home.
+    // …one outside does, without bringing the home into existence.
     assert!(logging::try_open(&var_log.join("invok.log")).is_some());
     assert!(!home.exists(), "aprire il log non deve creare la home");
 }

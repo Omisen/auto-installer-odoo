@@ -1,14 +1,13 @@
-//! Test di M11: **quale interprete** crea il virtualenv, e cosa ne consegue.
+//! M11: **which interpreter** builds the virtualenv, and what follows.
 //!
-//! Il difetto che questa fase chiude (`A-MD-7`) non è nel nostro codice ma nei
-//! pin di Odoo: su Python 3.14 — il sistema di Fedora ≥ 43 — Odoo 18 pinna
-//! `gevent==24.11.1`, che per quell'interprete non ha una wheel e il cui C
-//! generato non compila. M10 lo *dice*; M11 fa in modo che non succeda,
-//! facendo nascere il venv su un interprete che quei pin coprono.
+//! the defect this closes (A-MD-7) is not in our code but in Odoo's pins: on a
+//! newer system Python the pinned `gevent` has no wheel and its generated C
+//! does not compile. M10 *says* so; M11 makes it not happen, by building the
+//! venv on an interpreter those pins cover.
 //!
-//! Verificato in campo prima di scrivere una riga (VM Fedora 44): con
-//! `python3.13` l'intero `requirements.txt` si installa, `gevent` incluso e
-//! come wheel già compilata.
+//! verified in the field before a line was written: on the alternative
+//! interpreter the whole requirements file installs, `gevent` included and as a
+//! prebuilt wheel.
 
 mod common;
 
@@ -32,14 +31,13 @@ fn system_dev() -> Vec<String> {
     vec!["python3-devel".to_string()]
 }
 
-// --- La scelta ---------------------------------------------------------------
+// --- the choice -------------------------------------------------------------
 
-/// Un Python coperto dai pin non si tocca: nessun interprete in più, nessun
-/// pacchetto nel delta.
+/// a Python covered by the pins is left alone: no extra interpreter, nothing
+/// added to the delta.
 ///
-/// È la metà che rende M11 **invisibile** dove non serve — Debian, Ubuntu, e
-/// ogni Fedora fino alla 42. Una fase che cambiasse comportamento anche lì
-/// sarebbe una fase molto più rischiosa di quella che serviva.
+/// the half that makes M11 **invisible** where it is not needed. a phase that
+/// changed behaviour there too would have been far riskier than the one needed.
 #[test]
 fn a_supported_system_interpreter_is_left_alone() {
     let plan = choose_python(Some((3, 12)), &fedora_alternates(), &system_dev());
@@ -47,8 +45,8 @@ fn a_supported_system_interpreter_is_left_alone() {
     assert!(plan.is_system());
     assert_eq!(plan.command, "python3");
 
-    // Anche esattamente sulla soglia: «provato» vuol dire che lì si arriva in
-    // fondo, quindi non c'è niente da sostituire.
+    // exactly on the threshold too: "exercised" means installations reach the
+    // end there, so there is nothing to replace.
     let plan = choose_python(
         Some(NEWEST_TESTED_PYTHON),
         &fedora_alternates(),
@@ -60,12 +58,11 @@ fn a_supported_system_interpreter_is_left_alone() {
     );
 }
 
-/// Un Python più recente dei pin fa nascere il venv sull'interprete più recente
-/// **fra quelli coperti**, non sul più vecchio disponibile.
+/// a Python newer than the pins builds the venv on the newest **covered**
+/// interpreter, not the oldest available.
 ///
-/// La direzione conta: un interprete più vicino a quello di sistema riceve
-/// aggiornamenti di sicurezza più a lungo, e resta comunque dentro ciò che
-/// l'installer prova davvero.
+/// the direction matters: one closer to the system's gets security updates
+/// longer, while staying inside what the installer really exercises.
 #[test]
 fn an_unsupported_system_interpreter_is_replaced_by_the_newest_covered_one() {
     let plan = choose_python(Some((3, 14)), &fedora_alternates(), &system_dev());
@@ -84,12 +81,12 @@ fn an_unsupported_system_interpreter_is_replaced_by_the_newest_covered_one() {
     );
 }
 
-/// Se le uniche alternative sono a loro volta più recenti dei pin, non si
-/// installa niente: si resta sul sistema, e a parlare è l'avviso di M10.
+/// if the only alternatives are themselves newer than the pins, nothing is
+/// installed: we stay on the system one and the warning speaks.
 ///
-/// È il ramo che impedisce alla scelta di diventare «prendi comunque qualcosa»:
-/// installare un secondo interprete altrettanto scoperto sarebbe una mutazione
-/// su una macchina cliente in cambio di nulla.
+/// the branch that stops the choice becoming "take something anyway":
+/// installing a second, equally uncovered interpreter would mutate a customer's
+/// machine for nothing.
 #[test]
 fn an_alternate_that_is_just_as_new_is_not_a_solution() {
     let troppo_nuovi = vec![AlternatePython::new(
@@ -105,17 +102,17 @@ fn an_alternate_that_is_just_as_new_is_not_a_solution() {
     assert!(plan.packages.is_empty());
 }
 
-/// Nessuna alternativa impacchettata (Debian, Ubuntu) → si resta sul sistema.
+/// with no packaged alternative, we stay on the system interpreter.
 #[test]
 fn without_alternates_there_is_nothing_to_choose() {
     let plan = choose_python(Some((3, 14)), &[], &system_dev());
     assert!(plan.is_system());
 }
 
-/// «Non so che Python ci sia» non è «è troppo nuovo».
+/// "I do not know which Python is there" is not "it is too new".
 ///
-/// Da un'informazione assente non si conclude niente, e men che meno si
-/// installa un secondo interprete sulla macchina di un cliente.
+/// nothing is concluded from absent information, least of all installing a
+/// second interpreter on a customer's machine.
 #[test]
 fn an_unknown_system_interpreter_does_not_trigger_an_installation() {
     let plan = choose_python(None, &fedora_alternates(), &system_dev());
@@ -123,23 +120,23 @@ fn an_unknown_system_interpreter_does_not_trigger_an_installation() {
     assert!(plan.packages.is_empty());
 }
 
-// --- Le conseguenze sulla lista dei pacchetti --------------------------------
+// --- consequences for the package list --------------------------------------
 
 fn specs(names: &[&str]) -> Vec<PackageSpec> {
     names.iter().map(|n| PackageSpec::one(n)).collect()
 }
 
-/// Con l'interprete di sistema la lista dei pacchetti resta **identica**.
+/// with the system interpreter the package list is **unchanged**.
 #[test]
 fn the_package_list_is_untouched_when_the_system_interpreter_is_used() {
     let lista = specs(&["python3-devel", "gcc", "libpq-devel"]);
     assert_eq!(PythonPlan::default().adapt_specs(&lista), lista);
 }
 
-/// Con un interprete alternativo: fuori gli header di sistema, dentro i suoi.
+/// with an alternative one: the system headers out, its own in.
 ///
-/// Il resto della lista non si tocca — `gcc` e `libpq-devel` servono comunque,
-/// e le estensioni C che pip compila sono le stesse.
+/// the rest of the list is untouched — the compiler and the client headers are
+/// still needed, and the extensions pip builds are the same.
 #[test]
 fn the_alternate_interpreter_replaces_the_system_headers_and_nothing_else() {
     let plan = choose_python(Some((3, 14)), &fedora_alternates(), &system_dev());
@@ -161,7 +158,7 @@ fn the_alternate_interpreter_replaces_the_system_headers_and_nothing_else() {
     );
 }
 
-// --- Le conseguenze sugli step -----------------------------------------------
+// --- consequences for the steps ---------------------------------------------
 
 fn ctx_with(plan: PythonPlan) -> Context {
     Context {
@@ -182,13 +179,11 @@ fn installed(ops: &[Op]) -> Vec<String> {
         .collect()
 }
 
-/// L'interprete lo installa `install-system-dependencies`, il cui undo **purga
-/// il delta**.
+/// the interpreter is installed by the step whose undo **purges the delta**.
 ///
-/// Non `bootstrap-prerequisites`: lì l'undo lascia installato ciò che ha
-/// aggiunto (git, curl, le utility comuni), e un interprete da 43 MB messo da
-/// noi e mai rimosso sarebbe un residuo dentro il perimetro che il rollback
-/// promette di riportare com'era.
+/// not the bootstrap one, whose undo leaves what it added installed: a 43 MB
+/// interpreter put there by us and never removed would be a leftover inside the
+/// perimeter the rollback promises to restore.
 #[test]
 fn the_interpreter_is_installed_by_the_step_whose_undo_purges_it() {
     let plan = choose_python(Some((3, 14)), &fedora_alternates(), &system_dev());
@@ -215,11 +210,12 @@ fn the_interpreter_is_installed_by_the_step_whose_undo_purges_it() {
     );
 }
 
-/// Il venv nasce sull'interprete scelto, e la precondizione interroga **quello**.
+/// the venv is built on the chosen interpreter, and the precondition questions
+/// **that one**.
 ///
-/// Sono la stessa domanda posta due volte, e devono avere la stessa risposta:
-/// chiedere di `ensurepip` a `python3` e poi creare il venv con `python3.13`
-/// sarebbe di nuovo un controllo che parla di un'altra cosa (A-R6-1).
+/// the same question asked twice must have the same answer: asking one
+/// interpreter and then building with another would again be a check that talks
+/// about something else (A-R6-1).
 #[test]
 fn the_virtualenv_is_born_on_the_chosen_interpreter() {
     let plan = choose_python(Some((3, 14)), &fedora_alternates(), &system_dev());
@@ -240,14 +236,12 @@ fn the_virtualenv_is_born_on_the_chosen_interpreter() {
     );
 }
 
-/// La diagnosi di A-MD-7 interroga l'interprete **del venv**, non quello di
-/// sistema.
+/// A-MD-7's diagnosis questions the **venv's** interpreter, not the system's.
 ///
-/// Dopo M11 i due possono divergere, ed è il caso normale su Fedora ≥ 43: se il
-/// venv gira su 3.13 e qualcosa non compila, dire «questo sistema usa Python
-/// 3.14» manderebbe a cercare una causa che non c'è. È la stessa forma del
-/// difetto che M11 corregge, un livello più in là — e senza registrare *quale*
-/// nome viene interrogato nessun test potrebbe vederla.
+/// the two can now diverge, and naming the wrong one would send the reader
+/// looking for a cause that is not there. the same shape of defect M11
+/// corrects, one level further — and without recording *which* name is asked,
+/// no test could see it.
 #[test]
 fn the_failure_diagnosis_asks_the_interpreter_the_venv_actually_uses() {
     let plan = choose_python(Some((3, 14)), &fedora_alternates(), &system_dev());
@@ -277,14 +271,13 @@ fn the_failure_diagnosis_asks_the_interpreter_the_venv_actually_uses() {
     );
 }
 
-/// Fedora deve offrire **almeno un** interprete coperto dai pin, o M11 su
-/// Fedora non fa niente in silenzio.
+/// the family must offer **at least one** interpreter covered by the pins, or
+/// M11 silently does nothing there.
 ///
-/// È la domanda di rito applicata a una tabella invece che a un controllo: in
-/// produzione, su una Fedora 44, questa lista può portare a una scelta diversa
-/// da «resta sul sistema»? Se un domani `NEWEST_TESTED_PYTHON` salisse o la
-/// lista si svuotasse, il codice continuerebbe a funzionare e non
-/// installerebbe più nulla — e nessun rosso lo direbbe.
+/// the ritual question applied to a table rather than a check: in production,
+/// can this list lead to a choice other than "stay on the system one"? if the
+/// constant rose or the list emptied, the code would keep working and install
+/// nothing — with no red to say so.
 #[test]
 fn fedora_offers_at_least_one_interpreter_covered_by_the_pins() {
     use invok::checks::python_is_newer_than_tested;
@@ -304,7 +297,8 @@ fn fedora_offers_at_least_one_interpreter_covered_by_the_pins() {
         "nessuna delle alternative è coperta dai pin: la scelta ripiegherebbe \
          sempre sull'interprete di sistema"
     );
-    // E ogni alternativa porta i suoi header: l'interprete da solo non compila.
+    // and every alternative carries its headers: the interpreter alone builds
+    // nothing.
     for alt in &catalog.alternate_pythons {
         assert!(
             alt.devel.starts_with(&alt.interpreter),

@@ -1,11 +1,11 @@
-//! Entry point: dispatch fra i due comandi dell'installer.
+//! entry point: dispatch between the installer's two commands.
 //!
-//! - **senza sottocomando** → installazione. Flusso: parse CLI → carica `.env`
-//!   (se presente) → prompt interattivi (se TTY) → risolvi la cascata → conferma
-//!   password 'admin' se serve → costruisci il [`Context`] → preflight → esegui
-//!   gli step con rollback automatico in caso di errore.
-//! - **`rollback`** (alias `uninstall`) → annulla un'installazione a partire
-//!   dallo stato persistito. Vedi [`invok::rollback`].
+//! - **no subcommand** → install: parse the CLI, load the `.env`, prompt when
+//!   there is a TTY, resolve the cascade, build the [`Context`], run the
+//!   preflight checks, then execute the steps with automatic rollback on
+//!   error.
+//! - **`rollback`** (alias `uninstall`) → undo an installation from the
+//!   persisted state. see [`invok::rollback`].
 
 use std::path::{Path, PathBuf};
 
@@ -27,21 +27,20 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
         Some(Command::Rollback(args)) => run_rollback(args),
-        // Nessun sottocomando: installazione, come è sempre stato.
+        // no subcommand: install, as it has always been.
         None => run_install(&cli),
     }
 }
 
-// --- Installazione -----------------------------------------------------------
+// --- installation -----------------------------------------------------------
 
 fn run_install(cli: &Cli) -> Result<()> {
-    // Logging TTY + file (degrada senza root; niente file in dry-run). Il guard
-    // va tenuto in vita per tutta l'esecuzione.
+    // the guard must stay alive for the whole run.
     let _log_guard = invok::logging::init(cli.dry_run);
 
     let interactive = prompt::is_interactive();
 
-    // Sorgenti grezze: CLI e (opzionale) file .env — parsato, mai eseguito.
+    // raw sources: the CLI and the optional `.env`, parsed and never run.
     let cli_raw = RawConfig::from_cli(cli);
     let env_raw = match &cli.config {
         Some(path) => {
@@ -52,7 +51,7 @@ fn run_install(cli: &Cli) -> Result<()> {
         None => RawConfig::default(),
     };
 
-    // Prompt interattivi solo per i campi non passati da CLI (vuoto se non TTY).
+    // prompts only for fields not passed on the CLI; empty without a TTY.
     let prompted = if interactive {
         prompt::collect(&cli_raw, &env_raw)?
     } else {
@@ -60,12 +59,10 @@ fn run_install(cli: &Cli) -> Result<()> {
         RawConfig::default()
     };
 
-    // Cascata + validazione (pura).
     let resolved = ResolvedConfig::resolve(&cli_raw, &env_raw, &prompted, interactive)
         .map_err(|e| anyhow!(e))?;
 
-    // Conferma interattiva della password debole 'admin' (l'hard-stop
-    // non-interattivo è già stato applicato dentro `resolve`).
+    // the non-interactive hard stop already ran inside `resolve`.
     if let AdminConfirm::ConfirmNeeded =
         config::check_admin_password(resolved.admin_passwd.expose(), interactive)?
     {
@@ -77,8 +74,8 @@ fn run_install(cli: &Cli) -> Result<()> {
         }
     }
 
-    // Si lavora sul manifesto che si **trova**: quello corrente, o quello al
-    // percorso storico se è l'unico presente (istanza installata prima di R7).
+    // work on the manifest we **find**: the current path, or a historical one
+    // when that is the only one there.
     let state_path = invok::state::resolve_state_path();
     let mut ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
     ctx.aggressive_rollback = cli.aggressive_rollback;
@@ -86,22 +83,19 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     print_configuration(&ctx);
 
-    // L'OS si legge **prima** di ogni altra cosa, perché da qui esce la famiglia
-    // e dalla famiglia escono i backend con cui gli step sono costruiti. È una
-    // lettura pura di `/etc/os-release`: non muta nulla e non richiede root,
-    // quindi può stare anche prima del ramo `--dry-run`, che della famiglia ha
-    // comunque bisogno per costruire il piano.
+    // the OS is read **first**: the family comes from here, and the backends
+    // the steps are built with come from the family. a pure read that needs no
+    // root, so it can precede the `--dry-run` branch, which needs the family
+    // too.
     //
-    // NON si intromette fra i tre preflight di A-R9-1 (`check_caller` →
-    // `decide_start` → `run_environment_checks`): sta sopra tutti, non dipende
-    // dal manifesto e il suo errore non è confondibile con un altro problema.
+    // it does not sit between A-R9-1's three preflights: it is above all of
+    // them, depends on no manifest, and its error is unmistakable.
     let os_info = checks::check_os().map_err(|e| anyhow!(e))?;
     ctx.os_family = os_info.family;
 
-    // I backend per questa famiglia. Il `None` si gestisce **una volta**, qui,
-    // con un messaggio: da lì in poi la fabbrica non può fallire, ed è ciò che
-    // rende possibile costruire gli step senza che nessuno di loro debba sapere
-    // su che distribuzione sta girando.
+    // the backends for this family. `None` is handled **once**, here: from then
+    // on the factory cannot fail, which is what lets the steps be built without
+    // any of them knowing which distribution they run on.
     let make_ops = invok::system_ops::backend_factory(ctx.os_family).ok_or_else(|| {
         anyhow!(
             "questa versione dell'installer non ha un backend per la famiglia '{}': \
@@ -110,25 +104,20 @@ fn run_install(cli: &Cli) -> Result<()> {
         )
     })?;
 
-    // L'interprete su cui nascerà il venv (M11). Sta QUI, e l'ordine conta:
-    // dopo `check_os` — serve la famiglia per sapere quali interpreti
-    // alternativi esistono — e prima di ogni step, perché due step diversi
-    // devono leggere la stessa risposta. È una query, non una mutazione:
-    // interroga il gestore di pacchetti e l'interprete di sistema, e nel caso
-    // peggiore (indice cieco) ripiega su ciò che si faceva prima di M11.
+    // the venv's interpreter (M11). the order matters: after `check_os`, which
+    // supplies the family, and before any step, because two of them must read
+    // the same answer. a query, not a mutation.
     ctx.python = checks::plan_python(make_ops().as_ref());
 
     let mut steps = steps::build_steps(&make_ops);
 
-    // --- dry-run: mostra il piano, non muta nulla, non persiste stato ---------
-    // Il piano non ha progresso da mostrare: solo log.
+    // --- dry-run: print the plan, mutate nothing, persist nothing -----------
     if ctx.dry_run {
         println!("=== PIANO (dry-run) — nessuna modifica al sistema ===");
-        // Il piano **interroga** il sistema: ogni step fa il proprio snapshot, e
-        // alcuni chiedono a PostgreSQL passando da `sudo`. Senza privilegi
-        // quelle domande non ottengono risposta e lo step viene saltato, quindi
-        // il piano è vero ma incompleto — meglio dirlo prima che l'utente lo
-        // scopra da una riga di warning in mezzo all'output (A-V3-11).
+        // the plan **interrogates** the system, and some snapshots go through
+        // `sudo`. unprivileged, those steps are skipped, so the plan is true
+        // but incomplete — better said upfront than found in a stray warning
+        // (A-V3-11).
         if !checks::running_as_root() {
             println!(
                 "Nota: senza sudo alcuni step non possono ispezionare il sistema (PostgreSQL, \n\
@@ -141,42 +130,35 @@ fn run_install(cli: &Cli) -> Result<()> {
         return Ok(());
     }
 
-    // I preflight girano in DUE gruppi, e l'ordine fra loro non è cosmetico
-    // (A-R9-1, trovato dalla CI di integrazione).
+    // the preflights run in TWO groups, and the order between them is not
+    // cosmetic (A-R9-1, found by the integration CI).
     //
-    // Prima **chi** sta eseguendo: root e sudo. Serve subito, perché il manifesto
-    // è `0600 root` e senza questo controllo un utente non privilegiato
-    // leggerebbe «permission denied» su un file di cui non sa nulla.
+    // first **who** is running: root and sudo. needed at once, because the
+    // manifest is `0600 root` and without this an unprivileged user would read
+    // "permission denied" on a file they know nothing about.
     checks::check_caller().map_err(|e| anyhow!(e))?;
 
-    // Poi **se** questa esecuzione debba avvenire: manifesto già sul disco →
-    // prima installazione, resume o rifiuto (A-V3-1). Legge il disco e basta;
-    // l'unica mutazione che ne discende (archiviare il manifesto per `--force`)
-    // avviene dopo la conferma e dopo il lock.
+    // then **whether** this run should happen at all: fresh install, resume or
+    // refusal (A-V3-1). a disk read only.
     //
-    // Sta **prima** dei check d'ambiente, e ci è finito dopo che la CI ha
-    // mostrato perché: reinstallare sopra un'istanza funzionante significa avere
-    // Odoo in ascolto sulla porta, quindi `check_ports` falliva per primo e
-    // questo controllo non veniva raggiunto mai — proprio nello scenario per cui
-    // esiste. L'utente si vedeva dire «libera la porta», cioè "ferma Odoo",
-    // invece di «esiste già un'installazione: usa rollback o --force».
-    // Una porta occupata è una **conseguenza** dell'installazione esistente:
-    // diagnosticare la conseguenza al posto della causa manda a sistemare la
-    // cosa sbagliata.
+    // **before** the environment checks, and the CI showed why: reinstalling
+    // over a working instance means Odoo is holding the port, so `check_ports`
+    // failed first and this check was never reached — in the very scenario it
+    // exists for. the user was told to free the port, i.e. to stop Odoo,
+    // instead of to use `rollback` or `--force`. a busy port is a
+    // **consequence** of the existing installation, not its cause.
     let start = decide_start(&ctx, cli.force)?;
 
-    // Infine **se la macchina può ospitarla**: OS, disco, porte, comandi.
+    // finally **whether the machine can host it**: OS, disk, ports, commands.
     //
-    // Il controllo sulla porta si salta quando a occuparla siamo noi: in un
-    // resume il manifesto dice se `setup-systemd` era già passato, e in quel caso
-    // il servizio in ascolto è quello che stiamo per finire di installare. Senza
-    // questa eccezione un'installazione interrotta dopo lo step 17 non sarebbe
-    // più riprendibile — il resume di R8 morirebbe sul suo stesso servizio.
+    // the port check is skipped when we are the ones holding it: in a resume
+    // the manifest says whether `setup-systemd` had run, and without that
+    // exception an installation interrupted after it could never be resumed.
     let port_is_ours = matches!(&start, Start::Resume(state) if state.owns_the_http_port());
     run_environment_checks(&ctx, port_is_ours, &make_ops)?;
     ctx.os_info = Some(os_info);
 
-    // Conferma finale interattiva prima di mutare il sistema.
+    // final interactive confirmation before mutating anything.
     let question = match &start {
         Start::Fresh => "Procedere con l'installazione?",
         Start::Resume(_) => "Riprendere l'installazione interrotta?",
@@ -188,34 +170,28 @@ fn run_install(cli: &Cli) -> Result<()> {
 
     print_interrupt_notice(&ctx.state_path);
 
-    // Da qui in poi un Ctrl-C non uccide più il processo: alza un flag che il
-    // motore osserva fra uno step e l'altro, e l'installazione si annulla da
-    // sé (B-V3-5). Registrato **dopo** la conferma e prima delle mutazioni:
-    // prima non servirebbe — non c'è niente da annullare — e il comportamento
-    // di default (uscita immediata) è quello che l'utente si aspetta.
+    // from here a Ctrl-C raises a flag the engine watches between steps, and
+    // the installation undoes itself (B-V3-5). registered after the
+    // confirmation and before the mutations: earlier there is nothing to undo,
+    // and immediate exit is what the user expects.
     let interrupted = invok::interrupt::install();
 
-    // Lock esclusivo: impedisce due installazioni simultanee. Il guard rilascia
-    // il lock al Drop (successo, errore o panic). Acquisito dopo i check e prima
-    // di ogni mutazione.
+    // exclusive lock against concurrent installations, released on `Drop`.
+    // taken after the checks and before any mutation.
     let _lock = invok::lockfile::acquire(Path::new(invok::lockfile::DEFAULT_LOCK_PATH))
         .map_err(|e| anyhow!(e))?;
 
-    // Reporter: barra `indicatif` solo con TTY interattivo (in dry-run non si
-    // arriva qui). Costruito **qui**, non prima: `IndicatifReporter` avvia un
-    // ticker che ridisegna la barra su stderr, e `inquire` scrive sullo stesso
-    // stream — una barra viva durante un prompt gli cancella la riga sotto il
-    // naso e l'eco della risposta finisce su un'altra riga. Il progresso nasce
-    // quando c'è progresso da mostrare: dopo l'ultima domanda.
+    // built **here**, not earlier: the bar's ticker redraws on stderr, the same
+    // stream `inquire` uses, so a live bar during a prompt erases the user's
+    // line. progress starts once there is progress to show.
     let reporter: Box<dyn ProgressReporter> = if interactive {
         Box::new(IndicatifReporter::new(steps.len()))
     } else {
         Box::new(LogReporter)
     };
 
-    // `--force`: il manifesto precedente si sposta di lato, mai si cancella. Qui
-    // e non prima: è una mutazione, e le mutazioni stanno dopo la conferma e
-    // dopo il lock.
+    // `--force` moves the previous manifest aside, never deletes it. here
+    // because it is a mutation, and those come after the confirm and the lock.
     let mut installer = match start {
         Start::Fresh => Installer::new(),
         Start::Resume(state) => Installer::resuming_from(*state),
@@ -238,17 +214,14 @@ fn run_install(cli: &Cli) -> Result<()> {
     installer
         .execute_with_reporter(&mut steps, &ctx, reporter.as_ref())
         .map_err(|e| {
-            // Il rollback in-process è già stato eseguito dentro `execute`.
+            // the in-process rollback already ran inside `execute`.
             anyhow!(e)
         })?;
 
-    // Installazione riuscita: lo stato viene marcato come concluso e **resta sul
-    // disco**. Non è un file stantìo — è il manifesto di disinstallazione: dice
-    // cosa abbiamo creato e cosa abbiamo trovato già presente, e senza di esso
-    // `invok rollback` non avrebbe modo di rimuovere questa istanza in
-    // un secondo momento (A-R5-1). Fallire qui non annulla un'installazione
-    // riuscita: si segnala e si prosegue, con il costo dichiarato.
-    // In dry-run non si arriva qui (return anticipato) e nulla è stato scritto.
+    // on success the state is marked finished and **stays on disk**: it is the
+    // uninstall manifest, without which this instance could not be removed
+    // later (A-R5-1). failing here does not undo a successful installation, so
+    // we report and carry on.
     if let Err(e) = installer.mark_finished(&ctx) {
         tracing::warn!(
             path = %ctx.state_path.display(),
@@ -263,32 +236,32 @@ fn run_install(cli: &Cli) -> Result<()> {
     Ok(())
 }
 
-/// Da dove parte questa esecuzione.
+/// where this run starts from.
 ///
-/// È una **decisione**, non un'azione: `decide_start` la calcola leggendo il
-/// disco e nient'altro, così può essere presa prima della conferma interattiva
-/// e prima del lock. L'unica mutazione che ne discende — archiviare il manifesto
-/// per `--force` — avviene dopo entrambi, insieme a tutte le altre.
+/// a **decision**, not an action: computed by reading the disk and nothing
+/// else, so it can be taken before the confirmation and before the lock.
 enum Start {
-    /// Nessun manifesto utile: prima installazione.
+    /// no usable manifest: first installation.
     Fresh,
-    /// Manifesto parziale compatibile: si riprende da dove si era arrivati.
-    /// `Box` perché [`InstallState`] porta l'intero elenco degli step: senza,
-    /// ogni variante dell'enum peserebbe quanto il manifesto.
+    /// compatible partial manifest: resume where it stopped.
+    ///
+    /// `Box`ed because [`InstallState`] carries the whole step list, which
+    /// would otherwise size every variant of the enum.
     Resume(Box<InstallState>),
-    /// `--force` su un manifesto esistente: si reinstalla da capo dopo averlo
-    /// messo da parte.
+    /// `--force` over an existing manifest: archive it and start over.
     Replace,
 }
 
-/// Applica la politica di avvio (A-V3-1) e ne formatta l'esito per l'utente.
+/// applies the start policy (A-V3-1) and formats its outcome for the user.
 ///
-/// La **regola** non sta qui: sta in [`invok::state::start_decision`],
-/// pura e verificabile senza filesystem. Qui restano le due cose che sono
-/// davvero di `main`: leggere il manifesto dal disco e trasformare un rifiuto in
-/// un messaggio che dica all'utente cosa fare. La separazione è deliberata —
-/// A-V3-1 è nato proprio da una decisione che viveva in `main`, dove nessun test
-/// arriva.
+/// the **rule** lives in [`invok::state::start_decision`], pure and checkable
+/// without a filesystem. what stays here is what is genuinely `main`'s: reading
+/// the manifest and turning a refusal into an actionable message. A-V3-1 was
+/// born from a decision that lived in `main`, where no test reaches.
+///
+/// # errors
+///
+/// a refusal, carrying the message to show.
 fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
     let state = InstallState::load(&ctx.state_path).map_err(|e| anyhow!(e))?;
     let richiesta = InstallConfig::from_context(ctx);
@@ -373,11 +346,15 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
     }
 }
 
-/// Sposta il manifesto di lato invece di lasciarlo sovrascrivere (`--force`).
+/// moves the manifest aside rather than letting it be overwritten (`--force`).
 ///
-/// Non si cancella mai: se quell'installazione aveva creato artefatti, questo
-/// file è l'**unica** traccia di quali fossero. Il nome porta l'istante per non
-/// sovrascrivere un archivio precedente.
+/// never deleted: if that installation created artifacts, this file is the
+/// **only** record of which. the name carries a timestamp so it cannot
+/// overwrite an earlier archive.
+///
+/// # errors
+///
+/// propagates the rename failure.
 fn archive_manifest(path: &Path) -> Result<PathBuf> {
     let stamp = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -391,18 +368,19 @@ fn archive_manifest(path: &Path) -> Result<PathBuf> {
     Ok(target)
 }
 
-/// Check d'**ambiente**: la macchina può ospitare questa installazione?
+/// **environment** checks: can this machine host the installation?
 ///
-/// Non mutano nulla e falliscono prima di ogni mutazione. Sono separati dai
-/// check sul chiamante ([`checks::check_caller`]) perché rispondono a una domanda
-/// diversa e vanno fatti in un momento diverso: *chi sei* si sa subito, *se la
-/// macchina è adatta* ha senso chiederlo solo dopo aver stabilito che questa
-/// installazione debba avvenire (A-R9-1).
+/// they mutate nothing and fail before any mutation. separate from the caller
+/// checks ([`checks::check_caller`]) because they answer a different question
+/// at a different moment (A-R9-1).
 ///
-/// `port_is_ours` salta il controllo sulla porta: in un resume il servizio in
-/// ascolto è il nostro, e rifiutarsi di proseguire per un conflitto con noi
-/// stessi renderebbe irriprendibile proprio l'installazione che stiamo
-/// riprendendo.
+/// `port_is_ours` skips the port check: in a resume the listening service is
+/// ours, and refusing over a conflict with ourselves would make the very
+/// installation being resumed unresumable.
+///
+/// # errors
+///
+/// the first failing check.
 fn run_environment_checks(
     ctx: &Context,
     port_is_ours: bool,
@@ -420,9 +398,8 @@ fn run_environment_checks(
             "porta occupata dal servizio della stessa installazione: controllo saltato (resume)"
         );
     } else {
-        // Se nginx sta già servendo, la 80 è sua: non è un conflitto, è il
-        // programma che stiamo per configurare (A-V3-15). La domanda si fa solo
-        // quando serve davvero.
+        // if nginx is already serving, port 80 is its own: not a conflict but
+        // the program we are about to configure (A-V3-15).
         let nginx_already_serving = ctx.with_nginx && make_ops().service_is_active("nginx");
         checks::check_ports(ctx.port, ctx.with_nginx, nginx_already_serving)
             .map_err(|e| anyhow!(e))?;
@@ -432,8 +409,7 @@ fn run_environment_checks(
     Ok(())
 }
 
-/// Stampa il riepilogo della configurazione finale (replica di
-/// `print_installation_configuration` del Bash). Non stampa mai la password.
+/// prints the resolved configuration. never prints the password.
 fn print_configuration(ctx: &Context) {
     let admin_line = if ctx.admin_passwd.expose() == "admin" {
         "default 'admin' (consentito solo con conferma esplicita; sconsigliato)".to_string()
@@ -462,11 +438,10 @@ fn print_configuration(ctx: &Context) {
     println!();
 }
 
-/// Riepilogo di fine installazione: cosa è stato creato e come toccarlo (B2).
+/// end-of-installation summary: what was created and how to touch it (B2).
 ///
-/// Chiude la metà mancante di B2: il rollback aveva già il suo report da R4,
-/// l'installazione riuscita finiva invece con una riga di log. Qui l'utente
-/// trova, in un posto solo, dove sono le cose e i due comandi che gli servono.
+/// the rollback had its report since R4, while a successful installation ended
+/// with a single log line.
 fn print_install_summary(ctx: &Context) {
     let unit = format!("odoo{}", ctx.odoo_version_short);
     println!();
@@ -507,15 +482,11 @@ fn print_install_summary(ctx: &Context) {
     println!();
 }
 
-/// Avviso preventivo su cosa fare se l'installazione viene interrotta.
+/// tells the user, up front, what happens if the run is interrupted.
 ///
-/// Il rollback automatico copre i **fallimenti** di uno step, non le
-/// interruzioni: un Ctrl-C uccide il processo prima che la gestione dell'errore
-/// giri, e il sistema resta con gli artefatti a metà. Da R4 esiste la via
-/// d'uscita — il file di stato è scritto dopo ogni step e `invok
-/// rollback` lo consuma — ma serve saperlo *prima* di premere Ctrl-C, non
-/// dopo. Un handler SIGINT che stampi il messaggio al momento giusto è
-/// pianificato a parte (vedi audit R4).
+/// since R18 a Ctrl-C rolls back on its own, and a **second** one exits at once
+/// leaving the system half-done. that is worth knowing *before* pressing it,
+/// not after.
 fn print_interrupt_notice(state_path: &Path) {
     println!(
         "Nota: puoi interrompere con Ctrl-C. L'installer **annulla da sé** quello che ha \n\
@@ -534,14 +505,13 @@ fn print_interrupt_notice(state_path: &Path) {
     );
 }
 
-// --- Rollback da stato persistito (R4) ---------------------------------------
+// --- rollback from persisted state (R4) -------------------------------------
 
 fn run_rollback(args: &RollbackArgs) -> Result<()> {
     let _log_guard = invok::logging::init(args.dry_run);
 
-    // Senza `--state`, il manifesto si cerca prima dove lo scriviamo oggi e poi
-    // dove lo scriveva la 2.1.0: un'istanza installata da una versione
-    // precedente deve restare disinstallabile.
+    // without `--state`, look where we write today and then where older
+    // versions did: an older instance must stay uninstallable.
     let state_path = args
         .state
         .clone()
@@ -549,8 +519,8 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
 
     let state = InstallState::load(&state_path).map_err(|e| anyhow!(e))?;
 
-    // Nessuno stato = niente da annullare. È la condizione normale su una
-    // macchina pulita o dopo un rollback già completato: non è un errore.
+    // no state means nothing to undo: the normal condition on a clean machine
+    // or after a completed rollback, not an error.
     if state.completed.is_empty() {
         println!(
             "Nessuna installazione da annullare: {} non esiste o non registra alcuno step.",
@@ -559,11 +529,9 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Senza la configurazione persistita non si sa *quale* utente, *quale*
-    // database, *quale* directory annullare — e indovinarli dai default
-    // significherebbe rischiare di droppare un database che non abbiamo creato
-    // noi. Meglio fermarsi ed elencare cosa c'è, così la pulizia manuale è
-    // almeno informata.
+    // without the persisted config we do not know *which* user, database or
+    // directory to undo, and guessing from the defaults risks dropping a
+    // database we never created. better to stop and list what is there.
     let Some(config) = state.config.clone() else {
         eprintln!(
             "Il file di stato {} è stato scritto da una versione precedente dell'installer e \n\
@@ -583,13 +551,9 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         );
     };
 
-    // L'ha scritto un installer diverso da questo? (A-V3-16)
-    //
-    // Non è un rifiuto: il rollback resta best-effort e deve funzionare anche
-    // così. È l'informazione che mancava al warning «step sconosciuto a questo
-    // binario», che finora diceva *cosa* senza poter dire *perché*. Va detta
-    // PRIMA di iniziare, non nel report finale: chi legge deve poter fermarsi e
-    // usare la versione giusta invece di scoprirlo a rollback fatto.
+    // written by a different installer? (A-V3-16) not a refusal, but the
+    // context the "unknown step" warning lacked — and said BEFORE starting, so
+    // the reader can stop and use the right version.
     if let Some(nota) = state::version_mismatch_note(
         config.installer_version.as_deref(),
         invok::INSTALLER_VERSION,
@@ -597,31 +561,23 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         tracing::warn!("{nota}");
     }
 
-    // Il manifesto descrive un'installazione di QUESTO installer? (A-V3-8)
-    //
-    // Da qui in poi ogni percorso che guiderà un `rm -rf`, un `dropdb` o un
-    // `userdel` arriva da questo file, e `--state` accetta qualunque percorso.
-    // L'unico ancoraggio possibile è un valore che dal file NON arriva:
-    // `ODOO_HOME`, che è costante e non sovrascrivibile. Prima di ogni altra
-    // cosa, e prima di stampare un riepilogo che darebbe per buono ciò che
-    // c'è scritto.
+    // does the manifest describe an installation of THIS installer? (A-V3-8)
+    // every path that will drive an `rm -rf`, a `dropdb` or a `userdel` comes
+    // from this file, and `--state` accepts any path. the only anchor is a
+    // value that does NOT come from it: `ODOO_HOME`.
     config.validate_perimeter().map_err(|e| anyhow!(e))?;
 
-    // E il file stesso è una fonte fidata? Solo per un rollback reale: il
-    // dry-run stampa soltanto, e poter ispezionare un manifesto copiato altrove
-    // è comodo.
+    // and is the file itself trustworthy? only for a real rollback: a dry run
+    // merely prints, and inspecting a copied manifest is useful.
     if !args.dry_run {
         state::ensure_trustworthy(&state_path).map_err(|e| anyhow!(e))?;
     }
 
-    // Con quale famiglia stiamo per lavorare, e il sistema è d'accordo?
-    //
-    // La famiglia si LEGGE dal manifesto e si usa quella: è lei a dire con quali
-    // comandi gli artefatti sono stati creati. Il sistema si legge solo per
-    // AVVISARE — mai per decidere — perché un manifesto pre-2.3 ricade sul
-    // default `Debian` e `--state` accetta il manifesto di un'altra macchina.
-    // Loggare la famiglia non è decorativo: un default che nessuno vede è un
-    // default che nessuno può smentire.
+    // the family is READ from the manifest and used: it says which commands
+    // created those artifacts. the system is read only to WARN, never to
+    // decide, because a pre-2.3 manifest falls back to `Debian` and `--state`
+    // accepts another machine's manifest. logging it is not decorative: a
+    // default nobody sees is a default nobody can contradict.
     tracing::info!(famiglia = %config.os_family, "rollback: famiglia letta dal manifesto");
     let detected = checks::os_id_from(Path::new(checks::OS_RELEASE_PATH))
         .and_then(|id| invok::distro::OsFamily::from_os_id(&id));
@@ -630,10 +586,9 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         eprintln!("Attenzione: {avviso}");
     }
 
-    // I backend con cui gli `undo` lavoreranno: scelti dalla famiglia **del
-    // manifesto**, non da questa macchina. Se questo binario non ne ha uno, ci
-    // si ferma qui invece di eseguire i comandi di un'altra famiglia: rimuovere
-    // pacchetti con il gestore sbagliato non rimuove niente e lo dichiara fatto.
+    // backends chosen by the **manifest's** family, not this machine's. with
+    // none available we stop here: removing packages with the wrong manager
+    // removes nothing and reports success.
     let make_ops = invok::system_ops::backend_factory(config.os_family).ok_or_else(|| {
         anyhow!(
             "il manifesto descrive un'installazione su '{}', ma questa versione dell'installer \
@@ -653,8 +608,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
 
     let interactive = prompt::is_interactive();
 
-    // Conferma prima di un'operazione distruttiva. La politica è una funzione
-    // pura (`confirmation_gate`) così è verificabile senza terminale.
+    // the policy is a pure function, checkable without a terminal.
     match rollback::confirmation_gate(args.dry_run, args.yes, interactive) {
         ConfirmationGate::Proceed => {}
         ConfirmationGate::Ask => {
@@ -668,8 +622,8 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         ),
     }
 
-    // Root e lock solo per un rollback reale: il dry-run non tocca il sistema e
-    // deve poter girare anche da utente normale.
+    // root and lock only for a real rollback: a dry run touches nothing and
+    // must run unprivileged.
     let _lock = if args.dry_run {
         None
     } else {
@@ -698,9 +652,8 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         return Ok(());
     }
 
-    // Lo stato è consumato solo se il rollback è andato a fondo: se qualcosa è
-    // rimasto, il file resta e una seconda esecuzione può riprovare (gli undo
-    // sono idempotenti).
+    // the state is consumed only if the rollback went all the way: anything
+    // left keeps the file, so a second run can retry.
     if report.is_clean() {
         match InstallState::clear(&state_path) {
             Ok(()) => println!("Stato consumato: {} rimosso.", state_path.display()),
@@ -722,7 +675,7 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
     Ok(())
 }
 
-/// Riepilogo pre-conferma: cosa verrà annullato e in quale ordine.
+/// pre-confirmation summary: what will be undone, and in which order.
 fn print_rollback_summary(
     state: &InstallState,
     state_path: &Path,
@@ -780,7 +733,7 @@ fn print_rollback_summary(
     println!();
 }
 
-/// Report di fine rollback: cosa è stato annullato e — soprattutto — cosa no.
+/// end-of-rollback report: what was undone and, above all, what was not.
 fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
     let verbo = if dry_run { "annullerebbe" } else { "annullati" };
     println!();
@@ -795,11 +748,9 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
     let residue = report.residue();
     if residue.is_empty() {
         match &report.home_left_behind {
-            // La promessa, non il meccanismo (A-MD-2). Tutti gli undo possono
-            // essere riusciti e la home essere ancora lì: `PrepareOptRoot`
-            // rinuncia — correttamente — davanti a una directory non vuota, e
-            // restituisce `Ok`. Dire «nessun residuo» in quel caso è dire il
-            // vero sugli undo e il falso all'utente.
+            // the promise, not the mechanism (A-MD-2): every undo can have
+            // succeeded with the home still there, because `PrepareOptRoot`
+            // correctly gives up on a non-empty directory and returns `Ok`.
             None => println!("Nessun residuo: il sistema è tornato allo stato precedente."),
             Some(home) => {
                 println!(

@@ -1,42 +1,29 @@
-//! La **famiglia** della distribuzione, e la regola per cui si rilegge invece di
-//! rideducersi.
+//! the distribution **family**, and the rule that it is re-read rather than
+//! re-derived.
 //!
-//! # Perché esiste un tipo, e non basta l'`ID` di `os-release`
+//! a raw `os-release` `ID` answers "which distribution", not "which commands
+//! install and remove a package here" — and that question is about the family
+//! `ubuntu` and `debian` share, not about either of them.
 //!
-//! `checks::OsInfo` porta `id`, `version` e `codename`: tre stringhe grezze. Va
-//! benissimo per applicare le soglie di versione, ma non risponde alla domanda
-//! che il resto del programma dovrà porsi — *«con quali comandi si installa e si
-//! rimuove un pacchetto su questa macchina?»* — perché quella domanda non
-//! riguarda `ubuntu` o `debian` singolarmente, riguarda la **famiglia** a cui
-//! appartengono.
+//! # the rule this type exists for
 //!
-//! Oggi la nozione esiste già, ma implicita e locale: `install_wkhtmltopdf`
-//! sceglie il pacchetto di ripiego con un `match os_id { Some("debian") => …,
-//! _ => … }`. Un tipo la rende una cosa sola, nominata una volta.
+//! **the family is RE-READ from the manifest, never re-derived from the
+//! system.**
 //!
-//! # La regola che questo tipo serve a rendere possibile
+//! the same rule that copies "the database was ours" into `setup-data-dir`'s
+//! snapshot instead of recomputing it, and that keeps the rollback from
+//! re-running `snapshot()`: information that existed at mutation time must not
+//! be inferred again afterwards, because the system has changed — or is not
+//! even the same system.
 //!
-//! **La famiglia si RILEGGE dal manifesto, non si rideduce dal sistema.**
+//! the case to avoid is the rollback from disk, whose `Context` has `os_info:
+//! None`. that was harmless while no undo depended on the OS; with two package
+//! managers the package delta's undo would not know which command to invoke.
 //!
-//! È la stessa regola per cui il verdetto «il database era nostro» viene copiato
-//! nello snapshot di `setup-data-dir` invece di essere ricalcolato, e per cui il
-//! rollback da disco non riesegue gli `snapshot()`: un'informazione che c'era al
-//! momento della mutazione non va dedotta di nuovo dopo, perché nel frattempo il
-//! sistema è cambiato — o non è nemmeno lo stesso sistema.
-//!
-//! Il caso concreto che si vuole evitare è il rollback da disco. Il `Context`
-//! che il comando `rollback` ricostruisce dal manifesto ha `os_info: None`
-//! (documentato in `state.rs`: «serve solo a `run`»), e non era falso finché
-//! nessun `undo` dipendeva dall'OS. Con due gestori di pacchetti diventerebbe il
-//! difetto ricorrente di questo progetto — *un'informazione che c'era e non è
-//! stata letta* — in una forma particolarmente cattiva: l'undo del delta
-//! pacchetti non saprebbe quale comando invocare.
-//!
-//! Le alternative sono state valutate e scartate, entrambe perché **deducono**:
-//! ri-rilevare l'OS all'avvio del rollback (ma il manifesto potrebbe descrivere
-//! un'installazione fatta altrove, o l'OS potrebbe essere stato aggiornato), e
-//! auto-rilevare il gestore da quale binario esiste (su una macchina con
-//! entrambi darebbe la risposta sbagliata **in silenzio**).
+//! both alternatives were weighed and dropped because they **infer**:
+//! re-detecting the OS at rollback time (the manifest may describe another
+//! machine), and detecting the manager from which binary exists (a machine with
+//! both would answer wrongly, in silence).
 
 pub mod debian;
 pub mod fedora;
@@ -49,75 +36,60 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::StepError;
 
-/// Il confine **convenzioni di distribuzione**, secondo dei due.
+/// the **distribution conventions** boundary, second of the two.
 ///
-/// Astrae ciò che diverge fra famiglie *senza* essere packaging: dove stanno i
-/// file, quali concetti esistono, quale strumento governa il firewall. Si
-/// ottiene dal confine esistente con
-/// [`SystemOps::distro`](crate::system_ops::SystemOps::distro), come il gestore
-/// di pacchetti: non è una seconda porta verso il sistema.
+/// abstracts what differs between families *without* being packaging: where
+/// files live, which concepts exist, which tool governs the firewall. obtained
+/// from [`SystemOps::distro`](crate::system_ops::SystemOps::distro), so it is
+/// not a second door onto the system.
 ///
-/// # Perché è separato da [`crate::packaging`]
+/// separate from [`crate::packaging`] because the divergences are of a
+/// different **nature**: "which command installs a package" and "which
+/// directory nginx reads vhosts from" have nothing in common but their
+/// dependence on the distribution, and merging them would abstract two
+/// different things at once. where this family keeps things. **data**, not
+/// behaviour.
 ///
-/// Perché sono divergenze di **natura** diversa. «Con quale comando si installa
-/// un pacchetto» e «in quale directory nginx cerca i vhost» non hanno nulla in
-/// comune se non il fatto di dipendere dalla distribuzione: unirle darebbe
-/// un'astrazione che astrae due cose, e il primo che deve aggiungere una riga
-/// non saprebbe da che parte guardare.
-///
-/// # Cresce a fasi, e non prima di avere consumatori
-///
-/// Oggi espone solo il firewall. `layout()` (percorsi nginx) e
-/// `init_postgres_cluster()` arrivano con le fasi che li usano: un metodo senza
-/// chiamanti è codice che nessun test può esercitare, e in questo progetto è
-/// così che nascono i rami che non possono fallire.
-/// Dove questa famiglia tiene le cose. **Dati**, non comportamento.
-///
-/// # Perché `Option` e non stringhe diverse
-///
-/// Perché due delle divergenze non sono «un percorso diverso» ma «**il concetto
-/// non esiste**». Su Fedora `sites-enabled` non ha un altro nome: non c'è, e il
-/// server di default non è un file separato — è un blocco `server` dentro
-/// `/etc/nginx/nginx.conf`.
-///
-/// Un `None` lo dice; una costante che puntasse a una directory inventata
-/// mentirebbe, e lo step andrebbe a creare symlink in un posto che nginx non
-/// legge. La differenza va **rappresentata nei dati**, non nascosta in un ramo.
+/// `Option` rather than different strings because two of the divergences are
+/// not "another path" but "**the concept does not exist**": on Fedora there is
+/// no `sites-enabled` under another name, and the default server is a block
+/// inside `nginx.conf`. a constant pointing at an invented directory would lie,
+/// and the step would create symlinks somewhere nginx never reads.
 #[derive(Debug, Clone)]
 pub struct NginxLayout {
-    /// Dove si scrive il vhost.
+    /// where the vhost is written.
     pub vhost_dir: PathBuf,
-    /// Estensione che il file deve avere per essere caricato.
+    /// the extension the file needs in order to be loaded.
     ///
-    /// Vuota su Debian (`sites-enabled/*` include qualunque file); `.conf` su
-    /// Fedora, dove `nginx.conf` include `conf.d/*.conf` — **solo** quelli. Un
-    /// vhost senza estensione lì sarebbe invisibile, e nulla lo direbbe.
+    /// empty on Debian, where `sites-enabled/*` includes any file; `.conf` on
+    /// Fedora, where **only** those are included. a vhost without it would be
+    /// invisible there, with nothing to say so.
     pub vhost_extension: &'static str,
-    /// La directory dei siti **abilitati**, se il concetto esiste.
+    /// the **enabled** sites directory, where the concept exists.
     pub enabled_dir: Option<PathBuf>,
-    /// Il default site come file separato, se il concetto esiste.
+    /// the default site as a separate file, where the concept exists.
     pub default_site: Option<PathBuf>,
-    /// Il target *standard di distribuzione* del default site.
+    /// the *distribution-standard* target of the default site.
     ///
-    /// Serve **solo** come ripiego per gli stati persistiti prima della R11, che
-    /// registravano l'esistenza ma non il target.
+    /// **only** a fallback for states persisted before R11, which recorded its
+    /// existence but not its target.
     pub default_site_standard_target: Option<PathBuf>,
-    /// Dove finisce il backup di un default site che è un **file regolare**.
+    /// where the backup of a **regular file** default site goes.
     ///
-    /// Deliberatamente fuori da `enabled_dir`: nginx include quella directory
-    /// con un glob, quindi un backup lasciato lì verrebbe caricato lo stesso e
-    /// la porta 80 resterebbe occupata — lo stesso difetto con un altro nome.
+    /// deliberately outside `enabled_dir`: nginx globs that directory, so a
+    /// backup left there would still be loaded and port 80 would stay occupied
+    /// — the same defect under another name.
     pub default_site_backup_dir: PathBuf,
 }
 
 impl NginxLayout {
-    /// Il percorso del vhost per questa versione di Odoo.
+    /// the vhost path for this Odoo version.
     pub fn vhost_path(&self, version_short: &str) -> PathBuf {
         self.vhost_dir
             .join(format!("odoo{version_short}{}", self.vhost_extension))
     }
 
-    /// Il percorso del symlink che abilita il sito, se la famiglia ha il concetto.
+    /// the enabling symlink's path, where the family has the concept.
     pub fn enabled_link(&self, version_short: &str) -> Option<PathBuf> {
         self.enabled_dir
             .as_ref()
@@ -126,167 +98,137 @@ impl NginxLayout {
 }
 
 pub trait Distro {
-    /// Lo strumento di firewall di questa famiglia.
+    /// this family's firewall tool.
     fn firewall(&self) -> &dyn Firewall;
 
-    /// Dove questa famiglia tiene la configurazione di nginx.
+    /// where this family keeps its nginx configuration.
     fn nginx_layout(&self) -> NginxLayout;
 
-    /// SELinux, **se** questa famiglia ce l'ha. `None` = non esiste il concetto.
+    /// SELinux, **if** this family has it. `None` means the concept does not
+    /// exist.
     ///
-    /// `Option` e non tre metodi che su metà delle famiglie non fanno nulla:
-    /// dove SELinux non c'è, il trait non è nemmeno implementato, e non resta
-    /// nessun ramo che non possa eseguire.
+    /// an `Option` rather than three methods that do nothing on half the
+    /// families: where SELinux is absent the trait is not implemented at all,
+    /// so no unreachable branch is left behind.
     fn selinux(&self) -> Option<&dyn Selinux>;
 
-    /// Dove vive il cluster PostgreSQL, **se** questa famiglia richiede di
-    /// inizializzarlo a mano. `None` = il pacchetto lo crea e lo avvia da sé.
+    /// where the PostgreSQL cluster lives, **if** this family needs it
+    /// initialised by hand. `None` means the package creates and starts it.
     ///
-    /// # La divergenza più pesante fra le due famiglie
+    /// the heaviest divergence between the families: on Debian the postinst
+    /// runs `pg_createcluster` and the service comes up, while on Fedora
+    /// `postgresql-server` **initialises nothing** and the service would fail
+    /// its final check without saying why.
     ///
-    /// Su Debian/Ubuntu il postinst di `postgresql` chiama `pg_createcluster` e
-    /// il servizio parte: non c'è nulla da fare, e infatti `setup-postgres` non
-    /// ha mai avuto un passo di inizializzazione. Su Fedora
-    /// `postgresql-server` **non inizializza niente**: senza
-    /// `postgresql-setup --initdb` il servizio non parte, e lo step fallirebbe
-    /// alla verifica finale senza dire perché.
-    ///
-    /// `Option` e non una stringa vuota: «questa famiglia non ha il concetto» è
-    /// una risposta diversa da «il percorso è questo», e va rappresentata nei
-    /// dati invece che dedotta.
+    /// an `Option` rather than an empty string: "this family lacks the concept"
+    /// is a different answer from "the path is this one".
     fn postgres_data_dir(&self) -> Option<PathBuf>;
 
-    /// Il PGDATA che il **servizio dichiara**, se si riesce a leggerlo.
+    /// the PGDATA the **service declares**, when it can be read.
     ///
-    /// # Perché esiste una seconda domanda sulla stessa cosa (`A-MD-6`)
+    /// A-MD-6. [`Self::postgres_data_dir`] is what *we* know: a constant, and
+    /// it must stay one because it drives a `remove_dir_all`. but the cluster
+    /// is initialised by `postgresql-setup`, which takes PGDATA **from the
+    /// unit** — and an administrator can move it with a drop-in.
     ///
-    /// [`Self::postgres_data_dir`] è ciò che *noi* sappiamo: una costante del
-    /// codice, e deve restarlo perché guida un `remove_dir_all` (A-V3-8: un
-    /// percorso che arriva da un file non è dato fidato). Ma chi inizializza il
-    /// cluster è `postgresql-setup`, che il PGDATA **se lo fa dire dalla unit**
-    /// — e un amministratore può spostarlo con un drop-in.
+    /// when they diverge the damage is not theoretical: `initdb` would create
+    /// the cluster where the unit says, while an aggressive undo would remove
+    /// the constant — a directory we never created, and on such a machine
+    /// exactly where a previous customer cluster may live.
     ///
-    /// Finché le due risposte coincidono non c'è problema, ed è il caso normale.
-    /// Quando divergono, il danno non è teorico: `initdb` creerebbe il cluster
-    /// dove dice la unit, mentre l'undo con `--aggressive-rollback` rimuoverebbe
-    /// ricorsivamente la **costante** — cioè una directory che non abbiamo
-    /// creato noi, e che su una macchina così è proprio quella che può contenere
-    /// un cluster precedente del cliente.
-    ///
-    /// Questa funzione serve quindi a **rifiutare**, non a scegliere: il
-    /// percorso letto qui non guida nessuna rimozione. `None` è «non lo so»
-    /// (unit assente, `systemctl` non interrogabile, famiglia senza il concetto)
-    /// e da lì non si conclude niente — cecità non è assenza.
+    /// so this exists to **refuse**, not to choose: the path read here drives
+    /// no removal. `None` means "unknown", and nothing is concluded from it.
     fn declared_postgres_data_dir(&self) -> Option<PathBuf> {
         None
     }
 
-    /// Inizializza il cluster PostgreSQL.
+    /// initialises the PostgreSQL cluster.
     ///
-    /// Chiamata **solo** quando [`Self::postgres_data_dir`] è `Some` e il
-    /// cluster non c'è ancora. Sulle famiglie che non ne hanno bisogno è un
-    /// no-op totale: non un ramo irraggiungibile, ma la risposta vera alla
-    /// domanda «cosa serve fare qui?».
+    /// called **only** when [`Self::postgres_data_dir`] is `Some` and the
+    /// cluster is absent. on families that do not need it this is a total no-op
+    /// — not an unreachable branch, but the true answer to "what needs doing
+    /// here?".
     fn init_postgres_cluster(&self) -> Result<(), StepError>;
 }
 
-/// Lo strumento di firewall, in cinque domande.
+/// the firewall tool, in five questions.
 ///
-/// La mappatura è 1:1 sui comandi, e il **token della regola è lo stesso** sulle
-/// due famiglie: `ufw allow 80/tcp` e `firewall-cmd --add-port=80/tcp` accettano
-/// la stessa stringa, e la elencano nella stessa forma. Per questo lo step
-/// `nginx-firewall` — cioè il pattern delta, cioè la protezione — non cambia di
-/// una riga quando cambia lo strumento sotto.
+/// the **rule token is the same** on both families — `ufw allow 80/tcp` and
+/// `firewall-cmd --add-port=80/tcp` take and list the same string — which is
+/// why the `nginx-firewall` step, and with it the delta protection, does not
+/// change a line when the tool underneath does.
 ///
-/// È un trait e non un gruppo di costanti perché ciò che diverge sono i
-/// **comandi** e il loro modello (firewalld distingue runtime e permanente, e ha
-/// le zone): una costante non saprebbe esprimerlo, e comprimerlo in un metodo
-/// che «di solito» fa la cosa giusta è il tipo di scorciatoia da cui è nato
-/// A-V3-7.
+/// a trait and not a set of constants because what differs are the **commands**
+/// and their model: firewalld separates runtime from permanent and has zones,
+/// which a constant could not express.
 pub trait Firewall {
-    /// Come si chiama questo strumento, per i messaggi.
+    /// this tool's name, for the messages.
     ///
-    /// «ufw non trovato» detto su Fedora è la stessa classe di errore di
-    /// «esegui `apt-get update`» detto a chi ha dnf: manda a cercare uno
-    /// strumento che su quella macchina non esiste, e fa dubitare del resto.
-    /// Osservato in campo.
+    /// "ufw not found" said on Fedora is the same class of error as telling a
+    /// dnf user to run `apt-get update`: it sends them looking for something
+    /// that does not exist on their machine. observed in the field.
     fn name(&self) -> &'static str;
 
-    /// Lo strumento è installato?
+    /// is the tool installed?
     fn available(&self) -> bool;
-    /// Lo strumento è **attivo**? Se non lo è, non tocchiamo il firewall.
+    /// is the tool **active**? if not, we do not touch the firewall.
     fn is_active(&self) -> bool;
-    /// La regola è già presente? (Se sì, non è nostra e l'undo non la toccherà.)
+    /// is the rule already there? if so it is not ours, and the undo leaves it.
     fn rule_exists(&self, rule: &str) -> Result<bool, StepError>;
-    /// Apre la regola.
+    /// opens the rule.
     fn allow(&self, rule: &str) -> Result<(), StepError>;
-    /// Richiude la regola. Chiamata **solo** sul delta.
+    /// closes the rule again. called **only** on the delta.
     fn delete(&self, rule: &str) -> Result<(), StepError>;
 }
 
-/// SELinux, per la sola cosa che ci riguarda: **lasciar passare il proxy**.
+/// SELinux, for the one thing that concerns us: **letting the proxy through**.
 ///
-/// # Perché serve, e come lo si è scoperto
-///
-/// Su Fedora SELinux è in enforcing, e nega a nginx di aprire una connessione
-/// verso un servizio locale su una porta non riservata:
+/// on Fedora SELinux is enforcing and denies nginx a connection to a local
+/// service on an unreserved port:
 ///
 /// ```text
 /// avc: denied { name_connect } for comm="nginx" dest=8069
 ///      scontext=httpd_t tcontext=unreserved_port_t permissive=0
 /// ```
 ///
-/// Il vhost è corretto, `nginx -t` passa, il reload riesce — e `curl` risponde
-/// **502**. È un difetto senza sintomo *nei log dell'installer*: tutto va bene
-/// fino al primo utente che apre il browser.
+/// the vhost is correct, `nginx -t` passes, the reload succeeds — and `curl`
+/// answers **502**. a defect with no symptom *in the installer's logs*, right
+/// up to the first user who opens a browser.
 ///
-/// Non è stato aggiunto per prudenza: prima di questa traccia di `ausearch`
-/// scrivere lo step sarebbe stato mitigare un problema mai osservato, e questo
-/// progetto ha una regola contro i rami che nessuno ha visto eseguire.
-///
-/// # È una mutazione, quindi è reversibile
-///
-/// `setsebool -P` scrive la politica **in modo persistente**: sopravvive al
-/// riavvio, quindi è un artefatto di sistema come gli altri e va registrato con
-/// un `PreState`. Se il boolean era già acceso — su una macchina che ospita altri
-/// servizi web lo è spesso — è `Preexisting` e l'undo non lo tocca: spegnerlo
-/// romperebbe il proxy di qualcun altro.
+/// `setsebool -P` writes the policy **persistently**, so it is a system
+/// artifact like any other and carries a `PreState`. an already-enabled
+/// boolean — common on a machine hosting other web services — is
+/// `Preexisting`, and turning it off would break somebody else's proxy.
 pub trait Selinux {
-    /// Il boolean che permette a nginx di fare proxy verso un servizio locale.
+    /// the boolean that lets nginx proxy to a local service.
     fn nginx_proxy_boolean(&self) -> &'static str;
 
-    /// Il boolean è acceso? `None` se SELinux non è interrogabile — che è
-    /// diverso da «è spento», e porta a non toccare nulla.
+    /// is the boolean on? `None` when SELinux cannot be queried, which differs
+    /// from "off" and leads to touching nothing.
     fn is_enabled(&self, boolean: &str) -> Option<bool>;
 
-    /// Imposta il boolean **in modo persistente** (`setsebool -P`).
+    /// sets the boolean **persistently** (`setsebool -P`).
     fn set(&self, boolean: &str, value: bool) -> Result<(), StepError>;
 }
 
-/// La famiglia di distribuzione a cui appartiene il sistema.
+/// the distribution family this system belongs to.
 ///
-/// Raggruppa le distribuzioni che condividono gestore di pacchetti e convenzioni
-/// (percorsi di nginx, strumento di firewall, inizializzazione del cluster
-/// PostgreSQL). **Non** è la distribuzione: `ubuntu` e `debian` sono due `ID`
-/// diversi della stessa famiglia, e dove la differenza conta — le soglie di
-/// versione, il suffisso del pacchetto wkhtmltopdf — si continua a guardare
-/// l'`id`, che resta in [`crate::checks::OsInfo`].
+/// groups the distributions that share a package manager and conventions.
+/// **not** the distribution: `ubuntu` and `debian` are two `ID`s of one family,
+/// and where the difference matters — version thresholds, the wkhtmltopdf
+/// package suffix — the `id` is still what is consulted.
 ///
-/// # Il default è `Debian`, e non è una comodità
+/// the `Debian` default is manifest compatibility, not convenience: a state
+/// written before this field existed does not declare one, and **every existing
+/// installation is apt**. making a manifest unreadable would make an instance
+/// un-uninstallable.
 ///
-/// Serve alla retrocompatibilità del manifesto: uno stato scritto prima che
-/// questo campo esistesse non lo dichiara, e va letto come `Debian` perché
-/// **ogni installazione esistente è apt**. È la stessa cura per cui
-/// `InstallConfig` è `Option` dalla R4 e il percorso storico dello state resta
-/// leggibile dalla R7: rendere illeggibile un manifesto significa rendere non
-/// disinstallabile un'istanza.
-///
-/// Perché il default non diventi una bugia silenziosa, il rollback **logga** la
-/// famiglia con cui sta lavorando e la confronta con il sistema sotto di sé
-/// (vedi [`family_mismatch`]).
+/// so the default cannot become a silent lie, the rollback **logs** the family
+/// it is working with and compares it against the system (see
+/// [`family_mismatch`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum OsFamily {
-    /// Debian e derivate (Ubuntu): `apt`/`dpkg`, `sites-available`, `ufw`.
+    /// Debian and derivatives: `apt`/`dpkg`, `sites-available`, `ufw`.
     #[default]
     Debian,
     /// Fedora: `dnf`/`rpm`, `conf.d`, `firewalld`.
@@ -294,25 +236,18 @@ pub enum OsFamily {
 }
 
 impl OsFamily {
-    /// Deriva la famiglia dall'`ID` dichiarato in `/etc/os-release`.
+    /// derives the family from the `ID` declared in `/etc/os-release`.
     ///
-    /// `None` = distribuzione che non sappiamo trattare. È l'**unico** posto in
-    /// cui si decide se una distribuzione ci è nota: `checks::check_os_from` la
-    /// consulta e rifiuta, così la stessa decisione non vive in due punti che
-    /// possono divergere.
+    /// `None` means a distribution we do not know how to handle. the **only**
+    /// place that decision is taken, so it cannot live in two diverging spots.
     ///
-    /// # Perché non si legge `ID_LIKE`
+    /// `ID_LIKE` is deliberately not read: Rocky, AlmaLinux and CentOS Stream
+    /// declare `ID_LIKE=fedora`, and honouring it would let them in **without
+    /// anyone ever having tried them**. for a new family we start closed.
     ///
-    /// Rocky, AlmaLinux e CentOS Stream dichiarano `ID_LIKE=fedora`, e accettarlo
-    /// le farebbe entrare **senza che nessuno le abbia mai provate**. Per una
-    /// famiglia nuova si parte chiusi.
-    ///
-    /// Non è in contraddizione con A5.1-bis («un rifiuto senza prova blocca il
-    /// caso buono»): lì si trattava di non respingere una release *più recente*
-    /// di una famiglia già supportata, e infatti le soglie verso l'alto restano
-    /// aperte — vedi [`crate::checks::validate_os`]. Qui si tratta di una
-    /// distribuzione diversa, su cui non abbiamo alcuna prova in nessuna
-    /// direzione.
+    /// no contradiction with A5.1-bis, which was about not rejecting a *newer*
+    /// release of an already supported family — those thresholds stay open
+    /// upwards. this is a different distribution, with no evidence either way.
     pub fn from_os_id(id: &str) -> Option<Self> {
         match id {
             "ubuntu" | "debian" => Some(OsFamily::Debian),
@@ -321,7 +256,7 @@ impl OsFamily {
         }
     }
 
-    /// Nome stabile della famiglia, usato nei log e nel manifesto.
+    /// the family's stable name, used in the logs and in the manifest.
     pub fn as_str(&self) -> &'static str {
         match self {
             OsFamily::Debian => "debian",
@@ -336,31 +271,21 @@ impl std::fmt::Display for OsFamily {
     }
 }
 
-/// Il manifesto e il sistema sotto di noi concordano sulla famiglia?
+/// do the manifest and the system underneath agree on the family?
 ///
-/// Restituisce il testo dell'avviso quando **non** concordano, `None` quando
-/// concordano o quando il sistema non è identificabile.
+/// returns the warning text when they do **not**, and `None` when they agree or
+/// the system cannot be identified.
 ///
-/// # Perché un avviso e non un rifiuto
+/// a warning and not a refusal: a pre-2.3 manifest falls back to `Debian`
+/// (almost always the truth), and `--state` accepts any path, so one machine
+/// can inspect another's manifest. refusing would make an instance
+/// un-uninstallable — A-V3-1's damage by another route — while inferring from
+/// the system would break this module's rule. in practice the case degrades on
+/// its own: a purge on a system without that manager fails, the undo is
+/// best-effort, and the leftovers reach the report.
 ///
-/// La discordanza è possibile in due modi, e nessuno dei due giustifica di
-/// fermarsi:
-/// - un manifesto scritto prima che il campo esistesse ricade sul default
-///   `Debian` (ed è quasi sempre la verità);
-/// - `--state` accetta qualunque percorso, quindi si può ispezionare da una
-///   macchina il manifesto di un'altra.
-///
-/// Rifiutare renderebbe **non disinstallabile** un'istanza, che è il danno di
-/// A-V3-1 per un'altra strada. Dedurre dal sistema violerebbe la regola di
-/// questo modulo. Resta l'avviso — e in pratica il caso degenera da sé: un
-/// `apt-get purge` su un sistema senza apt fallisce, l'undo è best-effort
-/// (invariante 3) e i residui finiscono nel report, che è esattamente ciò per
-/// cui il report esiste.
-///
-/// Pura, e con il sistema come **parametro**: il caso interessante — manifesto
-/// Debian su una macchina Fedora — non è riproducibile sulla macchina che esegue
-/// i test. Stesso motivo di `checks::ensure_root_euid`, `checks::ports_to_check`
-/// e `state::trust_verdict`.
+/// pure, with the system as a **parameter**: the interesting case is not
+/// reproducible on the machine running the tests.
 pub fn family_mismatch(recorded: OsFamily, detected: Option<OsFamily>) -> Option<String> {
     let detected = detected?;
     if detected == recorded {

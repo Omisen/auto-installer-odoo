@@ -1,22 +1,19 @@
 #!/bin/sh
-# Scriptlet %post del .rpm — controparte di debian/postinst.
+# the rpm %post scriptlet — counterpart of debian/postinst.
 #
-# Crea l'alias breve `vok` → `invok`, come symlink RELATIVO (resta valido sotto
-# una root alternativa) e non come secondo binario.
+# creates the short alias `vok` -> `invok` as a RELATIVE symlink, valid under an
+# alternative root, and not as a second binary.
 #
-# Non si sovrascrive ciò che non è nostro: se `/usr/bin/vok` esiste ed è un file
-# regolare appartiene a qualcun altro, si avvisa e si rinuncia all'alias. È la
-# stessa regola che l'installer applica agli artefatti del cliente.
+# what is not ours is not overwritten: an existing regular file at that path
+# belongs to somebody else, so warn and give up the alias.
 #
-# Perché è un file e non una stringa dentro Cargo.toml: la logica è identica a
-# quella del `.deb`, e due copie in due formati diversi — una in `debian/`, una
-# in un manifesto TOML — sono due cose che divergono senza che nulla lo dica. In
-# file, un test può confrontarle (`the_deb_and_the_rpm_install_the_same_alias`).
+# why a file and not a string inside Cargo.toml: the logic is identical to the
+# .deb's, and two copies in two formats diverge with nothing to say so. as files,
+# a test can compare them.
 #
-# Le GUARDIE invece divergono per forza, e non è una svista: deb e rpm passano
-# argomenti diversi al primo parametro. Qui non serve alcun controllo su `$1` —
-# %post gira sia all'installazione sia all'aggiornamento, e in entrambi i casi
-# vogliamo l'alias.
+# the GUARDS do diverge by necessity: the two packaging conventions pass
+# different arguments. here no check is needed — %post runs on install and on
+# upgrade, and we want the alias in both.
 
 if [ -e /usr/bin/vok ] && [ ! -L /usr/bin/vok ]; then
     echo "invok: /usr/bin/vok esiste e non è un collegamento simbolico." >&2

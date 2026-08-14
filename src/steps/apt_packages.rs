@@ -1,54 +1,42 @@
-//! [`AptPackagesStep`]: installa un insieme di pacchetti apt, in modo
-//! reversibile, applicando il **pattern delta**.
+//! [`AptPackagesStep`]: installs a set of packages reversibly, applying the
+//! **delta pattern**.
 //!
-//! È la generalizzazione del `PreState` singolo a un *insieme*: lo snapshot non
-//! è più "esiste sì/no" ma "quale sottoinsieme era già installato prima di me".
-//! L'undo rimuove **solo il delta** — i pacchetti che NON c'erano prima e che
-//! quindi abbiamo aggiunto noi — mai i preesistenti.
+//! the single `PreState` generalised to a *set*: the snapshot no longer asks
+//! "does it exist" but "which subset was already installed before me". the undo
+//! removes **only the delta** — what was not there and so was added by us —
+//! never the pre-existing packages.
 //!
-//! Due configurazioni, e la lista di ciascuna arriva dal **catalogo del gestore
-//! di pacchetti** ([`crate::packaging::PackageCatalog`]), non da una costante di
-//! questo file: i nomi dei pacchetti sono conoscenza del gestore quanto lo sono
-//! i comandi.
-//! - [`AptPackagesStep::bootstrap_with_ops`] — utility comuni
-//!   (git/curl/wget/gettext). Undo **non purga** di default (decisione D3): non
-//!   si disinstalla git/curl da una macchina cliente per un rollback. Purga solo
-//!   con `--aggressive-rollback`.
-//! - [`AptPackagesStep::odoo_dependencies_with_ops`] — i ~30 pacchetti dev di
-//!   Odoo. È il **delta pesante**: l'undo purga il delta, e **solo** il delta
-//!   (nessuna rimozione delle orfane — vedi `purge_delta`, A3.2).
+//! two configurations, each taking its list from the **package manager's
+//! catalogue** rather than a constant here: package names are the manager's
+//! knowledge as much as its commands are.
 //!
-//! # Nomi di pacchetto portabili (A5.1)
+//! - bootstrap prerequisites: common utilities, whose undo **does not purge**
+//!   by default (decision D3). you do not uninstall git from a customer's
+//!   machine over a rollback.
+//! - Odoo's system dependencies: the **heavy delta**, whose undo purges the
+//!   delta and **only** the delta.
 //!
-//! Lo stesso pacchetto non ha lo stesso nome su tutte le release: `libtiff5-dev`
-//! è `libtiff-dev` su Debian recente, `libjpeg8-dev` non esiste affatto su
-//! Debian 12. Finché la lista era di stringhe secche, `apt-get install` falliva
-//! sull'**intero gruppo** al primo nome ignoto e l'installazione si fermava —
-//! confermato in campo dal job `container` di R5, dove l'installer non partiva
-//! su Debian.
+//! # portable package names (A5.1)
 //!
-//! Perciò la lista non è di nomi ma di [`PackageSpec`]: un gruppo di
-//! **alternative in ordine di preferenza**. Lo `snapshot` risolve ogni gruppo a
-//! un nome concreto interrogando il gestore
-//! ([`PackageManager::availability`](crate::packaging::PackageManager::availability)),
-//! e da lì in poi tutto il resto della macchina — install, delta, purge,
-//! persistenza — lavora su nomi già risolti e non sa nemmeno che esistessero
-//! alternative.
+//! the same package is not named the same on every release, and while the list
+//! was bare strings `apt-get install` failed on the **whole group** at the
+//! first unknown name — confirmed in the field, where the installer would not
+//! start on Debian.
 //!
-//! Le tre regole della risoluzione, in quest'ordine (il perché sta sul metodo
-//! `resolve`):
-//! 1. se una delle alternative è **già installata**, vince quella. Un cliente
-//!    che ha `libtiff-dev` non si vede installare anche `libtiff5-dev`, e il
-//!    delta resta onesto (niente da purgare: non l'abbiamo messo noi).
-//! 2. altrimenti vince la prima con disponibilità **reale**.
-//! 3. altrimenti la prima che il gestore sa installare comunque, cioè un nome
-//!    **virtuale** — ripiego, perché un nome virtuale non è rimovibile
-//!    (A5.1-bis).
+//! so the list is made of [`PackageSpec`]s: groups of **alternatives in order
+//! of preference**. the snapshot resolves each group to one concrete name, and
+//! everything downstream — install, delta, purge, persistence — works on
+//! resolved names and never knows alternatives existed.
 //!
-//! Se nessuna alternativa è disponibile lo step **fallisce nello snapshot**,
-//! prima di mutare, dicendo quale gruppo è vuoto. È l'opposto di degradare in
-//! silenzio: un `-dev` che manca diventerebbe un errore di compilazione dentro
-//! `pip install`, molto più difficile da ricondurre alla causa.
+//! resolution has three rules, in order (the reasoning is on `resolve`): an
+//! already-installed alternative wins; otherwise the first with **real**
+//! availability; otherwise the first the manager can install anyway, i.e. a
+//! **virtual** name, as a fallback because a virtual name cannot be removed
+//! (A5.1-bis).
+//!
+//! with no alternative available the step **fails in the snapshot**, before
+//! mutating, naming the empty group. degrading silently would turn a missing
+//! `-dev` into a compilation error inside `pip install`, far harder to trace.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -59,27 +47,25 @@ use crate::packaging::{Availability, PackageSpec};
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
-/// Esito della risoluzione di un gruppo di alternative su questo sistema.
+/// how a group of alternatives resolved on this system.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum ResolvedPackage {
-    /// Una delle alternative è già installata: non entra nel delta.
+    /// one alternative is already installed: it stays out of the delta.
     AlreadyInstalled(String),
-    /// Nessuna installata, ma questa ha un candidato **reale**: entra nel delta.
+    /// none installed, but this one has a **real** candidate: it enters the
+    /// delta.
     Installable(String),
-    /// Nessuna installata e nessun candidato reale, ma apt sa installare questo
-    /// nome perché è **virtuale** (esiste solo come `Provides` di un altro
-    /// pacchetto). Entra nel delta, con una riserva — vedi
+    /// none installed and no real candidate, but the manager can install this
+    /// name because it is **virtual**. it enters the delta with a caveat — see
     /// [`AptPackagesStep::resolve`].
     Virtual(String),
 }
 
-/// Costruisce l'errore dei gruppi senza alcuna alternativa installabile.
+/// builds the error for groups with no installable alternative.
 ///
-/// Il messaggio dipende da **quanto sappiamo**, non da quanti gruppi sono
-/// caduti. Se l'indice apt non è interrogabile non abbiamo alcuna prova di
-/// assenza, e dire "questo pacchetto non esiste su questa release" sarebbe una
-/// diagnosi inventata: è il falso positivo A5.1-bis, che in campo ha mandato a
-/// cercare la rinomina di un pacchetto che stava benissimo al suo posto.
+/// the message depends on **how much we know**, not on how many groups fell:
+/// with an unqueryable index there is no evidence of absence, and claiming the
+/// package does not exist would be an invented diagnosis (A5.1-bis).
 fn unavailable_packages_error(
     unavailable: &[PackageSpec],
     index_populated: bool,
@@ -111,63 +97,58 @@ fn unavailable_packages_error(
     ))
 }
 
-/// Rimuove i duplicati **conservando l'ordine** (vince la prima occorrenza).
+/// removes duplicates **preserving order**; the first occurrence wins.
 ///
-/// Pura, così la si verifica sulle sequenze che contano senza far girare uno
-/// step. `Vec::dedup` non basta: rimuove solo i duplicati **consecutivi**, e qui
-/// i due `libjpeg-dev` sono a sei posizioni di distanza.
+/// `Vec::dedup` would not do: it only removes **consecutive** duplicates, and
+/// here the two colliding names are six positions apart.
 pub fn dedup_keeping_order(names: &mut Vec<String>) {
     let mut visti = std::collections::HashSet::new();
     names.retain(|name| visti.insert(name.clone()));
 }
 
-/// Politica di undo per l'insieme di pacchetti.
+/// the undo policy for this set of packages.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UndoPolicy {
-    /// Purga sempre il delta, e solo il delta (delta pesante di Odoo).
+    /// always purges the delta, and only the delta.
     PurgeDelta,
-    /// Non purga di default; purga il delta solo con `--aggressive-rollback`
-    /// (utility bootstrap comuni).
+    /// does not purge by default; purges the delta only under
+    /// `--aggressive-rollback`.
     KeepUnlessAggressive,
 }
 
-/// Snapshot serializzabile del pattern delta (invariante 4).
+/// the delta pattern's serialisable snapshot (invariant 4).
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AptDeltaSnapshot {
-    /// Pacchetti già presenti prima di noi: **da non toccare mai** nell'undo.
+    /// packages present before us: **never** touched by the undo.
     pub already_installed: Vec<String>,
-    /// Pacchetti che NON c'erano: ciò che installiamo e possiamo rimuovere.
+    /// packages that were NOT there: what we install and may remove.
     pub delta: Vec<String>,
 }
 
-/// Step di installazione pacchetti apt con pattern delta.
+/// a package installation step following the delta pattern.
 pub struct AptPackagesStep {
     ops: Box<dyn SystemOps>,
     name: &'static str,
     specs: Vec<PackageSpec>,
     policy: UndoPolicy,
     snap: AptDeltaSnapshot,
-    /// Nomi risolti dallo `snapshot`, nell'ordine delle specs: è ciò che `run`
-    /// passa ad apt. Vive solo in memoria — un rollback da disco non chiama
-    /// `run`, e il purge gli guarda il delta persistito.
+    /// names resolved by the snapshot, in the specs' order: what `run` hands to
+    /// the manager. in memory only — a rollback from disk never calls `run`,
+    /// and the purge reads the persisted delta.
     resolved: Vec<String>,
-    /// Se `true`, il `run` fa `apt-get update` prima di installare. Acceso solo
-    /// per `bootstrap-prerequisites`, il primo step apt della sequenza: da lì
-    /// l'indice fresco vale per tutti gli step a valle, e ripeterlo sarebbe solo
-    /// tempo perso.
+    /// whether `run` refreshes the index first. set only on the first package
+    /// step: from there the fresh index serves every step downstream.
     refresh_index: bool,
-    /// Se `true`, la lista di questo step si adatta all'interprete scelto
-    /// (M11): fuori gli header del Python di sistema, dentro l'interprete
-    /// alternativo e i suoi. Acceso solo per `install-system-dependencies`.
+    /// whether this step's list adapts to the chosen interpreter (M11): the
+    /// system Python's headers out, the alternative and its own in.
     adapts_python: bool,
 }
 
 impl AptPackagesStep {
-    /// Prerequisiti bootstrap (undo non purga senza `--aggressive-rollback`).
+    /// bootstrap prerequisites; the undo does not purge without
+    /// `--aggressive-rollback`.
     ///
-    /// La lista **non** e' piu' una costante di questo file: e' cio' che il
-    /// gestore di pacchetti risponde quando gli si chiede il catalogo. I nomi
-    /// dei pacchetti sono conoscenza del gestore quanto lo sono i comandi.
+    /// the list comes from the manager's catalogue, not from a constant here.
     pub fn bootstrap_with_ops(ops: Box<dyn SystemOps>) -> Self {
         let bootstrap = ops.packages().catalog().bootstrap_specs();
         let mut step = Self::with_specs(
@@ -176,12 +157,12 @@ impl AptPackagesStep {
             bootstrap,
             UndoPolicy::KeepUnlessAggressive,
         );
-        // È il primo step apt: è qui che l'indice va aggiornato, per tutti.
+        // the first package step: the index is refreshed here, for everyone.
         step.refresh_index = true;
         step
     }
 
-    /// Dipendenze di sistema di Odoo (undo purga il delta, e solo il delta).
+    /// Odoo's system dependencies; the undo purges the delta, and only it.
     pub fn odoo_dependencies_with_ops(ops: Box<dyn SystemOps>) -> Self {
         let odoo = ops.packages().catalog().odoo_specs();
         let mut step = Self::with_specs(
@@ -190,17 +171,16 @@ impl AptPackagesStep {
             odoo,
             UndoPolicy::PurgeDelta,
         );
-        // È QUESTO lo step che porta l'interprete alternativo, e non
-        // `bootstrap-prerequisites`: il suo undo purga il delta, mentre quello
-        // del bootstrap lascia installato ciò che ha aggiunto (utility comuni).
-        // Un interprete installato da noi e mai rimosso sarebbe un residuo di
-        // 43 MB nel perimetro che il rollback promette di ripulire.
+        // THIS step carries the alternative interpreter, not the bootstrap one:
+        // its undo purges the delta, while the bootstrap's leaves what it
+        // added. an interpreter installed and never removed would be a 43 MB
+        // leftover inside the perimeter the rollback promises to clean.
         step.adapts_python = true;
         step
     }
 
-    /// Costruttore generico su nomi secchi, uno per gruppo (usato dai test con
-    /// liste ad hoc, dove le alternative non c'entrano).
+    /// generic constructor over bare names, one per group, for tests with ad
+    /// hoc lists where alternatives do not matter.
     pub fn custom(
         ops: Box<dyn SystemOps>,
         name: &'static str,
@@ -211,7 +191,7 @@ impl AptPackagesStep {
         Self::with_specs(ops, name, specs, policy)
     }
 
-    /// Costruttore generico su gruppi di alternative.
+    /// generic constructor over groups of alternatives.
     pub fn with_specs(
         ops: Box<dyn SystemOps>,
         name: &'static str,
@@ -230,35 +210,25 @@ impl AptPackagesStep {
         }
     }
 
-    /// Sceglie, dentro un gruppo, il nome da usare su **questo** sistema.
+    /// picks, inside a group, the name to use on **this** system.
     ///
-    /// Tre domande, in quest'ordine preciso.
+    /// three questions, in this order:
     ///
-    /// 1. **"Ne hai già uno?"** Se sì vince quello. Chiederlo per primo evita di
-    ///    installare `libtiff5-dev` a un cliente che ha già `libtiff-dev`,
-    ///    gonfiando il delta con un pacchetto che il rollback poi purgherebbe —
-    ///    corretto ma inutile, e sul sistema di qualcun altro l'inutile è un
-    ///    costo.
-    /// 2. **"Quale ha un candidato reale?"** La via veloce (`apt-cache policy`),
-    ///    che copre tutti i casi normali.
-    /// 3. **"Quale sapresti installare comunque?"** La via lenta
-    ///    (`apt-get install -s`), che copre i nomi **virtuali**.
+    /// 1. **"do you already have one?"** if so it wins, so a customer with
+    ///    `libtiff-dev` does not also get `libtiff5-dev` padding the delta.
+    /// 2. **"which has a real candidate?"** the fast path, covering the normal
+    ///    cases.
+    /// 3. **"which could you install anyway?"** the slow path, covering
+    ///    **virtual** names.
     ///
-    /// # Perché un nome reale batte un nome virtuale (A5.1-bis)
+    /// a real name beats a virtual one (A5.1-bis) because a virtual name is
+    /// installable but **not purgeable**, which breaks the delta pattern in
+    /// silence: the purge exits 0 having removed nothing, so the rollback would
+    /// report success while the real package stayed installed — an invisible
+    /// leftover, the worst kind.
     ///
-    /// Un nome puramente virtuale è installabile ma **non è purgabile**, e
-    /// questo rompe il pattern delta in silenzio. Su Ubuntu 24.04
-    /// `libfreetype6-dev` esiste solo come `Provides` di `libfreetype-dev`:
-    /// `apt-get install libfreetype6-dev` funziona, ma dopo
-    /// `dpkg-query` non conosce quel nome (`not-installed`) e
-    /// `apt-get purge libfreetype6-dev` esce **0 rimuovendo zero pacchetti**.
-    /// Il delta conterrebbe un nome che l'undo non può reclamare: il rollback
-    /// direbbe di aver purgato e `libfreetype-dev` resterebbe installato. Un
-    /// residuo invisibile, cioè la cosa peggiore.
-    ///
-    /// Perciò il livello 3 è un **ripiego**, non una scorciatoia: si prende un
-    /// nome virtuale solo se nessuna alternativa del gruppo ne ha uno reale, e
-    /// lo si dice nei log.
+    /// so level 3 is a **fallback**, taken only when no alternative in the
+    /// group has a real candidate, and it is logged.
     fn resolve(&self, spec: &PackageSpec) -> Option<ResolvedPackage> {
         let pm = self.ops.packages();
         if let Some(installed) = spec
@@ -268,10 +238,9 @@ impl AptPackagesStep {
         {
             return Some(ResolvedPackage::AlreadyInstalled(installed.clone()));
         }
-        // Una sola passata: si prende il **primo** nome con disponibilità reale
-        // e si tiene da parte il primo virtuale come ripiego. Interrogare due
-        // volte l'elenco (prima tutti i reali, poi tutti i virtuali) darebbe lo
-        // stesso verdetto al doppio delle domande al gestore.
+        // one pass: take the **first** real name and keep the first virtual one
+        // aside. two passes would reach the same verdict at twice the
+        // questions.
         let mut virtuale: Option<&String> = None;
         for name in spec.alternatives() {
             match pm.availability(name) {
@@ -283,24 +252,16 @@ impl AptPackagesStep {
         virtuale.map(|name| ResolvedPackage::Virtual(name.clone()))
     }
 
-    /// Aggiorna l'indice apt prima di installare (A5.1-bis).
+    /// refreshes the package index before installing (A5.1-bis).
     ///
-    /// Vive nel `run` di `bootstrap-prerequisites`, che è il primo step apt della
-    /// sequenza: quando `install-system-dependencies` fa il proprio `snapshot` e
-    /// interroga i candidati, l'indice è già fresco. Metterlo nello `snapshot`
-    /// sarebbe più comodo e sarebbe **sbagliato**: uno snapshot non muta, mai
-    /// (C4). `apt-get update` scrive in `/var/lib/apt/lists`.
+    /// in the **first** package step's `run`, so that when the next one queries
+    /// candidates the index is already fresh. putting it in a snapshot would be
+    /// more convenient and **wrong**: a snapshot never mutates (C4).
     ///
-    /// # Tolleranza ai repository irraggiungibili
-    ///
-    /// `apt-get update` esce non-zero anche quando **un solo** repository di
-    /// terze parti non risponde, mentre gli indici ufficiali sono stati
-    /// scaricati benissimo. Bloccare lì significherebbe rendere l'installer
-    /// ostaggio di un PPA rotto che non ci riguarda. Quindi: se l'update
-    /// fallisce ma l'indice risulta comunque popolato, si prosegue con un
-    /// `warn!`; si fallisce solo se dopo il tentativo non c'è **nessun** indice
-    /// da interrogare, che è la condizione in cui gli step successivi non
-    /// potrebbero decidere nulla.
+    /// tolerant of unreachable repositories: a refresh exits non-zero over a
+    /// single broken third-party repository while the official indices
+    /// downloaded fine. so a failure with a populated index is a `warn!`, and
+    /// only **no** index at all is an error.
     fn refresh_apt_index(&self, ctx: &Context) -> Result<(), StepError> {
         if ctx.dry_run {
             info!(
@@ -330,24 +291,19 @@ impl AptPackagesStep {
         )))
     }
 
-    /// Purga il delta persistito (best-effort). Usa il delta dello snapshot,
-    /// **non** ricalcolato dallo stato corrente (che nel frattempo è cambiato:
-    /// il run ha installato i pacchetti).
+    /// purges the persisted delta, best-effort.
     ///
-    /// # Niente `apt-get autoremove` (A3.2)
+    /// uses the snapshot's delta and **not** one recomputed from the current
+    /// state, which `run` has meanwhile changed.
     ///
-    /// Il rollback **non** lancia un `autoremove` globale. `autoremove` agisce
-    /// su tutto il sistema: rimuove qualunque pacchetto auto-installato che apt
-    /// consideri orfano *in quel momento*, anche del tutto estraneo a Odoo e
-    /// tirato dentro da altro software. Sarebbe una rimozione non delimitata dal
-    /// nostro delta, cioè l'esatto contrario del principio chirurgico che regge
-    /// tutto il rollback. Il purge del delta è già mirato: le dipendenze tirate
-    /// dentro dai *nostri* pacchetti restano installate, il che è rumore innocuo
-    /// a fronte del rischio di disinstallare roba altrui.
+    /// no global `autoremove` (A3.2): it acts on the whole system, removing
+    /// anything apt considers orphaned *at that moment*, including packages
+    /// pulled in by other software. that removal would not be bounded by our
+    /// delta — the exact opposite of the surgical principle.
     ///
-    /// La rimozione passa da [`remove_with_recovery`](crate::steps::remove_with_recovery),
-    /// che rimette in sesto il gestore se uno step a valle l'ha lasciato rotto:
-    /// altrimenti apt rifiuta di operare e il delta resta installato (A-RT-2).
+    /// removal goes through
+    /// [`remove_with_recovery`](crate::steps::remove_with_recovery), which
+    /// repairs a manager a downstream step may have broken (A-RT-2).
     fn purge_delta(&self, ctx: &Context) -> Result<(), StepError> {
         if self.snap.delta.is_empty() {
             info!(step = self.name, "undo: delta vuoto, niente da purgare");
@@ -368,21 +324,19 @@ impl Step for AptPackagesStep {
         self.name
     }
 
-    /// Risolve i gruppi di alternative **e** calcola il delta: due operazioni
-    /// che devono avvenire nello stesso istante, prima di ogni mutazione. Il
-    /// delta è espresso in nomi già risolti, quindi il purge dell'undo non ha
-    /// bisogno di sapere che esistessero alternative.
+    /// resolves the groups **and** computes the delta: two operations that must
+    /// happen at the same instant, before any mutation. the delta is expressed
+    /// in resolved names, so the undo's purge never needs to know alternatives
+    /// existed.
     fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError> {
         let mut already_installed = Vec::new();
         let mut delta = Vec::new();
         let mut resolved = Vec::new();
         let mut unavailable = Vec::new();
 
-        // La lista definitiva si compone qui, non nel costruttore: il piano
-        // Python è deciso al preflight, mentre gli step sono costruiti prima.
-        // Con l'interprete di sistema `adapt_specs` restituisce la lista
-        // identica, quindi per Debian, Ubuntu e ogni Fedora fino alla 42 questo
-        // passaggio non esiste.
+        // the final list is composed here and not in the constructor: the
+        // Python plan is decided at preflight, while the steps are built
+        // earlier. with the system interpreter the list comes back unchanged.
         let specs = if self.adapts_python {
             ctx.python.adapt_specs(&self.specs)
         } else {
@@ -420,21 +374,15 @@ impl Step for AptPackagesStep {
             }
         }
 
-        // Prima di dichiarare assente un gruppo: sappiamo abbastanza per dirlo?
-        // Con un indice apt non interrogabile la risposta è no — ogni nome
-        // risulta "non disponibile" e il verdetto sarebbe cecità travestita da
-        // diagnosi. È il falso positivo A5.1-bis.
+        // before declaring a group absent: do we know enough to say so? with an
+        // unqueryable index the answer is no, and the verdict would be
+        // blindness dressed as diagnosis (A5.1-bis).
         //
-        // Chi è questo step decide cosa fare di quella cecità:
-        // - `bootstrap-prerequisites` (`refresh_index`) è lo step che **sistemerà
-        //   l'indice lui stesso**, nel proprio `run`, e il suo snapshot gira per
-        //   forza prima. Fermarlo qui renderebbe impossibile installare su una
-        //   macchina appena creata — cioè proprio il caso che l'update esiste per
-        //   risolvere. Si prosegue coi nomi preferiti (che nella lista bootstrap
-        //   non hanno alternative: non c'è nulla da scegliere) e si lascia
-        //   parlare apt nel `run`.
-        // - ogni altro step gira **dopo** l'update: se lì l'indice è ancora
-        //   inservibile è un problema vero, e va detto con il messaggio giusto.
+        // which step this is decides what to do with that blindness. the
+        // bootstrap one **fixes the index itself**, in its own `run`, and its
+        // snapshot necessarily runs first: stopping here would make installing
+        // on a fresh machine impossible. every other step runs after the
+        // refresh, so an unusable index there is a real problem.
         if !unavailable.is_empty() {
             let index_populated = self.ops.packages().index_is_queryable();
             if index_populated || !self.refresh_index {
@@ -457,9 +405,9 @@ impl Step for AptPackagesStep {
                     resolved.push(preferred.clone());
                     delta.push(preferred);
                 } else {
-                    // Un opzionale non verificabile si salta: aggiungerlo alla
-                    // riga di apt farebbe fallire l'install dell'INTERO gruppo
-                    // se poi non esistesse, che è il contrario di "opzionale".
+                    // an unverifiable optional is skipped: adding it would fail
+                    // the WHOLE install if it turned out not to exist, which is
+                    // the opposite of optional.
                     warn!(
                         step = self.name,
                         gruppo = ?spec.alternatives(),
@@ -470,19 +418,13 @@ impl Step for AptPackagesStep {
             }
         }
 
-        // Deduplica (A-MD-1). Due gruppi diversi possono risolvere allo **stesso
-        // nome**: su Debian 12 sia `[libjpeg-dev]` sia
-        // `[libjpeg8-dev | libjpeg-turbo8-dev | libjpeg-dev]` cadono su
-        // `libjpeg-dev`, perché la regola «ne hai già uno?» non può aiutare —
-        // lo snapshot risolve *tutti* i gruppi prima che il `run` installi
-        // alcunché, quindi al momento della risoluzione nessuno dei due è
-        // ancora installato.
+        // deduplicate (A-MD-1): two groups can resolve to the **same name**,
+        // and the "do you have one already?" rule cannot help, because the
+        // snapshot resolves *every* group before `run` installs anything.
         //
-        // Su apt il doppione è innocuo (install e purge sono idempotenti), ma il
-        // delta è la contabilità di ciò che abbiamo aggiunto e su cui l'undo è
-        // autorizzato ad agire: una contabilità con una riga doppia è una
-        // contabilità sbagliata. Si conserva l'**ordine**, tenendo la prima
-        // occorrenza, così i log restano leggibili.
+        // the duplicate is harmless to the manager, but the delta is the
+        // accounting of what we added and what the undo may act on — and
+        // accounting with a doubled line is wrong accounting.
         dedup_keeping_order(&mut resolved);
         dedup_keeping_order(&mut already_installed);
         dedup_keeping_order(&mut delta);
@@ -494,12 +436,10 @@ impl Step for AptPackagesStep {
             risolti = resolved.len(),
             "snapshot delta pacchetti"
         );
-        // I NOMI, non solo il conteggio: il log è il **diario** dell'esecuzione,
-        // il manifesto è lo **stato**. Sono due cose diverse, e confonderle è
-        // costato A-R8-1. Dopo un rollback il manifesto — correttamente — non
-        // elenca più nulla, ma «quali pacchetti abbiamo aggiunto» resta una
-        // domanda legittima: per il post-mortem di un cliente e per le
-        // asserzioni di pulizia della CI.
+        // the NAMES, not just the count: the log is the run's **journal**, the
+        // manifest is its **state**. confusing the two cost A-R8-1. after a
+        // rollback the manifest correctly lists nothing, but "which packages
+        // did we add" stays a legitimate question.
         info!(
             step = self.name,
             pacchetti = %delta.join(" "),
@@ -519,11 +459,10 @@ impl Step for AptPackagesStep {
     }
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
-        // PRIMA di ogni uscita anticipata: l'indice apt serve agli step a valle,
-        // non a noi. Su un runner GitHub le utility bootstrap sono già installate
-        // → delta vuoto → con il `return` prima dell'update,
-        // `install-system-dependencies` interrogherebbe un indice stantìo e
-        // boccerebbe pacchetti che esistono (A5.1-bis, il bug di campo).
+        // BEFORE any early return: the index serves the steps downstream, not
+        // us. on a runner the bootstrap utilities are already installed, so an
+        // early return would leave the next step querying a stale index and
+        // rejecting packages that exist (A5.1-bis).
         if self.refresh_index {
             self.refresh_apt_index(ctx)?;
         }
@@ -542,8 +481,7 @@ impl Step for AptPackagesStep {
             );
             return Ok(());
         }
-        // Installa l'intera lista risolta: apt aggiunge solo i mancanti
-        // (idempotente).
+        // install the whole resolved list: only the missing ones are added.
         let refs: Vec<&str> = self.resolved.iter().map(String::as_str).collect();
         self.ops.packages().install(&refs)?;
         info!(
@@ -576,12 +514,11 @@ impl Step for AptPackagesStep {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Reidrata il **delta**: i pacchetti che non c'erano prima di noi.
+    /// rehydrates the **delta**: the packages that were not there before us.
     ///
-    /// Ricalcolarlo sarebbe sbagliato per costruzione — dopo il `run` tutta la
-    /// lista risulta installata e il delta apparirebbe vuoto (nessun purge) o,
-    /// peggio, coinciderebbe con l'intera lista, portando l'undo a purgare
-    /// pacchetti che il cliente aveva già.
+    /// recomputing it would be wrong by construction — after `run` the whole
+    /// list is installed, so the delta would look empty, or worse would match
+    /// the whole list and have the undo purge the customer's packages.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;

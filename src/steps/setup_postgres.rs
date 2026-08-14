@@ -1,30 +1,28 @@
-//! [`SetupPostgres`]: installa, abilita e avvia PostgreSQL, in modo reversibile.
+//! [`SetupPostgres`]: installs, enables and starts PostgreSQL, reversibly.
 //!
-//! È il caso in cui il `PreState` singolo non basta: PostgreSQL ha **quattro assi
-//! ortogonali** di stato, ognuno da ripristinare separatamente (decisione D4).
+//! the case where a single `PreState` is not enough: PostgreSQL has **four
+//! orthogonal state axes**, each restored separately (decision D4).
 //!
-//! # Il quarto asse: il cluster (M3)
+//! # the fourth axis: the cluster (M3)
 //!
-//! Su Debian/Ubuntu il postinst di `postgresql` crea e avvia un cluster `main`,
-//! quindi installare basta. Su Fedora `postgresql-server` **non inizializza
-//! niente**: senza `postgresql-setup --initdb` il servizio non parte, e questo
-//! step falliva alla verifica finale senza spiegare perché.
+//! on Debian the package's postinst creates and starts a cluster, so installing
+//! is enough. on Fedora it **initialises nothing**, and without an explicit
+//! init the service does not start — this step used to fail its final check
+//! without explaining why.
 //!
-//! L'inizializzazione è una **mutazione che produce un artefatto** — il data
-//! directory — quindi non è «un comando in più»: ha bisogno di un `PreState`
-//! suo, o sarebbe qualcosa che nasce senza che nessuno lo annoti (A-R5-3).
+//! initialising is a **mutation producing an artifact**, the data directory, so
+//! it needs a `PreState` of its own or it would come into existence unrecorded
+//! (A-R5-3).
 //!
-//! Perché un asse e non uno step nuovo: l'init deve avvenire **fra**
-//! l'installazione e lo start, che vivono entrambi qui. Uno step separato
-//! costringerebbe a spezzare `setup-postgres` in tre, e i nomi degli step sono
-//! identificatori persistiti — spezzarlo romperebbe la ricostruzione dei
-//! manifesti già in campo. Il quarto asse è invece il pattern che questo step
-//! già usa.
+//! an axis and not a new step, because the init must happen **between** the
+//! installation and the start, both of which live here — and step names are
+//! persisted identifiers, so splitting this one would break the rebuilding of
+//! manifests already in the field.
 //!
-//! Decisione ferma D3-punto2: l'undo di default fa **stop + disable** (entrambi
-//! reversibili) ma **NON purga** il pacchetto — il purge di PostgreSQL è troppo
-//! distruttivo per un rollback automatico su macchina cliente (rischio dati).
-//! Il purge avviene solo con `--aggressive-rollback`.
+//! decision D3: the undo does **stop + disable**, both reversible, but does
+//! **not** purge the package. purging PostgreSQL is too destructive for an
+//! automatic rollback on a customer machine, and happens only under
+//! `--aggressive-rollback`.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -37,19 +35,17 @@ use crate::system_ops::SystemOps;
 
 const PG_SERVICE: &str = "postgresql";
 
-/// Le due risposte su «dov'è il cluster» sono in conflitto? (`A-MD-6`)
+/// do the two answers about "where is the cluster" conflict? (A-MD-6)
 ///
-/// `ours` è la costante del codice — quella che guida l'undo — e `declared` è
-/// ciò che la unit dichiara a `postgresql-setup`, quando si riesce a leggerlo.
+/// `ours` is the constant that drives the undo; `declared` is what the unit
+/// tells `postgresql-setup`, when it can be read.
 ///
-/// Tre esiti, e il terzo è il motivo per cui questa funzione esiste separata:
-/// - coincidono → nessun problema, ed è il caso normale;
-/// - `declared` è `None` → **non lo sappiamo**, e da lì non si conclude niente:
-///   si prosegue come si è sempre fatto (cecità non è conflitto);
-/// - divergono → si rifiuta, e il messaggio nomina entrambi i percorsi.
+/// three outcomes: they match, which is the normal case; `declared` is `None`,
+/// where **we do not know** and nothing is concluded — blindness is not
+/// conflict; or they diverge, and we refuse naming both paths.
 ///
-/// Pura: il caso interessante richiederebbe una Fedora con un drop-in su
-/// `postgresql.service`, cioè una macchina che nessun test possiede.
+/// pure: the interesting case needs a machine with a drop-in on
+/// `postgresql.service`, which no test has.
 pub fn cluster_path_conflict(
     ours: &std::path::Path,
     declared: Option<&std::path::Path>,
@@ -72,44 +68,43 @@ pub fn cluster_path_conflict(
     ))
 }
 
-/// Snapshot dei tre assi indipendenti dello stato di PostgreSQL.
+/// snapshot of PostgreSQL's independent state axes.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PostgresSnapshot {
-    /// Il pacchetto era già installato?
+    /// was the package already installed?
     pub installed: PreState,
-    /// Il servizio era già `enabled`?
+    /// was the service already enabled?
     pub enabled: PreState,
-    /// Il servizio era già `active` (running)?
+    /// was the service already running?
     pub active: PreState,
-    /// Il cluster (data directory) era già inizializzato?
+    /// was the cluster already initialised?
     ///
-    /// Resta `Untracked` sulle famiglie dove il pacchetto lo crea da sé: lì non
-    /// c'è nulla da inizializzare e nulla da rimuovere.
+    /// stays `Untracked` on families where the package creates it: nothing to
+    /// initialise and nothing to remove.
     ///
-    /// `serde(default)` per retrocompatibilità: uno snapshot scritto prima di M3
-    /// non ha il campo e si legge come `Untracked`, che è la verità per ogni
-    /// installazione Debian esistente. Stessa cura di `default_site` in R11.
+    /// `serde(default)` for backward compatibility: a pre-M3 snapshot lacks the
+    /// field and reads as `Untracked`, which is the truth for every existing
+    /// Debian installation.
     #[serde(default)]
     pub cluster_initialized: PreState,
 }
 
-/// Installa/abilita/avvia PostgreSQL ripristinando ogni asse allo stato iniziale.
+/// installs, enables and starts PostgreSQL, restoring each axis on undo.
 pub struct SetupPostgres {
     ops: Box<dyn SystemOps>,
     snap: PostgresSnapshot,
 }
 
 impl SetupPostgres {
-    /// I pacchetti che installano il server, secondo il gestore di questa
-    /// famiglia.
+    /// the packages that install the server, per this family's manager.
     fn packages(&self) -> Vec<String> {
         self.ops.packages().catalog().postgres
     }
 
-    /// Il nome con cui si chiede «PostgreSQL è installato?».
+    /// the name to ask "is PostgreSQL installed?" with.
     ///
-    /// Non è il primo elemento di [`Self::packages`]: è una domanda diversa, e
-    /// su un'altra famiglia la risposta è un nome diverso.
+    /// not the first of [`Self::packages`]: a different question, and on
+    /// another family a different answer.
     fn marker_package(&self) -> String {
         self.ops.packages().catalog().postgres_marker
     }
@@ -128,8 +123,8 @@ impl Step for SetupPostgres {
     }
 
     fn snapshot(&mut self, _ctx: &Context) -> Result<(), StepError> {
-        // Per ciascun asse: se già vero prima di noi → Preexisting (undo lo
-        // lascia); altrimenti Untracked (lo faremo noi → CreatedByUs dopo run).
+        // per axis: already true before us means `Preexisting` and the undo
+        // leaves it; otherwise `Untracked` until `run` makes it ours.
         self.snap.installed = if self.ops.packages().is_installed(&self.marker_package()) {
             PreState::Preexisting
         } else {
@@ -145,20 +140,18 @@ impl Step for SetupPostgres {
         } else {
             PreState::Untracked
         };
-        // Il cluster: `Untracked` se la famiglia non ha il concetto, altrimenti
-        // `Preexisting` se il data directory è già inizializzato. Il marcatore è
-        // `PG_VERSION`, che initdb scrive per primo e che esiste **solo** in un
-        // PGDATA valido: la directory può esistere vuota (la crea il pacchetto)
-        // senza che ci sia un cluster dentro.
+        // the cluster: `Untracked` where the family lacks the concept,
+        // otherwise `Preexisting` when the data directory is initialised. the
+        // marker is `PG_VERSION`, which `initdb` writes first and which exists
+        // **only** in a valid PGDATA — the directory itself can be there,
+        // created by the package, with no cluster inside.
         self.snap.cluster_initialized = match self.ops.distro().postgres_data_dir() {
             None => PreState::Untracked,
             Some(dir) => {
-                // Prima di leggere QUEL percorso: è davvero quello che il
-                // servizio userà? (A-MD-6) Qui la risposta c'è solo se
-                // PostgreSQL è già installato — la unit esiste — ed è proprio il
-                // caso in cui un drop-in può esserci. Rifiutare nello snapshot
-                // significa fermarsi prima di ogni mutazione: precondizione, non
-                // undo.
+                // before reading THAT path: is it really the one the service
+                // will use? (A-MD-6) an answer exists only once PostgreSQL is
+                // installed, which is exactly when a drop-in can be there.
+                // refusing in the snapshot stops before any mutation.
                 if let Some(conflitto) = cluster_path_conflict(
                     &dir,
                     self.ops.distro().declared_postgres_data_dir().as_deref(),
@@ -195,16 +188,16 @@ impl Step for SetupPostgres {
             self.snap.installed = PreState::CreatedByUs;
             info!("run: PostgreSQL installato");
         }
-        // Il cluster PRIMA di abilitare e avviare: su Fedora senza questo il
-        // servizio non parte, e la verifica finale fallirebbe con un messaggio
-        // che parla di journalctl invece che della causa vera.
+        // the cluster BEFORE enabling and starting: without it the service does
+        // not come up, and the final check would fail with a message about
+        // journalctl rather than the real cause.
         if self.snap.cluster_initialized == PreState::Untracked
             && self.ops.distro().postgres_data_dir().is_some()
         {
-            // Di nuovo, e non per abbondanza: allo snapshot il pacchetto poteva
-            // non essere ancora installato, quindi la unit non esisteva e la
-            // domanda non aveva risposta. Ora esiste. È l'ultimo istante in cui
-            // si può ancora rifiutare senza aver creato un cluster.
+            // asked again, and not out of abundance: at snapshot time the
+            // package may not have been installed, so the unit did not exist
+            // and the question had no answer. this is the last instant we can
+            // still refuse without having created a cluster.
             if let Some(dir) = self.ops.distro().postgres_data_dir() {
                 if let Some(conflitto) = cluster_path_conflict(
                     &dir,
@@ -228,7 +221,7 @@ impl Step for SetupPostgres {
             info!("run: servizio postgresql avviato");
         }
 
-        // Verifica finale: deve risultare attivo.
+        // final check: it must come out running.
         if !self.ops.service_is_active(PG_SERVICE) {
             return Err(StepError::Precondition(
                 "PostgreSQL non risulta attivo dopo lo start (controlla journalctl -u postgresql)"
@@ -244,28 +237,27 @@ impl Step for SetupPostgres {
             return Ok(());
         }
 
-        // Ordine: stop → disable → (eventuale purge). Ma la DECISIONE di purgare
-        // va presa PRIMA dello stop: elencare i DB richiede un postgres attivo.
+        // order: stop → disable → purge. but the DECISION to purge is taken
+        // BEFORE the stop: listing the databases needs a running postgres.
         let purge_wanted = self.snap.installed == PreState::CreatedByUs && ctx.aggressive_rollback;
         let purge_safe = purge_wanted && self.cluster_safe_to_purge(ctx);
 
-        // active: fermo solo se l'avevamo avviato noi (D4). Se era già attivo,
-        // lo lasciamo running.
+        // stop only what we started (D4); an already-running service stays up.
         if self.snap.active == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_stop(PG_SERVICE) {
                 warn!(error = %e, "undo: stop postgresql fallito, proseguo (best-effort)");
             }
         }
 
-        // enabled: disabilito solo se l'avevamo abilitato noi (D4).
+        // disable only what we enabled (D4).
         if self.snap.enabled == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_disable(PG_SERVICE) {
                 warn!(error = %e, "undo: disable postgresql fallito, proseguo (best-effort)");
             }
         }
 
-        // installed: NON purgare di default (troppo distruttivo). Solo con flag,
-        // E solo se il cluster non ospita altri database (cautela cluster).
+        // never purge by default: only under the flag, AND only when the
+        // cluster hosts no other databases.
         if self.snap.installed == PreState::CreatedByUs {
             if purge_safe {
                 warn!(
@@ -290,15 +282,11 @@ impl Step for SetupPostgres {
             }
         }
 
-        // Il cluster: lo rimuoviamo solo se **l'abbiamo creato noi** e solo alle
-        // stesse condizioni del purge del pacchetto (D3-punto2).
-        //
-        // Non è prudenza eccessiva: un PGDATA contiene *tutti* i database del
-        // cluster, non solo il nostro. `cluster_safe_to_purge` è già la domanda
-        // giusta — «c'è qualcosa oltre al nostro database?» — e la sua risposta
-        // negativa protegge qui esattamente come protegge lì. Senza flag il
-        // cluster resta: un data directory vuoto è un residuo inerte, i dati di
-        // qualcun altro no.
+        // the cluster goes only if **we created it**, under the same conditions
+        // as the package purge. not excessive caution: a PGDATA holds *every*
+        // database of the cluster, not only ours. without the flag it stays —
+        // an empty data directory is an inert leftover, somebody else's data is
+        // not.
         if self.snap.cluster_initialized == PreState::CreatedByUs {
             match self.ops.distro().postgres_data_dir() {
                 Some(dir) if purge_safe => {
@@ -329,11 +317,11 @@ impl Step for SetupPostgres {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Reidrata i **quattro assi** insieme: installato / abilitato / attivo /
-    /// cluster. Sono indipendenti e ognuno decide un'azione diversa dell'undo
-    /// (purge, disable, stop, rimozione del data directory); reidratarne solo
-    /// uno lascerebbe gli altri a `Untracked`, cioè un rollback che dimentica di
-    /// rispegnere ciò che aveva acceso.
+    /// rehydrates the **four axes** together.
+    ///
+    /// they are independent and each decides a different undo action, so
+    /// rehydrating one would leave the others `Untracked` — a rollback that
+    /// forgets to turn off what it turned on.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;
@@ -342,9 +330,9 @@ impl Step for SetupPostgres {
 }
 
 impl SetupPostgres {
-    /// Cautela cluster (best-effort): purga solo se nel cluster non c'è alcun
-    /// database oltre al nostro (`ctx.db_name`) e a quello di manutenzione
-    /// `postgres`. Se l'elenco non è ottenibile → **non** purgare (fail-safe).
+    /// cluster caution, best-effort: purge only when no database besides ours
+    /// and the maintenance one is present. an unobtainable list means **no**
+    /// purge.
     fn cluster_safe_to_purge(&self, ctx: &Context) -> bool {
         match self.ops.pg_list_databases() {
             Ok(dbs) => {

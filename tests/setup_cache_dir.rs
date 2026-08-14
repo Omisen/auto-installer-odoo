@@ -1,10 +1,9 @@
-//! Test di [`SetupCacheDir`] (R6-hotfix-3, A-R5-3 seconda metà): `.cache` nella
-//! home dell'utente `odoo` diventa un artefatto posseduto, quindi annullabile.
+//! [`SetupCacheDir`] (A-R5-3, second half): the cache inside the `odoo` user's
+//! home becomes an owned artifact, and therefore undoable.
 //!
-//! La domanda che questo step cambia non è "chi ha scritto nella cache" — sono
-//! programmi di terzi, e cambiano fra versioni — ma "di chi **è** la directory".
-//! Il numero di produttori diventa irrilevante: se l'abbiamo creata noi il
-//! rollback la rimuove, se c'era già non si tocca.
+//! the question this step changes is not "who wrote into the cache" — they are
+//! third-party programs whose behaviour varies — but "**whose** is the
+//! directory". the number of producers becomes irrelevant.
 
 mod common;
 
@@ -28,7 +27,7 @@ fn ctx(home: &Path) -> Context {
 
 fn mock() -> (MockSystemOps, common::OpLog) {
     MockSystemOps::new(MockConfig {
-        real_fs: true, // `path_exists` deve guardare la tempdir vera
+        real_fs: true, // `path_exists` must look at the real tempdir
         ..Default::default()
     })
 }
@@ -48,8 +47,8 @@ fn removed_paths(ops: &[Op]) -> Vec<PathBuf> {
 
 #[test]
 fn a_cache_we_created_is_removed_by_the_rollback() {
-    // Il caso di campo: dopo un'installazione completa `/opt/odoo/.cache` restava
-    // lì perché nessuno step la reclamava. Ora è nostra, e sparisce.
+    // the field case: after a complete installation the cache stayed because no
+    // step claimed it. now it is ours, and it goes.
     let home = tempfile::tempdir().expect("tempdir");
     let (ops, log) = mock();
     let mut step = SetupCacheDir::with_ops(Box::new(ops));
@@ -80,8 +79,8 @@ fn a_cache_we_created_is_removed_by_the_rollback() {
 
 #[test]
 fn a_preexisting_cache_belongs_to_the_client_and_is_never_touched() {
-    // `/opt/odoo` può essere una home preesistente con dentro roba del cliente.
-    // Se `.cache` c'era già, non la creiamo e soprattutto non la rimuoviamo.
+    // the home may be pre-existing with the customer's things inside. an
+    // already-present cache is neither created nor removed.
     let home = tempfile::tempdir().expect("tempdir");
     std::fs::create_dir(home.path().join(".cache")).expect("mkdir .cache");
 
@@ -105,9 +104,9 @@ fn a_preexisting_cache_belongs_to_the_client_and_is_never_touched() {
 
 #[test]
 fn the_verdict_crosses_the_disk_boundary() {
-    // Il rollback da disco ricostruisce lo step da zero: senza reidratare il
-    // PreState l'undo sarebbe inerte e la cache resterebbe — che è esattamente il
-    // residuo da cui parte questo step.
+    // a rollback from disk rebuilds the step from scratch: without rehydrating
+    // the `PreState` the undo would be inert and the cache would stay — the
+    // very leftover this step exists for.
     let home = tempfile::tempdir().expect("tempdir");
 
     let (ops, _log) = mock();
@@ -131,8 +130,8 @@ fn the_verdict_crosses_the_disk_boundary() {
 
 #[test]
 fn a_snapshot_pointing_outside_the_home_removes_nothing() {
-    // Stessa rete di `setup-data-dir`: è un rm -rf guidato da un path che arriva
-    // dal disco, e uno stato corrotto non deve diventare un disastro altrove.
+    // the same net as the filestore step: a recursive removal driven by a path
+    // from disk, where a corrupted state must not become a disaster.
     let home = tempfile::tempdir().expect("tempdir");
     let (ops, log) = mock();
     let mut step = SetupCacheDir::with_ops(Box::new(ops));
@@ -145,7 +144,7 @@ fn a_snapshot_pointing_outside_the_home_removes_nothing() {
         step.rehydrate(&snapshot).expect("rehydrate");
         step.undo(&ctx(home.path())).expect("undo best-effort");
     }
-    // E il caso limite: created_root == la home stessa.
+    // and the edge case: the recorded root is the home itself.
     let snapshot = serde_json::json!({
         "prestate": "CreatedByUs",
         "created_root": home.path(),
@@ -170,8 +169,8 @@ fn dry_run_mutates_nothing() {
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
-    // Il dry-run non passa a CreatedByUs: forziamo lo stato per provare anche il
-    // ramo di rimozione.
+    // a dry run never reaches `CreatedByUs`, so the state is forced to exercise
+    // the removal branch too.
     let snapshot = serde_json::json!({
         "prestate": "CreatedByUs",
         "created_root": home.path().join(".cache"),
@@ -188,10 +187,9 @@ fn dry_run_mutates_nothing() {
 
 #[test]
 fn the_cache_is_undone_after_everything_that_could_write_into_it() {
-    // L'ordine non è un dettaglio: gli undo girano al contrario, quindi
-    // `setup-cache-dir` deve stare PRESTO nella sequenza per essere rimossa TARDI
-    // nel rollback — dopo che il servizio è fermo, il venv è sparito e nessuno
-    // può più ricreare la cache appena cancellata.
+    // the order is not a detail: undos run backwards, so this step must sit
+    // EARLY to be removed LATE — after the service is stopped and the venv is
+    // gone, when nothing can recreate the cache we just deleted.
     let make_ops = invok::system_ops::backend_factory(Default::default())
         .expect("la famiglia Debian ha un backend");
     let names = invok::steps::canonical_step_names(&make_ops);

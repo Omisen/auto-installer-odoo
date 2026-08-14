@@ -1,13 +1,12 @@
-//! [`SystemOps`]: confine sui comandi di sistema privilegiati.
+//! [`SystemOps`]: the boundary over privileged system commands.
 //!
-//! Gli step che creano utenti/gruppi o cambiano owner/permessi non chiamano
-//! direttamente `useradd`/`chown`: passano da questo trait. In produzione
-//! [`RealSystemOps`] esegue i comandi reali; nei test un mock registra *quale*
-//! operazione verrebbe eseguita (con quali argomenti, in quale ramo `PreState`)
-//! senza toccare il sistema e senza richiedere root.
+//! steps never call `useradd` or `chown` directly: they go through this trait.
+//! [`RealSystemOps`] runs the real commands in production, while a mock in the
+//! tests records *which* operation would run, with which arguments, without
+//! touching the system or needing root.
 //!
-//! È il modo per soddisfare la testabilità richiesta dalla Fase 3 senza
-//! modificare il trait [`crate::step::Step`].
+//! that is what makes the steps testable without changing
+//! [`crate::step::Step`].
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,102 +19,91 @@ use crate::distro::OsFamily;
 use crate::error::StepError;
 use crate::packaging::PackageManager;
 
-/// Che cosa c'è a un path, guardato **senza seguire i symlink**.
+/// what sits at a path, looked at **without following symlinks**.
 ///
-/// Esiste perché `symlink_exists` risponde `true` a troppe domande diverse: un
-/// symlink, un file regolare e una directory sono tutti «esiste», ma solo il
-/// primo si può rimuovere e ricreare identico. Distinguere è la differenza fra
-/// ripristinare la configurazione di un cliente e distruggerla (A-V3-5).
+/// `symlink_exists` answers `true` to too many different questions: a symlink,
+/// a regular file and a directory all "exist", but only the first can be
+/// removed and recreated identically. telling them apart is the difference
+/// between restoring a customer's configuration and destroying it (A-V3-5).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PathKind {
-    /// Non c'è nulla.
+    /// nothing there.
     Absent,
-    /// Un link simbolico, con il target che punta *così com'è scritto*.
+    /// a symlink, with its target exactly as written.
     Symlink { target: PathBuf },
-    /// Un file regolare: ha un contenuto, e quel contenuto è di qualcuno.
+    /// a regular file: it has contents, and those contents are somebody's.
     RegularFile,
-    /// Directory, socket, device… o un symlink il cui target non è leggibile.
-    /// Non sappiamo trattarlo: chi lo riceve deve astenersi.
+    /// a directory, socket, device… or a symlink whose target cannot be read.
+    /// we do not know how to treat it, so the caller must abstain.
     Other,
 }
 
-/// Owner numerico di un path (uid/gid), serializzabile per la persistenza.
+/// a path's numeric owner, serialisable for persistence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct OwnerId {
     pub uid: u32,
     pub gid: u32,
 }
 
-/// Stato rilevato dei sorgenti Odoo in una directory target.
+/// the state of the Odoo sources found in a target directory.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum OdooSourceState {
-    /// La directory non esiste.
+    /// the directory does not exist.
     #[default]
     Absent,
-    /// Clone git presente, sul branch indicato.
+    /// a git clone, on the named branch.
     GitRepo { branch: String },
-    /// Directory con `odoo-bin` ma senza `.git` (es. estratta da tarball).
+    /// a directory with `odoo-bin` but no `.git`, e.g. from a tarball.
     TarballPresent,
-    /// Directory esistente ma non valida (né git corretto né `odoo-bin`).
+    /// present but not valid: neither the right git clone nor `odoo-bin`.
     InvalidDir,
 }
 
-/// Modalità dei file privati scritti dall'installer: solo il proprietario.
+/// mode for the private files the installer writes: owner only.
 const PRIVATE_FILE_MODE: u32 = 0o600;
 
-/// Timeout di default delle operazioni di **rete**, in secondi.
+/// default timeout for **network** operations, in seconds.
 ///
-/// 300s = 5 minuti: abbondante per un `clone --depth 5` di Odoo o per il `.deb`
-/// di wkhtmltopdf (~15 MB) anche su una linea lenta, ma abbastanza corto perché
-/// un mirror che non chiude mai la connessione produca un errore invece di far
-/// sembrare l'installer bloccato. Il valore non è sacro: è il compromesso fra
-/// "non troncare un download legittimo" e "non far aspettare venti minuti un
-/// cliente". Chi ha una linea davvero lenta lo alza con
-/// [`NETWORK_TIMEOUT_ENV`].
+/// generous enough for a shallow clone or a 15 MB download on a slow line,
+/// short enough that a mirror which never closes the connection produces an
+/// error instead of looking like a hang. raise it with [`NETWORK_TIMEOUT_ENV`].
 pub const DEFAULT_NETWORK_TIMEOUT_SECS: u64 = 300;
 
-/// Variabile d'ambiente che sovrascrive [`DEFAULT_NETWORK_TIMEOUT_SECS`].
-/// Il valore `0` disabilita del tutto il timeout (attesa indefinita, come prima
-/// di R2). Un valore non numerico viene ignorato e si usa il default.
+/// environment variable overriding [`DEFAULT_NETWORK_TIMEOUT_SECS`].
+///
+/// `0` disables the timeout entirely; a non-numeric value is ignored.
 pub const NETWORK_TIMEOUT_ENV: &str = "ODOO_NETWORK_TIMEOUT_SECS";
 
-/// Intervallo di polling dell'uscita del processo mentre si attende il timeout.
+/// how often the child's exit is polled while waiting out the timeout.
 ///
-/// 50 ms: irrilevante rispetto a timeout dell'ordine dei minuti, e sufficiente
-/// a non introdurre ritardi percepibili sui comandi rapidi.
+/// negligible against timeouts measured in minutes, and short enough not to
+/// delay quick commands.
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// Timeout corrente per le operazioni di rete; `None` = nessun timeout.
+/// the current network timeout; `None` means none.
 ///
-/// # Perché solo la rete
+/// # why only the network
 ///
-/// Un timeout è utile dove l'attesa può essere **infinita e infruttuosa** — una
-/// connessione appesa non progredisce mai. Non lo è dove l'attesa è lunga ma
-/// legittima, e lì sarebbe dannoso:
-/// - `odoo-bin -i base` e `pip install -r requirements.txt` sono locali e
-///   possono durare parecchi minuti su una macchina piccola: un timeout li
-///   ucciderebbe a metà di un'installazione perfettamente valida;
-/// - `apt-get` è il caso più delicato: può attendere legittimamente un lock
-///   `dpkg` tenuto da `unattended-upgrades`, e ucciderlo a metà transazione
-///   lascia il database dpkg in stato semi-configurato — un danno **peggiore**
-///   dell'attesa, e fuori dal perimetro che il nostro rollback sa riparare.
-///   Su un'attesa apt l'utente può sempre interrompere con Ctrl-C; su una
-///   transazione dpkg troncata no.
+/// a timeout helps where the wait can be **infinite and fruitless** — a hung
+/// connection never progresses. it hurts where the wait is long but legitimate:
+/// - `odoo-bin -i base` and `pip install` are local and can take many minutes
+///   on a small machine; a timeout would kill a perfectly valid installation;
+/// - `apt-get` may legitimately wait on a `dpkg` lock held by
+///   `unattended-upgrades`, and killing it mid-transaction leaves dpkg
+///   half-configured — **worse** than the wait, and outside what our rollback
+///   can repair.
 ///
-/// Restano quindi coperte le tre operazioni che parlano con un host remoto:
-/// `git clone`, il download del tarball di fallback e il download del `.deb` di
-/// wkhtmltopdf.
+/// so the three operations that talk to a remote host are covered, and nothing
+/// else.
 pub fn network_timeout() -> Option<Duration> {
     timeout_from_setting(std::env::var(NETWORK_TIMEOUT_ENV).ok().as_deref())
 }
 
-/// La politica del timeout, **pura**: come un valore testuale (o la sua
-/// assenza) diventa un limite. Separata da [`network_timeout`] così i test la
-/// verificano senza mutare l'ambiente del processo.
+/// the timeout policy, **pure**: how a textual value becomes a limit.
 ///
-/// - assente o non numerico → [`DEFAULT_NETWORK_TIMEOUT_SECS`];
-/// - `0` → `None`, nessun timeout (attesa indefinita, comportamento pre-R2);
-/// - `n` → `n` secondi.
+/// separate from [`network_timeout`] so tests can check it without mutating the
+/// process environment. absent or non-numeric gives the default, `0` gives
+/// `None`, and `n` gives `n` seconds.
 pub fn timeout_from_setting(raw: Option<&str>) -> Option<Duration> {
     let secs = raw
         .and_then(|s| s.trim().parse::<u64>().ok())
@@ -123,7 +111,7 @@ pub fn timeout_from_setting(raw: Option<&str>) -> Option<Duration> {
     (secs > 0).then(|| Duration::from_secs(secs))
 }
 
-/// Legge un pipe fino a EOF in un thread dedicato, restituendo il join handle.
+/// drains a pipe to EOF on its own thread, returning the join handle.
 fn drain_pipe<R: std::io::Read + Send + 'static>(
     pipe: Option<R>,
 ) -> std::thread::JoinHandle<Vec<u8>> {
@@ -136,19 +124,20 @@ fn drain_pipe<R: std::io::Read + Send + 'static>(
     })
 }
 
-/// Attende la fine del processo al massimo `limit`; allo scadere lo **uccide**
-/// e ritorna [`StepError::Timeout`].
+/// waits at most `limit` for the child, **killing** it on expiry.
 ///
-/// `std::process::Command` non ha un timeout nativo. Invece di aggiungere una
-/// dipendenza (`wait-timeout` installa un handler SIGCHLD globale di processo)
-/// si fa la cosa più semplice che regga: polling di `try_wait` fino alla
-/// scadenza. Il `Child` non viene mai spostato altrove, quindi `kill()` non ha
-/// la corsa del riuso del pid: il processo non è ancora stato raccolto.
+/// `std::process::Command` has no native timeout, and `wait-timeout` would
+/// install a process-global SIGCHLD handler, so this polls `try_wait`. the
+/// `Child` is never moved, so `kill()` has no pid-reuse race.
 ///
-/// I due pipe sono drenati da thread dedicati. Non è un dettaglio: `git clone`
-/// scrive il progresso su stderr e, senza qualcuno che legga, riempirebbe il
-/// buffer del pipe e si bloccherebbe — un deadlock **nostro** che il timeout
-/// maschererebbe da "rete lenta".
+/// both pipes are drained by dedicated threads, and that is not a detail: `git
+/// clone` writes progress to stderr and would otherwise fill the pipe buffer
+/// and block — a deadlock of **ours** that the timeout would disguise as a slow
+/// network.
+///
+/// # errors
+///
+/// [`StepError::Timeout`] on expiry, or [`StepError::Io`] on a wait failure.
 fn output_with_timeout(
     mut command: Command,
     rendered: &str,
@@ -174,8 +163,8 @@ fn output_with_timeout(
             Ok(Some(status)) => break status,
             Ok(None) => {
                 if std::time::Instant::now() >= deadline {
-                    // Scaduto: uccidi e **raccogli** (niente zombie). Chiusi i
-                    // pipe, i due reader vedono EOF e terminano da soli.
+                    // kill and **reap**, so no zombie is left. with the pipes
+                    // closed both readers see EOF and finish.
                     let _ = child.kill();
                     let _ = child.wait();
                     let _ = out_reader.join();
@@ -208,14 +197,13 @@ fn output_with_timeout(
     })
 }
 
-/// Costruisce il path di un file temporaneo privato **nella stessa directory**
-/// di `dest` (stesso filesystem → il `move_file` finale è un rename atomico).
+/// builds a private temporary path **in the same directory** as `dest`, so the
+/// final `move_file` is an atomic rename.
 ///
-/// Il nome porta un suffisso casuale: due esecuzioni concorrenti non collidono e
-/// un attaccante locale non può pre-piazzare un symlink al path esatto, perché
-/// non lo conosce in anticipo. La casualità è però solo *difesa in profondità*:
-/// la garanzia vera è [`SystemOps::create_private_file`], che è fail-closed
-/// (`O_EXCL | O_NOFOLLOW`) anche se il nome venisse indovinato.
+/// the random suffix keeps concurrent runs from colliding and stops a local
+/// attacker pre-placing a symlink at a known path. it is only defence in depth:
+/// the real guarantee is [`SystemOps::create_private_file`], which is
+/// fail-closed even if the name were guessed.
 pub fn private_temp_path(dest: &Path, fallback_name: &str) -> PathBuf {
     let name = dest
         .file_name()
@@ -225,30 +213,26 @@ pub fn private_temp_path(dest: &Path, fallback_name: &str) -> PathBuf {
     parent.join(format!(".{name}.{}.tmp", random_suffix()))
 }
 
-/// Come [`private_temp_path`], ma **conserva l'estensione** del nome dato.
+/// as [`private_temp_path`], but **keeps the extension** of the given name.
 ///
-/// Esiste per un vincolo esterno, non per gusto: `apt-get install <file>` tratta
-/// l'argomento come percorso locale solo se termina in `.deb`, altrimenti lo
-/// interpreta come nome di pacchetto e fallisce. Un temporaneo `….tmp` avrebbe
-/// reso il nome imprevedibile e l'installazione impossibile — l'ha intercettato
-/// il test di `install-wkhtmltopdf`, non un ragionamento.
-///
-/// Il file resta nascosto (punto iniziale) e con un suffisso casuale prima
-/// dell'estensione: `wkhtmltox_….deb` → `.wkhtmltox_….<random>.deb`.
+/// an external constraint, not a preference: `apt-get install <file>` only
+/// treats its argument as a local path when it ends in `.deb`, otherwise it
+/// reads it as a package name and fails. a `.tmp` temporary would have been
+/// unpredictable *and* uninstallable — caught by a test, not by reasoning.
 pub fn private_temp_path_keeping_extension(dir: &Path, name: &str) -> PathBuf {
     let (stem, ext) = match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem, ext),
-        // Nessuna estensione da preservare: si ricade sulla forma normale.
+        // no extension to preserve: fall back to the plain form.
         _ => return private_temp_path(&dir.join(name), name),
     };
     dir.join(format!(".{stem}.{}.{ext}", random_suffix()))
 }
 
-/// Suffisso esadecimale casuale (8 byte) per i nomi temporanei.
+/// a random hex suffix for temporary names.
 ///
-/// Legge da `/dev/urandom`; se non fosse disponibile degrada su pid + nanosecondi
-/// — sufficiente all'*unicità*, che è tutto ciò che serve alla correttezza
-/// (l'unicità evita le collisioni; la sicurezza sta in `O_EXCL | O_NOFOLLOW`).
+/// reads `/dev/urandom`, degrading to pid plus nanoseconds — enough for
+/// *uniqueness*, which is all correctness needs; the security lives in `O_EXCL
+/// | O_NOFOLLOW`.
 fn random_suffix() -> String {
     use std::io::Read;
     let mut buf = [0u8; 8];
@@ -265,14 +249,13 @@ fn random_suffix() -> String {
     format!("{:x}{:08x}", std::process::id(), nanos)
 }
 
-/// Costruttori puri degli argomenti dei comandi che ricevono un **identifier
-/// come argomento posizionale**.
+/// pure builders for the commands that take an **identifier as a positional
+/// argument**.
 ///
-/// Ogni nome è preceduto da `--`: anche un valore che iniziasse con `-`
-/// (`-foo`, `--help`) viene trattato come operando e mai come flag del comando.
-/// È la rete a valle dell'argument-injection; la porta a monte è
-/// [`crate::config::validate_identifier`], che vieta il trattino iniziale.
-/// Sono funzioni pure proprio per poter asserire il `--` nei test senza root.
+/// every name is preceded by `--`, so even a value starting with `-` is read as
+/// an operand and never as a flag. this is the downstream net against argument
+/// injection; the upstream gate is [`crate::config::validate_identifier`].
+/// pure, so tests can assert the `--` without root.
 pub mod argv {
     use super::UserSpec;
 
@@ -297,7 +280,7 @@ pub mod argv {
         args
     }
 
-    /// `userdel -- <login>`. **Mai** `-r`: la home è di `PrepareOptRoot`.
+    /// `userdel -- <login>`. **never** `-r`: the home is `PrepareOptRoot`'s.
     pub fn userdel(user: &str) -> Vec<String> {
         vec!["--".to_string(), user.to_string()]
     }
@@ -343,7 +326,7 @@ pub mod argv {
     }
 }
 
-/// Specifica per la creazione di un utente di sistema (argomenti di `useradd`).
+/// the arguments for creating a system user.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UserSpec {
     pub name: String,
@@ -354,11 +337,11 @@ pub struct UserSpec {
     pub shell: String,
 }
 
-/// Operazioni di sistema mutanti/privilegiate, dietro un confine testabile.
+/// privileged, mutating system operations behind a testable boundary.
 ///
-/// **Nota di sicurezza:** `delete_user` NON rimuove mai la home (nessun `-r`).
-/// La rimozione della home `/opt/odoo` è di competenza esclusiva dello step
-/// che l'ha creata (`PrepareOptRoot`), che gira dopo nell'ordine inverso.
+/// **security note:** `delete_user` never removes the home (no `-r`). removing
+/// `/opt/odoo` belongs solely to the step that created it, which runs later in
+/// the reverse order.
 pub trait SystemOps {
     fn user_exists(&self, user: &str) -> bool;
     fn path_exists(&self, path: &Path) -> bool;
@@ -366,8 +349,8 @@ pub trait SystemOps {
     fn dir_is_empty(&self, path: &Path) -> Result<bool, StepError>;
 
     fn create_user(&self, spec: &UserSpec) -> Result<(), StepError>;
-    /// Rimuove l'utente (e il suo gruppo primario). **Mai** `-r`: la home non è
-    /// di competenza di questo comando.
+    /// removes the user and its primary group. **never** `-r`: the home is not
+    /// this command's business.
     fn delete_user(&self, user: &str) -> Result<(), StepError>;
     fn delete_group(&self, group: &str) -> Result<(), StepError>;
 
@@ -377,63 +360,65 @@ pub trait SystemOps {
     fn mkdir(&self, path: &Path) -> Result<(), StepError>;
     fn rmdir(&self, path: &Path) -> Result<(), StepError>;
 
-    // --- gestore di pacchetti e convenzioni di distribuzione ----------------
-    /// Il gestore di pacchetti di questa famiglia (`apt`, `dnf`, ...).
+    // --- package manager and distribution conventions -----------------------
+    /// this family's package manager.
     ///
-    /// Gli undici metodi `apt_*`/`dpkg_*` che stavano qui vivono ora dietro
-    /// [`PackageManager`]: aggiungere una seconda famiglia accanto a loro
-    /// avrebbe portato il trait a 80+ metodi e sparso la scelta del gestore in
-    /// ogni chiamante — il «ramo `if fedora` sparso» travestito da metodo.
+    /// the eleven `apt_*`/`dpkg_*` methods that used to live here now sit
+    /// behind [`PackageManager`]: a second family beside them would have taken
+    /// this trait past eighty methods and scattered the choice of manager into
+    /// every caller.
     fn packages(&self) -> &dyn PackageManager;
-    /// Le convenzioni di distribuzione (oggi: il firewall).
+    /// this family's distribution conventions.
     fn distro(&self) -> &dyn Distro;
 
-    /// Versione di `wkhtmltopdf` installata (es. `"0.12.6.1"`), o `None`.
+    /// the installed `wkhtmltopdf` version, or `None`.
     fn wkhtmltopdf_version(&self) -> Option<String>;
 
-    // --- servizi systemd (Fase 5) --------------------------------------------
+    // --- systemd services
+    // -----------------------------------------------------
     fn service_is_enabled(&self, service: &str) -> bool;
     fn service_is_active(&self, service: &str) -> bool;
     fn service_enable(&self, service: &str) -> Result<(), StepError>;
     fn service_disable(&self, service: &str) -> Result<(), StepError>;
     fn service_start(&self, service: &str) -> Result<(), StepError>;
     fn service_stop(&self, service: &str) -> Result<(), StepError>;
-    /// `systemctl restart <service>` (riavvia per applicare la nuova config).
+    /// `systemctl restart <service>`, to apply a new config.
     fn service_restart(&self, service: &str) -> Result<(), StepError>;
-    /// `systemctl reload <service>` (ricarica senza downtime).
+    /// `systemctl reload <service>`, without downtime.
     fn service_reload(&self, service: &str) -> Result<(), StepError>;
     /// `systemctl daemon-reload`.
     fn daemon_reload(&self) -> Result<(), StepError>;
 
-    // --- Nginx / firewall (Fase 9) -------------------------------------------
-    /// `ln -sf <src> <link>` (symlink idempotente).
+    // --- Nginx and firewall
+    // ---------------------------------------------------
+    /// idempotent `ln -sf <src> <link>`.
     fn create_symlink(&self, src: &Path, link: &Path) -> Result<(), StepError>;
-    /// Rimuove un symlink. Idempotente (assente → no-op).
+    /// removes a symlink. idempotent: absent means no-op.
     fn remove_symlink(&self, link: &Path) -> Result<(), StepError>;
-    /// `true` se esiste (anche dangling: `test -e`/`test -L`).
+    /// `true` when something is there, dangling links included.
     ///
-    /// **Attenzione:** risponde `true` anche per un **file regolare** o una
-    /// directory — usa `symlink_metadata`, che guarda il path, non la sua natura.
-    /// Se la natura conta, usa [`SystemOps::path_kind`]: confondere le due cose è
-    /// costato la distruzione di un file di configurazione del cliente (A-V3-5).
+    /// **careful:** also `true` for a **regular file** or a directory, because
+    /// it uses `symlink_metadata`. where the nature matters, use
+    /// [`SystemOps::path_kind`]: confusing the two cost a customer their
+    /// configuration file (A-V3-5).
     fn symlink_exists(&self, link: &Path) -> bool;
-    /// Che cosa c'è a questo path, **senza seguire i symlink**.
+    /// what is at this path, **without following symlinks**.
     ///
-    /// Serve dove la differenza fra «un symlink» e «un file vero» cambia ciò che
-    /// è lecito fare: un symlink si può rimuovere e ricreare identico, un file
-    /// regolare contiene dati che vanno preservati.
+    /// for where the difference changes what is allowed: a symlink can be
+    /// recreated identically, a regular file holds data to preserve.
     fn path_kind(&self, path: &Path) -> PathKind;
-    /// `nginx -t`: la config è valida?
+    /// `nginx -t`: is the config valid?
     fn nginx_test(&self) -> bool;
 
-    // --- PostgreSQL (Fase 5) -------------------------------------------------
-    /// `true` se il ruolo esiste (`SELECT 1 FROM pg_roles ...`).
+    // --- PostgreSQL
+    // -----------------------------------------------------------
+    /// `true` when the role exists.
     fn pg_role_exists(&self, role: &str) -> Result<bool, StepError>;
-    /// `true` se il database esiste (`SELECT 1 FROM pg_database ...`).
+    /// `true` when the database exists.
     fn pg_db_exists(&self, db: &str) -> Result<bool, StepError>;
-    /// Crea il ruolo. `password` è il segreto in chiaro (o `None` = peer auth):
-    /// l'escaping e l'invio sicuro (stdin, stderr soppresso) sono qui dentro,
-    /// così la password non trapela mai fuori dal confine.
+    /// creates the role. `password` is the plaintext secret, or `None` for peer
+    /// auth: escaping and safe delivery happen inside the boundary, so it never
+    /// leaks outside.
     fn pg_create_role(&self, role: &str, password: Option<&str>) -> Result<(), StepError>;
     /// `DROP ROLE IF EXISTS "<role>"`.
     fn pg_drop_role(&self, role: &str) -> Result<(), StepError>;
@@ -441,20 +426,21 @@ pub trait SystemOps {
     fn createdb(&self, owner: &str, db: &str) -> Result<(), StepError>;
     /// `dropdb --if-exists --force <db>` (chiude le connessioni attive).
     fn dropdb(&self, db: &str) -> Result<(), StepError>;
-    /// Elenca i database non-template del cluster (per la cautela sul purge).
+    /// lists the cluster's non-template databases, for the purge caution.
     fn pg_list_databases(&self) -> Result<Vec<String>, StepError>;
 
-    // --- sorgenti Odoo (Fase 6, tutto come utente non-root) ------------------
-    /// Esegue `sudo -u <user> -- <program> <args>` (privilegio minimo).
+    // --- Odoo sources, all as a non-root user
+    // ---------------------------------
+    /// runs `sudo -u <user> -- <program> <args>`: least privilege.
     fn run_as_user(&self, user: &str, program: &str, args: &[&str]) -> Result<(), StepError>;
     /// `sudo -u <user> -- mkdir -p <path>`.
     fn mkdir_p_as_user(&self, user: &str, path: &Path) -> Result<(), StepError>;
-    /// Rimozione ricorsiva (`rm -rf`) di una dir del **nostro** perimetro
-    /// (`<install_dir>/...`). Idempotente: dir assente → no-op.
+    /// recursive removal of a directory inside **our** perimeter. idempotent:
+    /// an absent directory is a no-op.
     fn remove_dir_all(&self, path: &Path) -> Result<(), StepError>;
-    /// Rileva lo stato dei sorgenti Odoo in `target`.
+    /// detects the state of the Odoo sources in `target`.
     fn detect_odoo_source(&self, user: &str, target: &Path) -> Result<OdooSourceState, StepError>;
-    /// Un singolo tentativo di `git clone` come `user`.
+    /// a single `git clone` attempt as `user`.
     fn git_clone(
         &self,
         user: &str,
@@ -463,71 +449,65 @@ pub trait SystemOps {
         depth: u32,
         target: &Path,
     ) -> Result<(), StepError>;
-    /// Fallback: scarica ed estrae il tarball del branch in `target` (come user).
+    /// fallback: downloads and extracts the branch tarball, as `user`.
     fn tarball_install(&self, user: &str, url: &str, target: &Path) -> Result<(), StepError>;
-    /// `<venv>/bin/python3` esiste ed è eseguibile?
+    /// does `<venv>/bin/python3` exist and is it executable?
     fn venv_python_exists(&self, venv: &Path) -> bool;
-    /// Il sistema è in grado di **creare** un virtualenv?
+    /// can this system **create** a virtualenv?
     ///
-    /// Non è la stessa domanda di "il modulo `venv` esiste": su Debian/Ubuntu il
-    /// modulo sta nella stdlib e c'è sempre, mentre `ensurepip` — senza cui
-    /// `python3 -m venv` si ferma a metà — arriva col pacchetto `python3-venv`.
-    /// L'implementazione chiede di `ensurepip` proprio per questo (A-R6-1).
+    /// not the same question as "does the `venv` module exist": that lives in
+    /// the stdlib and is always there, while `ensurepip` — without which
+    /// `python3 -m venv` stops halfway — comes with a separate package. the
+    /// implementation asks about `ensurepip` for exactly that reason (A-R6-1).
     fn python_venv_available(&self, python: &str) -> bool;
-    /// La versione di **questo** interprete, o `None` se non si sa.
+    /// the version of **this** interpreter, or `None` when unknown.
     ///
-    /// Serve a **spiegare un fallimento**, non a impedirlo (A-MD-7): quando pip
-    /// non riesce a costruire gevent, la causa più frequente è un Python più
-    /// recente di quelli per cui Odoo pinna, e quell'informazione non è
-    /// ricavabile dall'output di `gcc`.
+    /// used to **explain** a failure, not to prevent it (A-MD-7): when pip
+    /// cannot build gevent the usual cause is a Python newer than Odoo's pins,
+    /// and that is not recoverable from `gcc` output.
     ///
-    /// `None` è «non lo so» e non «va bene»: da lì non si conclude nulla e
-    /// l'errore originale resta quello che si legge.
+    /// `None` means "unknown", not "fine": nothing is concluded from it.
     fn python_version(&self, python: &str) -> Option<(u32, u32)>;
     /// `sudo -u <user> -- <python> -m venv <venv>`.
     ///
-    /// L'interprete è un parametro da M11: su una distribuzione il cui `python3`
-    /// è più recente dei pin di Odoo, il venv nasce su un interprete
-    /// alternativo installato apposta.
+    /// the interpreter is a parameter since M11: where the system `python3` is
+    /// newer than Odoo's pins, the venv is built on an alternative one.
     fn create_venv(&self, user: &str, python: &str, venv: &Path) -> Result<(), StepError>;
-    /// Legge un file di testo (es. requirements.txt).
+    /// reads a text file.
     fn read_to_string(&self, path: &Path) -> Result<String, StepError>;
 
-    // --- config + init DB (Fase 7) -------------------------------------------
-    /// Scrive `content` in un file **privato** (mode `0600` alla creazione): la
-    /// master password non è mai leggibile da altri utenti in nessun istante.
+    // --- config and database init
+    // ---------------------------------------------
+    /// writes `content` to a **private** file (`0600` from creation), so the
+    /// master password is never readable by others.
     ///
-    /// **Semantica: riscrittura in-place di un path già "nostro".** Il file
-    /// viene creato se assente e troncato se presente, e un eventuale symlink
-    /// **viene seguito** — comportamento voluto per il `.bashrc` dell'utente
-    /// installatore, che può legittimamente essere un symlink ai suoi dotfile
-    /// (riscriverlo come file regolare distruggerebbe la sua configurazione).
+    /// **semantics: in-place rewrite of a path already ours.** the file is
+    /// created if absent and truncated if present, and a symlink **is
+    /// followed** — deliberate for the installing user's `.bashrc`, which may
+    /// legitimately link into their dotfiles.
     ///
-    /// Per **creare** un file nuovo in una directory non-root (i temporanei
-    /// prima del `move_file`) usa invece [`SystemOps::create_private_file`]:
-    /// qui il path prevedibile + il follow del symlink sarebbero un vettore
-    /// TOCTOU (root che scrive attraverso un symlink pre-piazzato).
+    /// to **create** a new file in a directory owned by someone else, use
+    /// [`SystemOps::create_private_file`] instead: here a predictable path plus
+    /// symlink following would be a TOCTOU vector.
     fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError>;
-    /// **Crea** un file privato (`0600`) a `path`, fail-closed su ogni sorpresa.
+    /// **creates** a private (`0600`) file, fail-closed on any surprise.
     ///
-    /// Apre con `O_CREAT | O_EXCL | O_NOFOLLOW`:
-    /// - `O_EXCL` → se il path esiste già (file, dir o symlink) l'apertura
-    ///   fallisce: non si scrive mai su qualcosa che non abbiamo creato noi;
-    /// - `O_NOFOLLOW` → un symlink al path non viene mai seguito.
+    /// opens with `O_CREAT | O_EXCL | O_NOFOLLOW`, so an existing path — file,
+    /// directory or symlink — fails the open, and a symlink is never followed.
     ///
-    /// È il metodo da usare per i file temporanei scritti da **root** in
-    /// directory possedute da altri utenti (es. la install dir, owned `odoo`):
-    /// il peggio che un attaccante locale ottiene è un fallimento dello step,
-    /// mai una scrittura arbitraria come root né un dirottamento del contenuto
-    /// (che include le password). Vedi [`private_temp_path`].
+    /// this is the method for temporaries **root** writes into directories
+    /// owned by other users: the worst a local attacker gets is a failed step,
+    /// never an arbitrary root write nor hijacked contents. see
+    /// [`private_temp_path`].
     fn create_private_file(&self, path: &Path, content: &str) -> Result<(), StepError>;
-    /// Sposta `src` su `dst` (rename, con fallback copy+remove cross-device).
+    /// moves `src` onto `dst`: a rename, falling back to copy+remove across
+    /// devices.
     fn move_file(&self, src: &Path, dst: &Path) -> Result<(), StepError>;
-    /// Copia `src` in `dst` (per il backup).
+    /// copies `src` to `dst`, for backups.
     fn copy_file(&self, src: &Path, dst: &Path) -> Result<(), StepError>;
-    /// Rimuove un file. Idempotente (`rm -f`): assente → no-op.
+    /// removes a file. idempotent: absent means no-op.
     fn remove_file(&self, path: &Path) -> Result<(), StepError>;
-    /// `true` se il DB ha già lo schema Odoo (tabella `ir_module_module`).
+    /// `true` when the database already has the Odoo schema.
     fn pg_db_initialized(&self, db: &str) -> Result<bool, StepError>;
     /// `sudo -u <user> -- <python> <odoo_bin> -c <conf> -d <db> -i base
     /// --without-demo=all --stop-after-init`.
@@ -540,28 +520,29 @@ pub trait SystemOps {
         db: &str,
     ) -> Result<(), StepError>;
 
-    // --- control-script + bashrc (Fase 10) -----------------------------------
-    /// Home dell'utente da `getent passwd <user>` (campo 6). `None` se assente.
+    // --- control script and bashrc
+    // --------------------------------------------
+    /// the user's home from `getent passwd`; `None` when absent.
     fn getent_home(&self, user: &str) -> Result<Option<String>, StepError>;
-    /// `chown <user>:<user> <path>` (i file restano dell'utente installatore).
+    /// `chown <user>:<user> <path>`: the files stay the installing user's.
     fn chown_to_user(&self, path: &Path, user: &str) -> Result<(), StepError>;
-    /// Appende una singola riga a un file (creandolo se assente). **Mai**
-    /// riscrivere l'intero file.
+    /// appends a single line to a file, creating it if absent. the whole file
+    /// is **never** rewritten.
     fn append_line(&self, path: &Path, line: &str) -> Result<(), StepError>;
 }
 
-/// Implementazione reale: esegue i comandi di sistema.
+/// the real implementation: it runs the system commands.
 ///
-/// Porta con sé i due backend scelti per la famiglia. Non deriva `Default`: un
-/// `RealSystemOps` senza famiglia non ha senso, e un default sceglierebbe apt in
-/// silenzio.
+/// carries the two backends chosen for the family. deliberately no `Default`: a
+/// `RealSystemOps` without a family makes no sense, and a default would pick
+/// apt in silence.
 pub struct RealSystemOps {
     packages: Box<dyn PackageManager>,
     distro: Box<dyn Distro>,
 }
 
 impl RealSystemOps {
-    /// Le implementazioni della famiglia Fedora (dnf + firewalld).
+    /// the Fedora family's implementations: dnf and firewalld.
     pub fn fedora() -> Self {
         RealSystemOps {
             packages: Box::new(crate::packaging::dnf::DnfBackend),
@@ -569,12 +550,11 @@ impl RealSystemOps {
         }
     }
 
-    /// Le implementazioni della famiglia Debian (apt + ufw).
+    /// the Debian family's implementations: apt and ufw.
     ///
-    /// Non esiste un costruttore «senza famiglia»: sceglierne una e' una
-    /// decisione, e va presa in un posto solo — [`backend_factory`], che e' il
-    /// gate. Un `new()` che desse apt a chiunque sarebbe il default silenzioso
-    /// che questo lavoro esiste per evitare.
+    /// there is no "family-less" constructor: choosing one is a decision, and
+    /// it belongs in a single place — [`backend_factory`]. a `new()` handing
+    /// apt to everyone would be the silent default this work exists to avoid.
     pub fn debian() -> Self {
         RealSystemOps {
             packages: Box::new(crate::packaging::apt::AptBackend),
@@ -583,23 +563,17 @@ impl RealSystemOps {
     }
 }
 
-/// La fabbrica dei backend per una famiglia, o `None` se **questo binario** non
-/// ne ha uno.
+/// the backend factory for a family, or `None` when **this binary** has none.
 ///
-/// # Perche' `Option`
+/// an `Option` because "I do not have one" must be **sayable**. a `match`
+/// handing apt to a family without a backend would be a silent lie: `apt-get`
+/// on a machine without apt fails obscurely, and in a rollback it would leave
+/// installed everything there was to remove. both families have a backend
+/// today, but the shape is the fail-closed that will hold for a third.
 ///
-/// Perche' la risposta «non ce l'ho» dev'essere **dicibile**. Un `match` che
-/// desse apt a una famiglia senza backend sarebbe una bugia silenziosa:
-/// `apt-get` su una macchina senza apt fallisce in modo oscuro, e nel rollback
-/// significherebbe lasciare installato tutto cio' che c'era da rimuovere.
-/// Da M2 entrambe le famiglie hanno un backend, ma la forma resta: e' il
-/// fail-closed che regge quando se ne aggiungera' una terza.
-///
-/// Restituisce un puntatore a funzione e non un valore gia' costruito perche'
-/// gli step **possiedono** le proprie `ops`: ne servono N istanze, non N
-/// riferimenti (vedi [`crate::steps::OpsFactory`]). Chi chiama gestisce il
-/// `None` **una volta**, con un messaggio, e da li' in poi ha una fabbrica che
-/// non puo' fallire.
+/// returns a function pointer rather than a built value because steps **own**
+/// their `ops`: N instances are needed, not N references. the caller handles
+/// the `None` **once**, and from there has a factory that cannot fail.
 pub fn backend_factory(family: OsFamily) -> Option<fn() -> Box<dyn SystemOps>> {
     match family {
         OsFamily::Debian => Some(|| Box::new(RealSystemOps::debian()) as Box<dyn SystemOps>),
@@ -607,8 +581,12 @@ pub fn backend_factory(family: OsFamily) -> Option<fn() -> Box<dyn SystemOps>> {
     }
 }
 
-/// Esegue un comando esterno (con eventuali env e un timeout opzionale)
-/// mappando l'esito su [`StepError::CommandFailed`].
+/// runs an external command, with optional env and timeout.
+///
+/// # errors
+///
+/// [`StepError::CommandFailed`] on a non-zero exit, [`StepError::Timeout`] on
+/// expiry, [`StepError::Io`] when the command cannot be spawned.
 fn run_command_full(
     program: &str,
     args: &[&str],
@@ -622,7 +600,7 @@ fn run_command_full(
         command.env(key, value);
     }
     let output = match timeout {
-        // Nessun timeout: `output()` è già la via più semplice e drena i pipe.
+        // no timeout: `output()` is simplest and drains the pipes itself.
         None => command.output().map_err(|e| StepError::CommandFailed {
             command: rendered.clone(),
             status: "spawn-failed".to_string(),
@@ -645,7 +623,7 @@ fn run_command_full(
     }
 }
 
-/// Esegue un comando esterno con env aggiuntivi e **senza** timeout.
+/// runs an external command with extra env and **no** timeout.
 pub(crate) fn run_command_with_env(
     program: &str,
     args: &[&str],
@@ -654,41 +632,38 @@ pub(crate) fn run_command_with_env(
     run_command_full(program, args, envs, None)
 }
 
-/// Esegue un comando esterno senza env aggiuntivi e **senza** timeout.
+/// runs an external command with no extra env and **no** timeout.
 pub(crate) fn run_command(program: &str, args: &[&str]) -> Result<(), StepError> {
     run_command_full(program, args, &[], None)
 }
 
-/// Esegue un comando **di rete** con il timeout corrente ([`network_timeout`]).
+/// runs a **network** command under the current [`network_timeout`].
 ///
-/// Solo per le operazioni che parlano con un host remoto: `git clone`, il
-/// download del tarball, il download del `.deb`. Vedi [`network_timeout`] per
-/// il perché le altre operazioni ne restino fuori.
+/// only for operations that talk to a remote host. see [`network_timeout`] for
+/// why the others stay out.
 fn run_network_command(program: &str, args: &[&str]) -> Result<(), StepError> {
     run_command_full(program, args, &[], network_timeout())
 }
 
-/// Esegue un comando esterno con un timeout **esplicito**.
+/// runs an external command under an **explicit** timeout.
 ///
-/// È la primitiva su cui poggiano le operazioni di rete, esposta perché il suo
-/// comportamento (uccisione del processo alla scadenza, `stderr` catturato,
-/// nessun deadlock sui pipe) sia verificabile nei test senza toccare la rete né
-/// aspettare minuti.
+/// the primitive the network operations rest on, exposed so its behaviour —
+/// killing on expiry, capturing stderr, never deadlocking on the pipes — is
+/// checkable without touching the network or waiting minutes.
 pub fn run_with_timeout(program: &str, args: &[&str], limit: Duration) -> Result<(), StepError> {
     run_command_full(program, args, &[], Some(limit))
 }
 
-/// Adatta gli argomenti costruiti da [`argv`] alla firma di [`run_command`].
+/// adapts the arguments built by [`argv`] to [`run_command`]'s signature.
 fn as_refs(args: &[String]) -> Vec<&str> {
     args.iter().map(String::as_str).collect()
 }
 
-/// `true` se l'output di `apt-cache policy` dichiara un candidato installabile.
+/// `true` when `apt-cache policy` output declares an installable candidate.
 ///
-/// Pura e pubblica per essere verificabile sui casi reali senza avere apt sotto
-/// mano: pacchetto disponibile, pacchetto puramente virtuale (`Candidate:
-/// (none)`), nome inesistente (nessuna riga `Candidate:`, solo un `N: Unable to
-/// locate package`).
+/// pure and public so the real cases are checkable without apt at hand:
+/// available package, purely virtual one (`Candidate: (none)`), and a name that
+/// does not exist at all.
 pub fn has_installable_candidate(policy_output: &str) -> bool {
     policy_output.lines().any(|line| {
         line.trim()
@@ -701,32 +676,32 @@ pub fn has_installable_candidate(policy_output: &str) -> bool {
     })
 }
 
-/// Numero di pacchetti noti ad apt, letto da `apt-cache stats`.
+/// how many packages apt knows about, from `apt-cache stats`.
 ///
-/// `None` se la riga non c'è o non è un numero — cioè se non lo sappiamo, che è
-/// diverso da "zero". Pura per essere verificabile sull'output reale.
+/// `None` when the line is missing or not a number — "unknown", which differs
+/// from "zero".
 pub fn total_package_names(stats_output: &str) -> Option<u64> {
     for line in stats_output.lines() {
         let Some(value) = line.trim().strip_prefix("Total package names:") else {
             continue;
         };
-        // La riga è `Total package names: 163333 (4573 k)`: il primo token è il
-        // conteggio, il resto è la dimensione in memoria.
+        // the line is `Total package names: 163333 (4573 k)`: the first token
+        // is the count, the rest is the in-memory size.
         return value.split_whitespace().next()?.parse().ok();
     }
     None
 }
 
-/// Esegue un comando catturandone lo stdout (per query psql/systemctl).
+/// runs a command capturing stdout, for psql and systemctl queries.
 pub(crate) fn capture_command(program: &str, args: &[&str]) -> Result<String, StepError> {
     capture_command_with_env(program, args, &[])
 }
 
-/// Come [`capture_command`], con variabili d'ambiente aggiuntive.
+/// as [`capture_command`], with extra environment variables.
 ///
-/// Esiste per `LC_ALL=C`: l'output di `apt-cache` è **localizzato**, e un parser
-/// che cerca `Candidate:` su una macchina italiana leggerebbe `Candidato:` e
-/// concluderebbe che nessun pacchetto è installabile.
+/// exists for `LC_ALL=C`: `apt-cache` output is **localised**, and a parser
+/// looking for `Candidate:` on a localised machine would conclude that no
+/// package is installable.
 pub(crate) fn capture_command_with_env(
     program: &str,
     args: &[&str],
@@ -758,12 +733,11 @@ pub(crate) fn capture_command_with_env(
     }
 }
 
-/// Esegue un comando passando `input` via **stdin** (non in argv).
+/// runs a command feeding `input` through **stdin**, never argv.
 ///
-/// Se `secret` è `true`, lo stderr NON viene incluso nell'errore: psql, in caso
-/// di errore, ristampa la riga fallita — che conterrebbe la password. Per i
-/// comandi che portano segreti si preferisce perdere il dettaglio diagnostico
-/// piuttosto che rischiare un leak nei log.
+/// with `secret`, stderr is left out of the error: psql echoes the failing
+/// line, which would contain the password. for commands carrying secrets we
+/// lose the diagnostic detail rather than risk a leak.
 fn run_command_stdin(
     program: &str,
     args: &[&str],
@@ -786,7 +760,7 @@ fn run_command_stdin(
             stderr: e.to_string(),
         })?;
 
-    // `take()` per chiudere lo stdin (EOF) dopo la scrittura ed evitare deadlock.
+    // `take()` closes stdin after writing, so the child sees EOF.
     if let Some(mut stdin) = child.stdin.take() {
         stdin
             .write_all(input.as_bytes())
@@ -825,15 +799,15 @@ fn run_command_stdin(
     }
 }
 
-/// Escape di un literal SQL: raddoppia gli apici singoli (standard SQL).
+/// escapes an SQL literal by doubling single quotes.
 ///
-/// Usato per la password del ruolo. Gli identifier (nome ruolo/DB) sono
-/// validati come identifier in Fase 1 e vengono comunque double-quotati.
+/// used for the role's password. identifiers are validated upstream and
+/// double-quoted anyway.
 pub fn escape_sql_literal(value: &str) -> String {
     value.replace('\'', "''")
 }
 
-/// Converte un `Errno` di nix in `io::Error` per allegarlo a `StepError::Io`.
+/// converts a nix `Errno` into an `io::Error`, for `StepError::Io`.
 fn errno_io(e: nix::errno::Errno) -> std::io::Error {
     std::io::Error::from_raw_os_error(e as i32)
 }
@@ -866,7 +840,7 @@ impl SystemOps for RealSystemOps {
     }
 
     fn delete_user(&self, user: &str) -> Result<(), StepError> {
-        // MAI `-r`: la home è di competenza di PrepareOptRoot.undo.
+        // NEVER `-r`: the home belongs to `PrepareOptRoot`'s undo.
         run_command("userdel", &as_refs(&argv::userdel(user)))
     }
 
@@ -927,7 +901,7 @@ impl SystemOps for RealSystemOps {
             String::from_utf8_lossy(&out.stdout),
             String::from_utf8_lossy(&out.stderr)
         );
-        // Primo token che sembra una versione (inizia con cifra, ≥ 2 punti).
+        // first token that looks like a version: starts with a digit, two dots.
         text.split_whitespace()
             .find(|tok| {
                 tok.chars().next().is_some_and(|c| c.is_ascii_digit())
@@ -1002,8 +976,8 @@ impl SystemOps for RealSystemOps {
             return PathKind::Absent;
         };
         if meta.file_type().is_symlink() {
-            // Un link il cui target non si legge non è ricreabile identico:
-            // trattarlo come "non so cos'è" è meglio che ricrearlo sbagliato.
+            // a link whose target cannot be read is not recreatable
+            // identically, so "unknown" beats recreating it wrong.
             return match std::fs::read_link(path) {
                 Ok(target) => PathKind::Symlink { target },
                 Err(_) => PathKind::Other,
@@ -1049,8 +1023,8 @@ impl SystemOps for RealSystemOps {
     }
 
     fn pg_create_role(&self, role: &str, password: Option<&str>) -> Result<(), StepError> {
-        // Identifier double-quotato; password come literal escaped. L'SQL va via
-        // stdin e, in caso di errore, lo stderr è soppresso (potrebbe contenerla).
+        // identifier double-quoted, password as an escaped literal. the SQL
+        // goes through stdin, and on error stderr is suppressed.
         let sql = match password {
             Some(pw) => format!(
                 "CREATE ROLE \"{role}\" WITH LOGIN CREATEDB PASSWORD '{}';",
@@ -1180,9 +1154,8 @@ impl SystemOps for RealSystemOps {
     ) -> Result<(), StepError> {
         let target_str = target.to_string_lossy();
         let depth_str = depth.to_string();
-        // Operazione di rete → timeout. Un tentativo scaduto è un fallimento
-        // ritentabile: `CloneOdooRepo` lo tratta come gli altri (retry con
-        // backoff, poi fallback tarball).
+        // a network operation, so a timeout applies. an expired attempt is a
+        // retryable failure, treated like any other.
         run_network_command(
             "sudo",
             &[
@@ -1209,31 +1182,22 @@ impl SystemOps for RealSystemOps {
     }
 
     fn tarball_install(&self, user: &str, url: &str, target: &Path) -> Result<(), StepError> {
-        // Nome **imprevedibile** e file creato da noi prima di passarlo a wget
-        // (A-V3-3). Il nome fisso `/tmp/odoo-src.tar.gz` era noto a chiunque
-        // leggesse il sorgente: bastava piazzarci un symlink prima che
-        // l'installer partisse (root ci scriveva sopra), o sostituire l'archivio
-        // fra il download e il `tar` che lo estrae come utente `odoo` — e il
-        // tarball, a differenza del `.deb` di wkhtmltopdf, **non ha un checksum
-        // atteso** da opporre a un contenuto sostituito.
+        // unpredictable name, and the file is created by us before wget sees
+        // the path (A-V3-3). the old fixed name was known to anyone reading the
+        // source, and unlike the wkhtmltopdf package the tarball has **no
+        // expected checksum** to hold against replaced contents.
         //
-        // `create_private_file` apre con `O_CREAT | O_EXCL | O_NOFOLLOW`: se a
-        // quel path c'è già qualcosa — file, directory o symlink — fallisce
-        // invece di scriverci. Dopo, wget riapre il path per nome, ma il file è
-        // già nostro, il nome non era indovinabile, e `/tmp` è sticky: nessun
-        // altro utente può rimuoverlo per metterci il proprio.
-        //
-        // Il `chown` non è un dettaglio: il file nasce `0600 root` e a leggerlo
-        // sarà il `tar` lanciato come utente `odoo`.
+        // `create_private_file` is fail-closed, so an occupied path fails the
+        // download instead of hijacking it. the `chown` is not a detail: the
+        // file is born `0600 root` and `tar` reads it as `odoo`.
         let tmp = private_temp_path_keeping_extension(&std::env::temp_dir(), "odoo-src.tar.gz");
         self.create_private_file(&tmp, "")?;
         self.chown_named(&tmp, user, user)?;
         let tmp_str = tmp.to_string_lossy().into_owned();
         let target_str = target.to_string_lossy().into_owned();
 
-        // Scarica; poi crea/estrai come utente (i file risultano owned da lui).
-        // Solo il download ha un timeout: l'estrazione è locale e su una
-        // macchina lenta può durare parecchio in modo del tutto legittimo.
+        // only the download is timed: extraction is local and can legitimately
+        // take a while on a slow machine.
         let outcome = (|| {
             run_network_command("wget", &["-qO", &tmp_str, url])?;
             run_command(
@@ -1276,16 +1240,11 @@ impl SystemOps for RealSystemOps {
     }
 
     fn python_venv_available(&self, python: &str) -> bool {
-        // `import ensurepip`, NON `python3 -m venv --help`.
-        //
-        // Il modulo `venv` vive in `libpython3.x-stdlib`, che c'è sempre: il suo
-        // `--help` risponde 0 anche su un sistema dove creare un virtualenv è
-        // impossibile. Il pezzo che il pacchetto `python3-venv` porta davvero è
-        // `ensurepip` (verificato: `dpkg -S .../ensurepip/__init__.py` →
-        // `python3.12-venv`, mentre `.../venv/__init__.py` → `libpython3.12-stdlib`).
-        // Chiedere del modulo sbagliato rendeva questa precondizione un controllo
-        // che non poteva fallire, e il fallimento arrivava più tardi come errore
-        // grezzo di Python con una directory `sandbox` a metà (A-R6-1).
+        // `import ensurepip`, NOT `python3 -m venv --help`: the `venv` module
+        // is in the stdlib and always answers 0, even where creating a
+        // virtualenv is impossible. `ensurepip` is what the venv package
+        // actually brings. asking about the wrong module made this a check that
+        // could not fail (A-R6-1).
         Command::new(python)
             .args(["-c", "import ensurepip"])
             .output()
@@ -1293,9 +1252,9 @@ impl SystemOps for RealSystemOps {
             .unwrap_or(false)
     }
 
-    /// Una sola fonte per «che Python è questo»: la lettura sta in
-    /// [`crate::checks::python_version`], che interroga lo stesso `python3` che
-    /// `create_venv` invoca qui sotto.
+    /// one source for "which Python is this": the read lives in
+    /// [`crate::checks::python_version`], asking the same interpreter
+    /// `create_venv` invokes below.
     fn python_version(&self, python: &str) -> Option<(u32, u32)> {
         crate::checks::python_version(python)
     }
@@ -1334,7 +1293,7 @@ impl SystemOps for RealSystemOps {
         if std::fs::rename(src, dst).is_ok() {
             return Ok(());
         }
-        // Fallback cross-device: copia poi rimuove la sorgente.
+        // cross-device fallback: copy, then remove the source.
         std::fs::copy(src, dst).map_err(|e| StepError::io(dst, e))?;
         std::fs::remove_file(src).map_err(|e| StepError::io(src, e))?;
         Ok(())
@@ -1407,7 +1366,7 @@ impl SystemOps for RealSystemOps {
                 stderr: e.to_string(),
             })?;
         if !output.status.success() {
-            return Ok(None); // utente non trovato
+            return Ok(None); // user not found
         }
         let line = String::from_utf8_lossy(&output.stdout);
         let home = line
@@ -1426,7 +1385,7 @@ impl SystemOps for RealSystemOps {
             .ok_or_else(|| {
                 StepError::Precondition(format!("utente '{user}' non trovato per chown"))
             })?;
-        // gruppo omonimo se esiste, altrimenti gruppo primario dell'utente.
+        // the same-named group if it exists, else the user's primary group.
         let gid = nix::unistd::Group::from_name(user)
             .ok()
             .flatten()
@@ -1447,15 +1406,15 @@ impl SystemOps for RealSystemOps {
     }
 }
 
-/// Confine per i download di rete, separato da [`SystemOps`] così è mockabile
-/// nei test senza toccare la rete.
+/// the network-download boundary, separate from [`SystemOps`] so tests can mock
+/// it without touching the network.
 pub trait Downloader {
-    /// Scarica `url` in `dest`. La verifica di integrità (checksum) è a carico
-    /// del chiamante (vedi [`sha256_hex`]): il download NON è fidato di per sé.
+    /// downloads `url` to `dest`. verifying integrity is the caller's job (see
+    /// [`sha256_hex`]): a download is not trusted by itself.
     fn download(&self, url: &str, dest: &Path) -> Result<(), StepError>;
 }
 
-/// Downloader reale via `wget` (già presente tra i prerequisiti bootstrap).
+/// the real downloader, through `wget`.
 #[derive(Debug, Default)]
 pub struct RealDownloader;
 
@@ -1467,28 +1426,24 @@ impl RealDownloader {
 
 impl Downloader for RealDownloader {
     fn download(&self, url: &str, dest: &Path) -> Result<(), StepError> {
-        // Il file di destinazione lo creiamo **noi**, fail-closed, prima di
-        // dare il path a wget (A-V3-3): `wget -O` apre per nome e segue i
-        // symlink, quindi da solo scriverebbe volentieri dove punta un link
-        // piazzato da altri. Con `O_EXCL | O_NOFOLLOW` un path già occupato —
-        // da un file, una directory o un symlink — fa fallire il download
-        // invece di dirottarlo.
+        // **we** create the destination, fail-closed, before wget sees the path
+        // (A-V3-3): `wget -O` opens by name and follows symlinks, so on its own
+        // it would happily write wherever a planted link points.
         create_private_file_at(dest, "")?;
         let rendered = dest.to_string_lossy();
-        // Rete → timeout. Un download troncato dal kill non è comunque
-        // installabile: il chiamante verifica il checksum (fail-closed) e
-        // rimuove il file parziale.
+        // a download truncated by the kill is not installable anyway: the
+        // caller verifies the checksum and removes the partial file.
         run_network_command("wget", &["-q", "-O", &rendered, url])
     }
 }
 
-/// Crea un file privato (`0600`) fail-closed: `O_CREAT | O_EXCL | O_NOFOLLOW`.
+/// creates a private (`0600`) file, fail-closed with `O_CREAT | O_EXCL |
+/// O_NOFOLLOW`.
 ///
-/// È il corpo di [`SystemOps::create_private_file`], estratto come funzione
-/// libera perché serve anche a chi non ha un `SystemOps` sotto mano — cioè al
-/// [`RealDownloader`], che deve poter creare **lui** il file di destinazione
-/// prima di consegnarne il path a `wget` (A-V3-3). Una sola implementazione
-/// della primitiva delicata: se cambia, cambia per tutti.
+/// the body of [`SystemOps::create_private_file`], pulled out as a free
+/// function because [`RealDownloader`] needs it too, without a `SystemOps` at
+/// hand (A-V3-3). one implementation of the delicate primitive: if it changes,
+/// it changes for everyone.
 pub fn create_private_file_at(path: &Path, content: &str) -> Result<(), StepError> {
     use std::io::Write;
     use std::os::unix::fs::OpenOptionsExt;
@@ -1503,7 +1458,7 @@ pub fn create_private_file_at(path: &Path, content: &str) -> Result<(), StepErro
         .map_err(|e| StepError::io(path, e))
 }
 
-/// Calcola lo SHA-256 di un file come stringa esadecimale minuscola.
+/// the SHA-256 of a file, as a lowercase hex string.
 pub fn sha256_hex(path: &Path) -> Result<String, StepError> {
     use sha2::{Digest, Sha256};
     let mut file = std::fs::File::open(path).map_err(|e| StepError::io(path, e))?;

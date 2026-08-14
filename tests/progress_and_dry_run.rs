@@ -1,4 +1,4 @@
-//! Test del reporter di progresso e del piano `--dry-run` (Fase 11).
+//! the progress reporter and the `--dry-run` plan.
 
 mod common;
 
@@ -43,7 +43,7 @@ fn reporter_notified_on_success() {
 fn reporter_notified_on_failure_and_rollback() {
     let dir = tempfile::tempdir().expect("tempdir");
     let (reporter, events) = RecordingReporter::new();
-    // alpha, beta completano; gamma fallisce → rollback di beta e alpha.
+    // the first two complete, the third fails, and both are rolled back.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha")),
         Box::new(NoopStep::new("beta")),
@@ -57,7 +57,7 @@ fn reporter_notified_on_failure_and_rollback() {
     let ev = events_of(&events);
     assert!(ev.contains(&"failed:gamma".to_string()));
     assert!(ev.contains(&"rollback".to_string()));
-    // undo in ordine inverso: prima beta, poi alpha.
+    // undone in reverse order.
     let ub = ev.iter().position(|e| e == "undo:beta").expect("undo beta");
     let ua = ev
         .iter()
@@ -78,8 +78,8 @@ fn noop_reporter_is_usable() {
 
 #[test]
 fn dry_run_plan_does_not_mutate() {
-    // dry_run_plan chiama snapshot (query) + run in dry-run: nessuna operazione
-    // mutante deve essere invocata sul SystemOps.
+    // the plan calls snapshot and a dry `run`: no mutating operation may reach
+    // `SystemOps`.
     let cfg = MockConfig {
         user_exists: false,
         path_exists: true,
@@ -98,13 +98,13 @@ fn dry_run_plan_does_not_mutate() {
 
     dry_run_plan(&mut steps, &ctx, &reporter);
 
-    // Nessuna mutazione (niente useradd/chown/…): il log delle op è vuoto.
+    // no mutation at all: the operations log is empty.
     assert!(
         ops_of(&log).is_empty(),
         "dry-run non deve mutare, trovato: {:?}",
         ops_of(&log)
     );
-    // Il piano elenca lo step.
+    // the plan lists the step.
     assert_eq!(
         events_of(&events),
         vec!["start:create-odoo-user", "done:create-odoo-user"]

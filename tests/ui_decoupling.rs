@@ -1,7 +1,7 @@
-//! Test strutturale (Fase 11): la UI è disaccoppiata.
+//! a structural test: the UI is decoupled.
 //!
-//! Gli step NON importano `inquire`/`indicatif`; il motore non importa
-//! `indicatif` (dipende solo dall'astrazione `ProgressReporter`).
+//! no step imports `inquire` or `indicatif`, and the engine imports neither —
+//! it depends only on the `ProgressReporter` abstraction.
 
 use std::fs;
 use std::path::Path;
@@ -19,8 +19,8 @@ fn read_rs_files(dir: &Path) -> Vec<(String, String)> {
     out
 }
 
-/// `true` se il file **importa o usa** la crate (non un semplice riferimento in
-/// un commento). Cerca `use <crate>` o `<crate>::`.
+/// `true` when the file **imports or uses** the crate, rather than merely
+/// mentioning it in a comment.
 fn imports_or_uses(content: &str, krate: &str) -> bool {
     content.contains(&format!("use {krate}")) || content.contains(&format!("{krate}::"))
 }
@@ -50,7 +50,7 @@ fn engine_does_not_depend_on_indicatif() {
         !imports_or_uses(&content, "indicatif"),
         "il motore deve dipendere dall'astrazione ProgressReporter, non da indicatif"
     );
-    // Ma deve usare l'astrazione.
+    // but it must use the abstraction.
     assert!(
         content.contains("ProgressReporter"),
         "il motore usa l'astrazione di progresso"

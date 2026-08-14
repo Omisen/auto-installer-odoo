@@ -1,11 +1,11 @@
 #!/bin/sh
-# Rimuove l'alias `vok` creato da postinst.
+# removes the alias created by postinst.
 #
-# Due condizioni, non una — è lo stesso ragionamento del `PreState` del motore:
-#   1. solo alla RIMOZIONE (`remove`/`purge`), mai su `upgrade`, o un
-#      aggiornamento lascerebbe l'utente senza alias;
-#   2. solo se il link punta ancora a `invok`. Se qualcuno l'ha ripuntato
-#      altrove, quel link non è più il nostro e non è nostro da cancellare.
+# two conditions, not one — the engine's `PreState` reasoning:
+#   1. only on REMOVAL, never on an upgrade, which would otherwise leave the
+#      user without the alias;
+#   2. only if the link still points at our binary. repointed elsewhere, it is
+#      no longer ours to delete.
 set -e
 
 case "$1" in

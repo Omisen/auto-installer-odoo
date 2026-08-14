@@ -1,14 +1,12 @@
-//! Risoluzione della configurazione: cascata CLI → `.env` → interattivo → default.
+//! configuration resolution: the CLI → `.env` → interactive → default cascade.
 //!
-//! Replica la *semantica* di `lib/cli.sh` del Bash originale, non la forma:
-//! - i booleani `CLI_*_SET` diventano `Option<T>` in [`RawConfig`];
-//! - il `source` del file `.env` (esecuzione come root!) diventa un parser
-//!   **dichiarativo** ([`parse_env_file`]) che non esegue nulla;
-//! - gli `error`/`exit 1` diventano [`ConfigError`] tipizzati.
+//! reproduces the *semantics* of Bash's `lib/cli.sh`, not its shape: the
+//! `CLI_*_SET` booleans become `Option<T>`, the `source` of the `.env` file —
+//! code execution as root — becomes a **declarative** parser
+//! ([`parse_env_file`]), and `exit 1` becomes a typed [`ConfigError`].
 //!
-//! La risoluzione ([`ResolvedConfig::resolve`]) è **pura**: nessun I/O, nessun
-//! prompt. I prompt interattivi vivono in [`crate::prompt`] e riempiono un
-//! ulteriore `RawConfig` che si sovrappone all'`.env`.
+//! [`ResolvedConfig::resolve`] is **pure**: no I/O, no prompts. those live in
+//! [`crate::prompt`] and fill another `RawConfig` layered over the `.env`.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,9 +17,9 @@ use crate::cli::Cli;
 use crate::error::StepError;
 use crate::secret::Secret;
 
-// --- Default e costanti (allineati al Bash) ---------------------------------
+// --- defaults and constants -------------------------------------------------
 
-/// `ODOO_HOME` è una costante architetturale: non sovrascrivibile.
+/// an architectural constant: not overridable.
 pub const ODOO_HOME: &str = "/opt/odoo";
 const DEFAULT_VERSION: &str = "18.0";
 const DEFAULT_ODOO_USER: &str = "odoo";
@@ -29,9 +27,9 @@ const DEFAULT_PORT: &str = "8069";
 const DEFAULT_DB_NAME: &str = "odoo";
 const DEFAULT_ADMIN_PASSWD: &str = "admin";
 
-// --- Errori di configurazione ------------------------------------------------
+// --- configuration errors ---------------------------------------------------
 
-/// Errore di risoluzione/validazione della configurazione.
+/// a configuration resolution or validation error.
 #[derive(Debug, thiserror::Error)]
 pub enum ConfigError {
     #[error("versione Odoo non valida: '{0}'. Valori ammessi: 16|17|18|19 oppure 16.0..19.0")]
@@ -73,12 +71,13 @@ pub enum ConfigError {
     },
 }
 
-// --- RawConfig: valori grezzi da una singola sorgente ------------------------
+// --- RawConfig: raw values from one source ----------------------------------
 
-/// Valori grezzi (non validati) provenienti da una sorgente: CLI, `.env`, o
-/// prompt interattivi. Ogni campo è `Option`: `None` = non fornito da questa
-/// sorgente. `admin_passwd` è tenuta in chiaro qui perché va parsata, ma la
-/// struct **non** implementa `Debug` di proposito, per non rischiare leak nei log.
+/// unvalidated values from one source: the CLI, the `.env` or the prompts.
+///
+/// every field is an `Option`, where `None` means this source did not supply
+/// it. `admin_passwd` is held in the clear because it still has to be parsed,
+/// so the struct deliberately does **not** implement `Debug`.
 #[derive(Default, Clone)]
 pub struct RawConfig {
     pub version: Option<String>,
@@ -92,12 +91,12 @@ pub struct RawConfig {
     pub logfile: Option<String>,
     pub with_nginx: Option<bool>,
     pub server_name: Option<String>,
-    /// Apre la 443 sul firewall. Non abilita TLS: vedi `Cli::open_https_port`.
+    /// opens 443 on the firewall; does not enable TLS.
     pub open_https_port: Option<bool>,
 }
 
 impl RawConfig {
-    /// Estrae i valori grezzi dagli argomenti CLI.
+    /// extracts the raw values from the parsed CLI arguments.
     pub fn from_cli(cli: &Cli) -> Self {
         RawConfig {
             version: cli.version.clone(),
@@ -115,8 +114,8 @@ impl RawConfig {
                 .logfile
                 .as_ref()
                 .map(|p| p.to_string_lossy().into_owned()),
-            // `--with-nginx` non passato → None (cade su .env/default); non c'è
-            // negazione da CLI, esattamente come nel Bash.
+            // not passed → `None`, falling through to .env/default: there is no
+            // way to negate it from the CLI, as in Bash.
             with_nginx: if cli.with_nginx { Some(true) } else { None },
             server_name: cli.server_name.clone(),
             open_https_port: if cli.open_https_port {
@@ -128,13 +127,16 @@ impl RawConfig {
     }
 }
 
-/// Parser `.env` **dichiarativo**: legge `KEY=VALUE` riga per riga.
+/// a **declarative** `.env` parser: `KEY=VALUE`, line by line.
 ///
-/// Ignora righe vuote e commenti (`#`), tollera un prefisso `export`, rimuove
-/// eventuali apici attorno al valore. **Non esegue nulla**: nessuna espansione
-/// di comandi, nessun `eval`. Un valore come `$(rm -rf /)` viene trattato come
-/// stringa letterale. Le chiavi sconosciute producono un warning e vengono
-/// ignorate (non è un errore).
+/// blank lines and `#` comments are ignored, an `export` prefix is tolerated,
+/// and quotes around the value are stripped. **nothing is executed**: a value
+/// like `$(rm -rf /)` stays a literal string. unknown keys warn and are ignored
+/// rather than failing.
+///
+/// # errors
+///
+/// [`ConfigError`] when the file cannot be read or a line has no `=`.
 pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
     let content = fs::read_to_string(path).map_err(|source| {
         if source.kind() == std::io::ErrorKind::NotFound {
@@ -154,7 +156,7 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
         if line.is_empty() || line.starts_with('#') {
             continue;
         }
-        // Tollera "export KEY=VALUE".
+        // tolerate `export KEY=VALUE`.
         let line = line.strip_prefix("export ").map(str::trim).unwrap_or(line);
 
         let Some((key, value)) = line.split_once('=') else {
@@ -177,8 +179,8 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
             "ODOO_LOGFILE" => raw.logfile = Some(value),
             "WITH_NGINX" => raw.with_nginx = Some(parse_bool(&value)),
             "NGINX_SERVER_NAME" => raw.server_name = Some(value),
-            // `NGINX_ENABLE_SSL` è il nome storico: continua a funzionare
-            // perché vive nei `.env` dei clienti, ma prometteva TLS (A-V3-6).
+            // the historical name, still honoured because it lives in
+            // customers' `.env` files — but it promised TLS (A-V3-6).
             "NGINX_OPEN_HTTPS_PORT" | "NGINX_ENABLE_SSL" => {
                 raw.open_https_port = Some(parse_bool(&value))
             }
@@ -190,8 +192,8 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
     Ok(raw)
 }
 
-/// Rimuove una sola coppia di apici (singoli o doppi) che avvolgano l'intero
-/// valore. Nessuna interpretazione ulteriore.
+/// strips one pair of quotes wrapping the whole value. nothing else is
+/// interpreted.
 fn strip_quotes(value: &str) -> String {
     let bytes = value.as_bytes();
     if bytes.len() >= 2 {
@@ -204,7 +206,7 @@ fn strip_quotes(value: &str) -> String {
     value.to_string()
 }
 
-/// Interpreta un booleano testuale (`true`/`1`/`yes`/`on`, case-insensitive).
+/// reads a textual boolean: `true`/`1`/`yes`/`on`, case-insensitive.
 fn parse_bool(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
@@ -212,9 +214,9 @@ fn parse_bool(value: &str) -> bool {
     )
 }
 
-// --- Validatori (puri, testabili) -------------------------------------------
+// --- validators (pure, testable) --------------------------------------------
 
-/// Normalizza la versione Odoo. Ritorna `(full, short)`, es. `("18.0", "18")`.
+/// normalises the Odoo version, returning `(full, short)` — `("18.0", "18")`.
 pub fn normalize_version(value: &str) -> Result<(String, String), ConfigError> {
     let full = match value {
         "16" | "17" | "18" | "19" => format!("{value}.0"),
@@ -225,17 +227,15 @@ pub fn normalize_version(value: &str) -> Result<(String, String), ConfigError> {
     Ok((full, short))
 }
 
-/// `true` se `value` è un identifier valido (`^[A-Za-z0-9_][A-Za-z0-9._-]*$`).
+/// `true` when `value` is a valid identifier (`^[A-Za-z0-9_][A-Za-z0-9._-]*$`).
 ///
-/// Il **primo** carattere deve essere alfanumerico o `_`. Il vincolo non è
-/// estetico: `db_name`/`db_user`/`odoo_user` finiscono come argomenti
-/// posizionali di `createdb`/`dropdb`/`useradd`, e un nome come `-foo` o
-/// `--help` verrebbe interpretato dal comando come **flag** invece che come
-/// operando (argument injection). Un identifier che inizia con `-` (o con `.`,
-/// che darebbe un file/DB "nascosto") non è mai legittimo qui.
+/// the **first** character must be alphanumeric or `_`, and that is not
+/// cosmetic: these names end up as positional arguments to `createdb`, `dropdb`
+/// and `useradd`, where `-foo` would be read as a **flag** instead of an
+/// operand (argument injection).
 ///
-/// È la porta a monte; la rete a valle è il `--` prima dei posizionali in
-/// [`crate::system_ops::argv`]. Servono entrambe.
+/// this is the upstream gate; the downstream net is the `--` before positionals
+/// in [`crate::system_ops::argv`]. both are needed.
 fn is_valid_identifier(value: &str) -> bool {
     let mut chars = value.chars();
     match chars.next() {
@@ -245,7 +245,7 @@ fn is_valid_identifier(value: &str) -> bool {
     chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-'))
 }
 
-/// Valida un identifier, allegando il nome del campo all'errore.
+/// validates an identifier, naming the field in the error.
 pub fn validate_identifier(value: &str, field: &'static str) -> Result<String, ConfigError> {
     if is_valid_identifier(value) {
         Ok(value.to_string())
@@ -257,7 +257,7 @@ pub fn validate_identifier(value: &str, field: &'static str) -> Result<String, C
     }
 }
 
-/// Valida una porta (intero 1..=65535).
+/// validates a port: an integer in 1..=65535.
 pub fn validate_port(value: &str) -> Result<u16, ConfigError> {
     let n: u32 = value
         .parse()
@@ -269,7 +269,8 @@ pub fn validate_port(value: &str) -> Result<u16, ConfigError> {
     }
 }
 
-/// Risolve e valida la install dir: default derivato, assoluta e sotto `home`.
+/// resolves and validates the install dir: derived default, absolute, under
+/// `home`.
 pub fn resolve_install_dir(
     explicit: Option<&str>,
     home: &Path,
@@ -283,9 +284,8 @@ pub fn resolve_install_dir(
     if !dir.is_absolute() {
         return Err(ConfigError::InstallDirNotAbsolute(dir));
     }
-    // `starts_with` su Path è component-based: `/opt/odoofoo` NON inizia con
-    // `/opt/odoo` (evita il bug del prefisso di stringa del Bash). Copre anche
-    // il caso dir == home.
+    // `Path::starts_with` is component-based, so `/opt/odoofoo` is correctly
+    // outside `/opt/odoo` — the string-prefix bug Bash had.
     if !dir.starts_with(home) {
         return Err(ConfigError::InstallDirOutOfScope(
             dir,
@@ -295,22 +295,24 @@ pub fn resolve_install_dir(
     Ok(dir)
 }
 
-/// Esito del controllo sulla password admin.
+/// outcome of the master-password check.
 #[derive(Debug, PartialEq, Eq)]
 pub enum AdminConfirm {
-    /// Password diversa da 'admin': nessuna conferma richiesta.
+    /// not `admin`: no confirmation needed.
     NotNeeded,
-    /// Password 'admin' in modalità interattiva: serve conferma esplicita y/N.
+    /// `admin` interactively: an explicit y/N confirmation is required.
     ConfirmNeeded,
 }
 
-/// Applica la regola sulla password admin (pura, senza I/O).
+/// applies the master-password rule. pure, no I/O.
 ///
-/// - vuota → errore;
-/// - diversa da 'admin' → ok, nessuna conferma;
-/// - 'admin' e **non** interattivo → errore (hard-stop: non si può confermare
-///   senza TTY);
-/// - 'admin' e interattivo → richiede conferma esplicita al chiamante.
+/// empty is an error; anything other than `admin` passes; `admin` without a TTY
+/// is a hard stop, because it cannot be confirmed; `admin` with a TTY asks the
+/// caller to confirm.
+///
+/// # errors
+///
+/// [`ConfigError`] for an empty password, or for `admin` non-interactively.
 pub fn check_admin_password(
     password: &str,
     interactive: bool,
@@ -327,9 +329,9 @@ pub fn check_admin_password(
     Ok(AdminConfirm::ConfirmNeeded)
 }
 
-// --- Config risolta ----------------------------------------------------------
+// --- resolved config --------------------------------------------------------
 
-/// Configurazione risolta e validata, pronta a costruire il
+/// resolved and validated configuration, ready to build a
 /// [`crate::context::Context`].
 #[derive(Debug, Clone)]
 pub struct ResolvedConfig {
@@ -337,23 +339,23 @@ pub struct ResolvedConfig {
     pub version_short: String,
     pub odoo_user: String,
     pub db_user: String,
-    /// Password del ruolo PostgreSQL; vuota = autenticazione peer.
+    /// password of the PostgreSQL role; empty means peer auth.
     pub db_password: Secret,
     pub odoo_home: PathBuf,
     pub port: u16,
     pub db_name: String,
     pub install_dir: PathBuf,
     pub admin_passwd: Secret,
-    /// Logfile Odoo; `None` = log su journal/stdout (default).
+    /// Odoo's log file; `None` means journal/stdout.
     pub odoo_logfile: Option<PathBuf>,
     pub with_nginx: bool,
     pub nginx_server_name: String,
-    /// Apre la 443 sul firewall. **Non** abilita TLS nel vhost: quello è
-    /// compito di `certbot --nginx`, che riscrive il vhost da sé (A-V3-6).
+    /// opens 443 on the firewall. does **not** enable TLS in the vhost — that
+    /// is `certbot --nginx`'s job (A-V3-6).
     pub nginx_open_https_port: bool,
 }
 
-/// Sceglie il primo valore presente nella cascata (priorità da sinistra).
+/// picks the first value present, left to right.
 fn pick(cli: &Option<String>, prompted: &Option<String>, env: &Option<String>) -> Option<String> {
     cli.clone()
         .or_else(|| prompted.clone())
@@ -361,14 +363,17 @@ fn pick(cli: &Option<String>, prompted: &Option<String>, env: &Option<String>) -
 }
 
 impl ResolvedConfig {
-    /// Risolve la config combinando le sorgenti secondo la cascata di priorità:
-    /// **CLI → prompt interattivo → `.env` → default**.
+    /// resolves the config over the **CLI → prompts → `.env` → default**
+    /// cascade.
     ///
-    /// `prompted` contiene i valori raccolti interattivamente (vuoto in modalità
-    /// non-interattiva). La funzione è pura: non esegue prompt né tocca il disco.
-    /// La conferma interattiva della password 'admin' resta a carico del
-    /// chiamante (vedi [`check_admin_password`]); qui si applica solo l'hard-stop
-    /// non-interattivo.
+    /// pure: it runs no prompt and touches no disk. `prompted` is empty in
+    /// non-interactive mode. confirming an `admin` password stays with the
+    /// caller (see [`check_admin_password`]); only the non-interactive hard
+    /// stop is applied here.
+    ///
+    /// # errors
+    ///
+    /// [`ConfigError`] when any field fails validation.
     pub fn resolve(
         cli: &RawConfig,
         env: &RawConfig,
@@ -377,50 +382,43 @@ impl ResolvedConfig {
     ) -> Result<Self, ConfigError> {
         let home = PathBuf::from(ODOO_HOME);
 
-        // Versione (+ short).
         let version_raw = pick(&cli.version, &prompted.version, &env.version)
             .unwrap_or_else(|| DEFAULT_VERSION.to_string());
         let (version, version_short) = normalize_version(&version_raw)?;
 
-        // Utente OS.
         let odoo_user_raw = pick(&cli.odoo_user, &prompted.odoo_user, &env.odoo_user)
             .unwrap_or_else(|| DEFAULT_ODOO_USER.to_string());
         let odoo_user = validate_identifier(&odoo_user_raw, "utente Odoo")?;
 
-        // Nome DB.
         let db_name_raw = pick(&cli.db_name, &prompted.db_name, &env.db_name)
             .unwrap_or_else(|| DEFAULT_DB_NAME.to_string());
         let db_name = validate_identifier(&db_name_raw, "nome database")?;
 
-        // Porta.
         let port_raw =
             pick(&cli.port, &prompted.port, &env.port).unwrap_or_else(|| DEFAULT_PORT.to_string());
         let port = validate_port(&port_raw)?;
 
-        // Utente DB: segue odoo_user se non disaccoppiato esplicitamente.
+        // follows odoo_user unless explicitly decoupled.
         let db_user = resolve_db_user(cli.db_user.as_deref(), env.db_user.as_deref(), &odoo_user)?;
 
-        // Password del ruolo DB: vuota/assente → peer auth (Secret vuoto).
+        // empty or absent → peer auth.
         let db_password = Secret::new(
             pick(&cli.db_password, &prompted.db_password, &env.db_password).unwrap_or_default(),
         );
 
-        // Install dir (default derivato, assoluta, sotto home).
         let install_dir_raw = pick(&cli.install_dir, &prompted.install_dir, &env.install_dir);
         let install_dir = resolve_install_dir(install_dir_raw.as_deref(), &home, &version_short)?;
 
-        // Password admin.
         let admin_raw = pick(&cli.admin_passwd, &prompted.admin_passwd, &env.admin_passwd)
             .unwrap_or_else(|| DEFAULT_ADMIN_PASSWD.to_string());
-        // Hard-stop non-interattivo; la conferma interattiva è del chiamante.
+        // non-interactive hard stop; the interactive confirm is the caller's.
         check_admin_password(&admin_raw, interactive)?;
 
-        // Logfile: opzionale; una stringa vuota equivale a "disabilitato".
+        // an empty string means disabled.
         let odoo_logfile = pick(&cli.logfile, &prompted.logfile, &env.logfile)
             .filter(|s| !s.is_empty())
             .map(PathBuf::from);
 
-        // Nginx.
         let with_nginx = cli
             .with_nginx
             .or(prompted.with_nginx)
@@ -454,12 +452,10 @@ impl ResolvedConfig {
     }
 }
 
-/// Applica la regola "db_user segue odoo_user".
+/// applies the "db_user follows odoo_user" rule.
 ///
-/// `db_user` = `odoo_user` se non è stato fornito, **oppure** se non è stato
-/// passato da CLI e vale il default `odoo`. Solo un valore esplicito da CLI, o
-/// un valore da `.env` diverso dal default, lo disaccoppia (semantica di
-/// `validate_selected_inputs` nel Bash).
+/// they stay coupled unless `db_user` came explicitly from the CLI, or from an
+/// `.env` value different from the `odoo` default.
 fn resolve_db_user(
     cli_db_user: Option<&str>,
     env_db_user: Option<&str>,
@@ -478,8 +474,7 @@ fn resolve_db_user(
     }
 }
 
-// Rende `StepError` costruibile da un errore di config al confine col motore,
-// senza accoppiare i due moduli (usato nelle fasi successive).
+// lets a config error cross into the engine without coupling the two modules.
 impl From<ConfigError> for StepError {
     fn from(err: ConfigError) -> Self {
         StepError::Precondition(err.to_string())

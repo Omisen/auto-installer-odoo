@@ -1,4 +1,4 @@
-//! Test di [`InitializeOdooDatabase`] (Fase 7): l'hard-stop su DB preesistente.
+//! [`InitializeOdooDatabase`]: the hard stop on a pre-existing database.
 
 mod common;
 
@@ -30,8 +30,8 @@ fn prestate(step: &InitializeOdooDatabase) -> PreState {
 
 #[test]
 fn hard_stop_on_preexisting_db_never_inits() {
-    // IL test critico: DB preesistente (non nostro), schema assente → ERRORE,
-    // e `odoo-bin -i base` NON viene mai eseguito.
+    // THE critical test: a pre-existing database with no schema is an ERROR,
+    // and the init is never executed.
     let cfg = MockConfig {
         db_initialized: false,
         ..Default::default()
@@ -45,8 +45,8 @@ fn hard_stop_on_preexisting_db_never_inits() {
         result.is_err(),
         "init su DB preesistente deve essere rifiutato (hard-stop)"
     );
-    // A3.3: il messaggio deve suggerire l'ipotesi "residuo di una run fallita",
-    // altrimenti l'utente resta bloccato senza capire perché.
+    // A3.3: the message must raise the "leftover of a failed run" hypothesis,
+    // or the user is stuck without understanding why.
     let msg = result.expect_err("errore").to_string();
     assert!(
         msg.contains("residuo"),
@@ -95,8 +95,8 @@ fn created_by_us_runs_init_and_undo_is_noop() {
 
 #[test]
 fn already_initialized_schema_is_noop_even_if_preexisting_db() {
-    // Schema già presente → no-op, e la presenza dello schema precede l'hard-stop
-    // (nessun errore anche se il DB non è nostro).
+    // an existing schema is a no-op, and that check precedes the hard stop: no
+    // error even when the database is not ours.
     let cfg = MockConfig {
         db_initialized: true,
         ..Default::default()

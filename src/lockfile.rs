@@ -1,9 +1,7 @@
-//! Lock esclusivo anti-concorrenza (gap G5): impedisce due esecuzioni
-//! simultanee dell'installer.
+//! exclusive lock against concurrent runs (gap G5).
 //!
-//! Usa `flock` (advisory, via `nix`) su un file di lock. Il rilascio è
-//! garantito da un guard RAII: avviene su successo, errore o panic (Drop).
-//! Vive in `main`, non nel trait `Step`.
+//! advisory `flock` (via `nix`) on a lock file, released by an RAII guard: on
+//! success, on error and on panic (`Drop`). lives in `main`, not in `Step`.
 
 use std::fs::OpenOptions;
 use std::os::unix::fs::OpenOptionsExt;
@@ -13,44 +11,35 @@ use nix::fcntl::{Flock, FlockArg};
 
 use crate::error::StepError;
 
-/// Percorso di default del lock file (owned root).
+/// default lock path, owned by root.
 ///
-/// **Fuori da `/opt/odoo`, e non è un dettaglio estetico** (A-V3-2). Finché il
-/// lock viveva in `/opt/odoo/.installer.lock`, acquisirlo significava creare
-/// `/opt/odoo` — e il lock si acquisisce **prima** del motore. `PrepareOptRoot`
-/// trovava quindi la directory già presente, la marcava `Preexisting`, e il suo
-/// undo — l'unico codice che rende reversibile la creazione di `/opt/odoo` —
-/// non poteva attivarsi in nessuna esecuzione reale. `/run` è tmpfs: esiste
-/// sempre, sparisce al reboot (semantica giusta per un lock) e non appartiene
-/// al perimetro che l'installer deve saper rimuovere.
+/// **outside `/opt/odoo`** (A-V3-2): the lock is taken *before* the engine, so
+/// living there created the directory and left `PrepareOptRoot` marking it
+/// `Preexisting` — its undo could never fire in a real run. `/run` is tmpfs:
+/// always present, cleared on reboot, outside the reversible perimeter.
 pub const DEFAULT_LOCK_PATH: &str = "/run/invok.lock";
 
-/// Modalità del lock file: `0600`, come gli altri file dell'installer (stato,
-/// temporanei di config). Il file è vuoto e serve solo al `flock`, ma non c'è
-/// ragione di lasciarlo `0666 & ~umask` mentre tutto il resto è privato.
+/// `0600`, like every other file the installer creates.
 const LOCK_FILE_MODE: u32 = 0o600;
 
-/// Guard del lock: mantiene il `flock`. Il rilascio avviene al `Drop`.
+/// holds the `flock`; releases it on `Drop`.
 pub struct LockGuard {
     _flock: Flock<std::fs::File>,
 }
 
-/// Acquisisce un lock esclusivo non-bloccante su `path`.
+/// acquires an exclusive non-blocking lock on `path`.
 ///
-/// Se il lock è già tenuto da un'altra esecuzione → errore chiaro, **senza
-/// mutare nulla**.
+/// the parent directory is deliberately **not** created (A-V3-2): taking a lock
+/// is coordination, and must not bring into existence a directory another step
+/// has to claim as its own.
 ///
-/// **Non crea la directory genitrice**, e questa è la proprietà che conta
-/// (A-V3-2). Prendere un lock è un'operazione di coordinamento: non deve far
-/// nascere directory, tanto meno una che appartiene al perimetro reversibile e
-/// che un altro step deve poter registrare come propria. Se il genitore non
-/// esiste, `open` fallisce nominando il percorso — meglio un errore che una
-/// directory creata di soppiatto da chi non la possiede.
+/// # errors
+///
+/// [`StepError::Precondition`] when another run holds the lock, without
+/// mutating anything, and [`StepError::io`] when `path` cannot be opened.
 pub fn acquire(path: &Path) -> Result<LockGuard, StepError> {
-    // `mode()` vale solo alla **creazione**: un lock file già esistente conserva
-    // i suoi permessi. Non li forziamo — `flock` opera sul descrittore, i
-    // permessi non influenzano il locking, e riscrivere i permessi di un file
-    // altrui non è compito di questa funzione.
+    // `mode()` applies at creation only; an existing lock file keeps its own
+    // permissions. `flock` works on the descriptor, so they do not matter.
     let file = OpenOptions::new()
         .create(true)
         .truncate(false)

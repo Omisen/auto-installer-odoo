@@ -1,20 +1,16 @@
-//! Simmetria `snapshot_value` ⇄ `rehydrate` (R4): la proprietà che rende
-//! affidabile il rollback da disco.
+//! the `snapshot_value` ⇄ `rehydrate` symmetry (R4): the property that makes
+//! rollback from disk trustworthy.
 //!
-//! Il rollback da stato persistito ricostruisce ogni step e gli rimette dentro
-//! lo snapshot dell'epoca. Se quella reidratazione perde anche un solo campo,
-//! l'`undo` prende la decisione sbagliata — e la decisione sbagliata più grave è
-//! droppare un database che lo snapshot marcava `Preexisting`. Perciò qui non si
-//! prova "il rollback funziona": si prova che **reidratato ≡ originale**, step
-//! per step e a livello di comportamento.
+//! a rollback from persisted state rebuilds each step and puts the original
+//! snapshot back. losing even one field there makes the undo decide wrongly,
+//! and the worst wrong decision is dropping a database the snapshot marked
+//! `Preexisting`. so this does not prove "the rollback works": it proves
+//! **rehydrated ≡ original**, step by step and behaviourally.
 //!
-//! Tre livelli di verifica:
-//! 1. **identità del JSON** — `snapshot_value` dopo `rehydrate` è identico a
-//!    prima, per ogni step della catena;
-//! 2. **equivalenza dell'undo** — la stessa catena annullata dagli step vivi e
-//!    dagli step reidratati porta il sistema allo **stesso** stato finale;
-//! 3. **fixture di campo** — lo state file realmente osservato su VM dopo un
-//!    Ctrl-C viene reidratato e produce gli undo attesi.
+//! three levels: **JSON identity**, where the value after rehydration is
+//! identical for every step; **undo equivalence**, where the same chain undone
+//! live and rehydrated reaches the same final state; and a **field fixture**,
+//! the state file really observed on a VM after a Ctrl-C.
 
 mod common;
 
@@ -35,12 +31,11 @@ const SUDO_HOME: &str = "/home/alice";
 const BASHRC: &str = "/home/alice/.bashrc";
 const BASHRC_ORIG: &str = "alias ll='ls -la'\nexport EDITOR=vim\n";
 
-/// La catena reale ricostruibile dalla factory, con `SystemOps` mockabili.
+/// the real chain rebuildable from the factory, with mockable `SystemOps`.
 ///
-/// Esclusi `prepare-opt-root` (usa `std::fs` diretto),
-/// `install-python-requirements` (scrive un temp reale) e
-/// `install-wkhtmltopdf` (la factory gli dà il downloader reale: il suo `run`
-/// scaricherebbe davvero). I loro cicli hanno test dedicati.
+/// three steps are excluded: one uses the filesystem directly, one writes a
+/// real temporary, and one would really download. their cycles have dedicated
+/// tests.
 const CHAIN: &[&str] = &[
     "create-odoo-user",
     "setup-log-dir",
@@ -106,7 +101,7 @@ fn ctx() -> Context {
     }
 }
 
-/// Costruisce la catena dalla factory, legando ogni step al modello dato.
+/// builds the chain from the factory, binding every step to one model.
 fn chain_from_factory(model: &SystemModel, names: &[&str]) -> Vec<Box<dyn Step>> {
     let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
     names
@@ -118,7 +113,7 @@ fn chain_from_factory(model: &SystemModel, names: &[&str]) -> Vec<Box<dyn Step>>
         .collect()
 }
 
-/// Porta la catena fino in fondo (snapshot + run) e ritorna gli snapshot JSON.
+/// runs the chain to the end and returns the JSON snapshots.
 fn run_chain(steps: &mut [Box<dyn Step>], ctx: &Context) -> Vec<serde_json::Value> {
     for step in steps.iter_mut() {
         let name = step.name().to_string();
@@ -130,14 +125,13 @@ fn run_chain(steps: &mut [Box<dyn Step>], ctx: &Context) -> Vec<serde_json::Valu
     steps.iter().map(|s| s.snapshot_value()).collect()
 }
 
-// --- 1. Identità del JSON, step per step ------------------------------------
+// --- 1. JSON identity, step by step -----------------------------------------
 
 #[test]
 fn every_step_rehydrates_to_an_identical_snapshot() {
-    // Livello più fine della verifica: per **ogni** step della catena, il JSON
-    // prodotto dopo la reidratazione deve essere identico a quello di partenza.
-    // Un campo dimenticato in `rehydrate` (o un `Option` che si perde) qui salta
-    // fuori subito, e col nome dello step che l'ha perso.
+    // the finest level: for **every** step, the JSON produced after rehydration
+    // must be identical to the original. a forgotten field shows up at once,
+    // named by the step that lost it.
     let model = SystemModel::new(fresh_state());
     let ctx = ctx();
     let mut live = chain_from_factory(&model, CHAIN);
@@ -164,10 +158,10 @@ fn every_step_rehydrates_to_an_identical_snapshot() {
 
 #[test]
 fn a_corrupt_snapshot_fails_rehydration_instead_of_defaulting() {
-    // Fail-closed: uno snapshot illeggibile NON deve produrre uno step con stato
-    // di default. `Untracked` di default sarebbe "innocuo" solo per caso — e per
-    // `generate-config` o `patch-bashrc` significherebbe non ripristinare il
-    // backup del cliente. Meglio un errore, che il rollback segnala come residuo.
+    // fail-closed: an unreadable snapshot must NOT yield a step with default
+    // state. that would be harmless only by accident, and for the steps that
+    // restore a customer's backup it would mean not restoring it. an error is
+    // better, and the rollback reports it as a leftover.
     let model = SystemModel::new(fresh_state());
     let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
 
@@ -181,17 +175,16 @@ fn a_corrupt_snapshot_fails_rehydration_instead_of_defaulting() {
     }
 }
 
-// --- 2. Equivalenza comportamentale dell'undo -------------------------------
+// --- 2. behavioural equivalence of the undo ---------------------------------
 
 #[test]
 fn rehydrated_steps_undo_exactly_like_the_live_ones() {
-    // La proprietà che conta davvero: non "il JSON è uguale" ma "il sistema
-    // finisce nello stesso posto". Due modelli identici, la stessa catena
-    // annullata in due modi — dagli step vivi e da step ricostruiti dal solo
-    // JSON — devono convergere.
+    // the property that really matters: not "the JSON matches" but "the system
+    // ends up in the same place". two identical models, one chain undone two
+    // ways, must converge.
     let ctx = ctx();
 
-    // (a) percorso in-process: gli step che hanno fatto il run annullano.
+    // (a) in-process: the steps that ran are the ones that undo.
     let live_model = SystemModel::new(fresh_state());
     let mut live = chain_from_factory(&live_model, CHAIN);
     let snapshots = run_chain(&mut live, &ctx);
@@ -201,7 +194,7 @@ fn rehydrated_steps_undo_exactly_like_the_live_ones() {
     }
     let undone_in_process = live_model.snapshot();
 
-    // (b) percorso da disco: stesso stato post-run, step nuovi reidratati.
+    // (b) from disk: the same post-run state, with fresh rehydrated steps.
     let disk_model = SystemModel::new(after_run.clone());
     let mut rehydrated = chain_from_factory(&disk_model, CHAIN);
     for (step, snap) in rehydrated.iter_mut().zip(snapshots.iter()) {
@@ -225,11 +218,9 @@ fn rehydrated_steps_undo_exactly_like_the_live_ones() {
 
 #[test]
 fn rehydration_without_the_snapshot_would_undo_the_wrong_things() {
-    // Contro-prova (validazione per mutazione, in forma di test): se si
-    // saltasse `rehydrate` e si annullasse con step "vergini", il rollback
-    // sarebbe silenziosamente inerte — ogni PreState resterebbe `Untracked` e
-    // ogni undo un NO-OP. È la ragione per cui `rehydrate` esiste, resa
-    // esplicita: senza, il sistema NON torna pulito.
+    // the counter-proof, mutation testing in the form of a test: undoing with
+    // pristine steps would be silently inert — every `PreState` `Untracked` and
+    // every undo a no-op. the reason `rehydrate` exists, made explicit.
     let ctx = ctx();
     let model = SystemModel::new(fresh_state());
     let mut live = chain_from_factory(&model, CHAIN);
@@ -254,12 +245,12 @@ fn rehydration_without_the_snapshot_would_undo_the_wrong_things() {
     );
 }
 
-// --- 3. Fixture di campo: lo state file osservato su VM ----------------------
+// --- 3. a field fixture: the state file observed on a VM --------------------
 
-/// Lo state file **reale** letto su una VM Multipass dopo un Ctrl-C a metà
-/// installazione. È l'input esatto che il comando `rollback` consuma: usarlo
-/// come fixture significa provare la reidratazione contro il formato vero, non
-/// contro quello che i test producono da soli.
+/// the **real** state file read on a VM after a Ctrl-C mid-installation.
+///
+/// exactly what the `rollback` command consumes, so rehydration is proven
+/// against the true format rather than the one the tests produce.
 const FIELD_STATE: &str = r#"{
   "completed": [
     { "name": "prepare-opt-root", "snapshot": "Preexisting" },
@@ -294,9 +285,9 @@ fn field_state() -> InstallState {
 
 #[test]
 fn the_real_state_file_still_parses_and_has_no_config() {
-    // Retrocompatibilità di formato: un file scritto prima di R4 resta
-    // leggibile, e l'assenza di `config` è rilevabile — è ciò su cui il comando
-    // `rollback` si ferma invece di indovinare i nomi degli artefatti.
+    // format compatibility: a pre-R4 file stays readable, and a missing config
+    // is detectable — which is what `rollback` stops on rather than guessing
+    // artifact names.
     let state = field_state();
     assert_eq!(state.completed.len(), 4);
     assert_eq!(state.completed[0].name, "prepare-opt-root");
@@ -307,7 +298,7 @@ fn the_real_state_file_still_parses_and_has_no_config() {
     );
 }
 
-/// Reidrata uno step dal fixture di campo e ne esegue l'undo sul modello.
+/// rehydrates one step from the field fixture and undoes it on the model.
 fn undo_from_field_state(model: &SystemModel, step_name: &str, ctx: &Context) {
     let state = field_state();
     let record = state
@@ -347,7 +338,7 @@ fn field_state_create_odoo_user_rehydrates_and_removes_the_user() {
 #[test]
 fn field_state_apt_delta_purges_only_the_delta() {
     let mut init = fresh_state();
-    // Il sistema come sarebbe a metà installazione: già presenti + delta nostro.
+    // the system as it would be mid-installation: pre-existing plus our delta.
     for pkg in ["git", "curl", "python3-pip", "build-essential", "libpq-dev"] {
         init.packages.insert(pkg.to_string());
     }
@@ -376,7 +367,7 @@ fn field_state_postgres_rehydrates_all_three_axes() {
     init.svc_active.insert("postgresql".to_string());
     let model = SystemModel::new(init);
 
-    // `aggressive_rollback = false`: stop + disable sì, purge no (D3).
+    // not aggressive: stop and disable, but no purge (D3).
     let mut c = ctx();
     c.aggressive_rollback = false;
     undo_from_field_state(&model, "setup-postgres", &c);
@@ -399,8 +390,8 @@ fn field_state_postgres_rehydrates_all_three_axes() {
 
 #[test]
 fn field_state_preexisting_prepare_opt_root_is_a_noop() {
-    // `"Preexisting"` in forma di stringa nuda: il formato che il PreState
-    // produce davvero. Reidratato, deve rendere l'undo inerte.
+    // the bare-string form the `PreState` really serialises to. rehydrated, it
+    // must make the undo inert.
     let state = field_state();
     let record = &state.completed[0];
     assert_eq!(record.name, "prepare-opt-root");

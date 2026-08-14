@@ -1,15 +1,13 @@
 #!/bin/sh
-# Crea l'alias breve `vok` → `invok`.
+# creates the short alias `vok` -> `invok`.
 #
-# È un SYMLINK, non un secondo binario: due copie dello stesso eseguibile in
-# /usr/bin sarebbero megabyte sprecati e due cose che possono divergere. Il link
-# è RELATIVO (`invok`, non `/usr/bin/invok`) così resta valido anche sotto un
-# chroot o una root alternativa.
+# a SYMLINK, not a second binary: two copies of one executable in /usr/bin would
+# be wasted megabytes and two things that can diverge. the link is RELATIVE, so
+# it stays valid under a chroot or an alternative root.
 #
-# Non si sovrascrive un file che non è nostro: se `/usr/bin/vok` esiste ed è un
-# file regolare, appartiene a qualcun altro e ce lo si tiene — si avvisa e si
-# rinuncia all'alias. È la stessa regola che l'installer applica agli artefatti
-# del cliente: `Preexisting` non si tocca.
+# a file that is not ours is not overwritten: an existing regular file at that
+# path belongs to somebody else, so warn and give up the alias. the same rule the
+# installer applies to customer artifacts.
 set -e
 
 case "$1" in

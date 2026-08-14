@@ -1,4 +1,4 @@
-//! Test di [`InstallPythonRequirements`] (Fase 6): undo no-op + workaround gevent.
+//! [`InstallPythonRequirements`]: the no-op undo and the gevent workaround.
 
 mod common;
 
@@ -22,10 +22,10 @@ fn ctx() -> Context {
 
 const REQUIREMENTS: &str = "gevent==21.12.0 ; sys_platform != 'win32'\npytz\nBabel==2.9.1\n";
 
-/// Estratto **verbatim** dal `requirements.txt` di Odoo 18 (righe 23-31),
-/// commenti di Odoo inclusi. È il fixture che conta: il bug A-R6-3 non era una
-/// svista di parsing ma il non aver visto che qui le versioni sono **quattro**,
-/// una per release di Python — e Odoo lo annota pure.
+/// taken **verbatim** from Odoo's requirements file, its own comments included.
+/// the fixture that matters: A-R6-3 was not a parsing slip but a failure to
+/// notice there are **four** versions here, one per Python release — and Odoo
+/// even annotates them.
 const ODOO18_REQUIREMENTS: &str = "\
 psycopg2==2.9.9\n\
 gevent==21.8.0 ; sys_platform != 'win32' and python_version == '3.10'  # (Jammy)\n\
@@ -37,7 +37,7 @@ greenlet==2.0.2 ; sys_platform != 'win32' and python_version > '3.10' and python
 greenlet==3.0.3 ; sys_platform != 'win32' and python_version >= '3.12' and python_version < '3.13' # (Noble)\n\
 Babel==2.9.1\n";
 
-/// Estrae gli argomenti delle sole RunAsUser (le install pip), in ordine.
+/// the arguments of the user-run operations, in order: the pip installs.
 fn pip_calls(ops: &[Op]) -> Vec<Vec<String>> {
     ops.iter()
         .filter_map(|o| match o {
@@ -64,7 +64,7 @@ fn undo_is_noop_pip_removal_belongs_to_venv() {
     step.undo(&c).expect("undo");
     let after_undo = ops_of(&log).len();
 
-    // L'undo non esegue NULLA: nessuna disinstallazione, nessun rm.
+    // the undo executes NOTHING: no uninstall, no removal.
     assert_eq!(after_run, after_undo, "9c.undo deve essere no-op");
     assert!(!ops_of(&log)
         .iter()
@@ -87,14 +87,14 @@ fn gevent_cython_workaround_sequence() {
     let calls = pip_calls(&ops_of(&log));
     assert_eq!(calls.len(), 4, "quattro passaggi pip attesi");
 
-    // 1) upgrade pip wheel setuptools
+    // upgrade pip, wheel and setuptools.
     assert!(calls[0].contains(&"--upgrade".to_string()) && calls[0].contains(&"pip".to_string()));
-    // 2) Cython<3
+    // a Cython the sources can build against.
     assert!(calls[1].contains(&"Cython<3".to_string()));
-    // 3) gevent con --no-build-isolation, da file di requirements
+    // gevent without build isolation, from a requirements file.
     assert!(calls[2].contains(&"--no-build-isolation".to_string()));
     assert!(calls[2].contains(&"--requirement".to_string()));
-    // 4) resto dei requirements, --prefer-binary, senza gevent
+    // the rest of the requirements, preferring binaries, without gevent.
     assert!(calls[3].contains(&"--prefer-binary".to_string()));
     assert!(calls[3].contains(&"--requirement".to_string()));
     assert!(!calls[3].iter().any(|a| a.contains("gevent")));
@@ -102,11 +102,10 @@ fn gevent_cython_workaround_sequence() {
 
 #[test]
 fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
-    // A-R6-2, il blocco di Ubuntu 24.04. Da Python 3.12 `venv` semina solo pip:
-    // niente setuptools. Il passo 3 usa `--no-build-isolation`, cioè costruisce
-    // gevent con quello che trova NEL VENV — e senza setuptools pip muore con
-    // `BackendUnavailable: Cannot import 'setuptools.build_meta'`. Il
-    // `python3-setuptools` di sistema non serve: il venv è isolato.
+    // A-R6-2: from Python 3.12 `venv` seeds only pip, and the isolated-build
+    // step builds with what it finds IN THE VENV — without setuptools pip dies
+    // on a missing build backend. the system package does not help: the venv is
+    // isolated.
     let cfg = MockConfig {
         requirements_content: Some(REQUIREMENTS.to_string()),
         ..Default::default()
@@ -125,8 +124,7 @@ fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
         calls[0]
     );
 
-    // E deve avvenire PRIMA del passo con --no-build-isolation, altrimenti non
-    // serve a nulla.
+    // and it must come BEFORE that step, or it is pointless.
     let no_isolation = calls
         .iter()
         .position(|c| c.contains(&"--no-build-isolation".to_string()))
@@ -139,9 +137,9 @@ fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
 
 #[test]
 fn every_pip_call_caches_inside_our_perimeter() {
-    // A-R5-3: senza `--cache-dir`, pip scrive in `$HOME/.cache` — e l'`$HOME` di
-    // `odoo` è `/opt/odoo`, che è `Preexisting` e che il rollback non svuota. La
-    // cache va dentro il venv, che l'undo di CreateVirtualenv rimuove per intero.
+    // A-R5-3: without the flag pip writes into the `odoo` user's home, which is
+    // pre-existing and never emptied by the rollback. the cache belongs inside
+    // the venv, which the undo removes wholesale.
     let cfg = MockConfig {
         requirements_content: Some(REQUIREMENTS.to_string()),
         ..Default::default()
@@ -187,18 +185,17 @@ fn missing_requirements_is_error() {
     );
 }
 
-// --- A-R6-3: la versione di gevent la sceglie pip -------------------------
+// --- A-R6-3: pip picks the gevent version -----------------------------------
 //
-// Odoo 18 pinna quattro gevent e cinque greenlet, uno per versione di Python.
-// Estrarre "la prima riga che inizia con gevent" dava la riga di Jammy su
-// qualunque sistema: giusta per coincidenza su 22.04, e su 24.04 una versione
-// che non compila contro Python 3.12. La correzione è smettere di scegliere.
+// Odoo pins four gevents and five greenlets, one per Python version. taking
+// "the first line starting with gevent" gave the same one on every system:
+// right by coincidence on one release, and on another a version that does not
+// compile. the fix is to stop choosing.
 
 #[test]
 fn every_pinned_version_survives_with_its_marker() {
-    // La proprietà che rende il fix un fix: nell'input di pip ci sono TUTTE le
-    // versioni, ciascuna col suo marker. Se ne resta una sola, qualcuno ha
-    // ricominciato a scegliere al posto di pip.
+    // the property that makes the fix a fix: pip's input holds EVERY version
+    // with its marker. one left means somebody started choosing again.
     let lines = gevent_stack_lines(ODOO18_REQUIREMENTS);
 
     for version in ["21.8.0", "22.10.2", "24.2.1", "24.11.1"] {
@@ -216,8 +213,8 @@ fn every_pinned_version_survives_with_its_marker() {
         );
     }
 
-    // E ogni riga si porta dietro il marker: è l'unica cosa che distingue la
-    // versione giusta da una che non compila.
+    // and every line keeps its marker: the only thing separating the right
+    // version from one that will not compile.
     for line in lines.lines().filter(|l| !l.trim().is_empty()) {
         assert!(
             line.contains("python_version"),
@@ -240,8 +237,8 @@ fn the_complement_keeps_everything_else_and_nothing_of_the_stack() {
 
 #[test]
 fn a_similarly_named_package_is_not_mistaken_for_the_stack() {
-    // `gevent-websocket` non è `gevent`: il confine dopo il nome esiste per
-    // questo, e senza, il passo 3 se lo porterebbe dietro fuori isolamento.
+    // a differently named package is not gevent: the boundary after the name
+    // exists for that, and without it the isolated step would drag it along.
     let requirements = "gevent-websocket==0.10.1\ngreenlet-stubs==1.0\ngevent==24.2.1 ; python_version >= '3.12'\n";
     let lines = gevent_stack_lines(requirements);
     assert!(lines.contains("gevent==24.2.1"));
@@ -254,8 +251,8 @@ fn a_similarly_named_package_is_not_mistaken_for_the_stack() {
 
 #[test]
 fn requirements_without_gevent_produce_no_dedicated_step() {
-    // Niente gevent → il passo 3 non ha ragione di esistere: tre chiamate pip,
-    // non quattro, e nessun file temporaneo inutile.
+    // no gevent means that step has no reason to exist: three pip calls instead
+    // of four, and no pointless temporary.
     let cfg = MockConfig {
         requirements_content: Some("pytz\nBabel==2.9.1\n".to_string()),
         ..Default::default()
@@ -277,8 +274,8 @@ fn requirements_without_gevent_produce_no_dedicated_step() {
 
 #[test]
 fn pip_receives_a_file_never_a_hand_picked_version() {
-    // Il controllo sul comportamento, non solo sulla funzione pura: nessun
-    // argomento di pip deve essere una versione di gevent decisa da noi.
+    // the behavioural check, not just the pure function: no pip argument may be
+    // a gevent version chosen by us.
     let cfg = MockConfig {
         requirements_content: Some(ODOO18_REQUIREMENTS.to_string()),
         ..Default::default()
@@ -306,9 +303,9 @@ fn pip_receives_a_file_never_a_hand_picked_version() {
     );
 }
 
-// --- A-V3-3: dove nascono i requirements temporanei --------------------------
+// --- A-V3-3: where the temporary requirements are born ----------------------
 
-/// Estrae i path dei file creati con la primitiva fail-closed.
+/// the paths of files created through the fail-closed primitive.
 fn created_private_files(ops: &[Op]) -> Vec<PathBuf> {
     ops.iter()
         .filter_map(|o| match o {
@@ -318,14 +315,14 @@ fn created_private_files(ops: &[Op]) -> Vec<PathBuf> {
         .collect()
 }
 
-/// **Il difetto di A-V3-3.** I due requirements nascevano in `/tmp` con un nome
-/// scritto nel sorgente: root li scriveva, pip li leggeva come utente `odoo`, e
-/// nella finestra in mezzo chiunque avesse un utente locale poteva sostituirli
-/// e far installare pacchetti arbitrari nel venv.
+/// **A-V3-3's defect.** the two requirements files were born in a shared
+/// directory under a name written in the source: root wrote them, pip read them
+/// as another user, and anyone with a local account could replace them in the
+/// window between and have arbitrary packages installed into the venv.
 ///
-/// Ora nascono dentro `<install_dir>/sandbox`, che è di proprietà di `odoo` e
-/// non è scrivibile da terzi: il presupposto dell'attacco sparisce, invece di
-/// essere contrastato.
+/// they are now born inside the venv's sandbox, owned by that user and not
+/// writable by third parties: the attack's premise disappears rather than being
+/// countered.
 #[test]
 fn requirements_are_written_inside_the_venv_not_in_a_shared_temp_dir() {
     let cfg = MockConfig {
@@ -370,8 +367,8 @@ fn requirements_are_written_inside_the_venv_not_in_a_shared_temp_dir() {
     );
 }
 
-/// Il file nasce `0600 root` e a leggerlo è pip, che gira come `odoo`: senza il
-/// `chown` il passo fallirebbe. È l'unico motivo per cui il chown esiste.
+/// the file is born `0600 root` and pip reads it as another user, so without
+/// the chown the step would fail. that is the only reason it exists.
 #[test]
 fn each_requirements_file_is_handed_over_to_the_odoo_user() {
     let cfg = MockConfig {
@@ -399,9 +396,9 @@ fn each_requirements_file_is_handed_over_to_the_odoo_user() {
     }
 }
 
-/// I temporanei vengono rimossi dopo l'uso, e la rimozione passa da `SystemOps`
-/// come la creazione. Restano comunque dentro il venv, quindi anche un'esecuzione
-/// interrotta non lascia nulla fuori dal perimetro reversibile.
+/// the temporaries are removed after use, through the same boundary that
+/// created them. they live inside the venv anyway, so an interrupted run leaves
+/// nothing outside the reversible perimeter.
 #[test]
 fn requirements_files_are_removed_after_use() {
     let cfg = MockConfig {
@@ -426,20 +423,18 @@ fn requirements_files_are_removed_after_use() {
     }
 }
 
-// --- A-MD-7: quando pip fallisce, dire perché --------------------------------
+// --- A-MD-7: when pip fails, say why ----------------------------------------
 
-/// Il fallimento del passo gevent su un Python più recente dei pin di Odoo
-/// arriva con la **causa davanti**, e con l'errore originale ancora dietro.
+/// the gevent step's failure on a Python newer than Odoo's pins arrives with
+/// the **cause in front** and the original error still behind it.
 ///
-/// È il rosso della sonda Fedora 44: Python 3.14, `gevent==24.11.1` (il pin per
-/// `>= '3.13'`, l'ultimo che Odoo dichiara), nessuna wheel per quell'interprete
-/// → pip compila → trecento righe di `gcc` che parlano di `_PyLong_AsByteArray`.
-/// Da quell'output la causa vera non è ricavabile, ed è tutta l'utilità di
-/// questa diagnosi: chi legge deve capire che è la **versione**, non l'ambiente
-/// di build.
+/// the last pin Odoo declares has no wheel for that interpreter, so pip
+/// compiles and produces three hundred lines of `gcc` from which the real cause
+/// cannot be recovered. that is this diagnosis's whole value: the reader must
+/// see it is the **version**, not the build environment.
 ///
-/// Si verifica passando dallo `run` dello step, non chiamando la funzione pura:
-/// una diagnosi giusta che nessuno invoca è indistinguibile da una assente.
+/// exercised through the step's `run` and not the pure function: a correct
+/// diagnosis nobody invokes is indistinguishable from an absent one.
 #[test]
 fn a_gevent_failure_on_a_newer_python_says_why() {
     let cfg = MockConfig {
@@ -476,12 +471,11 @@ fn a_gevent_failure_on_a_newer_python_says_why() {
     );
 }
 
-/// Su un Python **coperto** dai pin lo stesso fallimento passa intatto.
+/// on a **covered** Python the same failure passes through untouched.
 ///
-/// È la metà che rende il controllo un controllo: lì la causa sarà un'altra —
-/// un compilatore assente, un header mancante, una rete che cade — e una
-/// diagnosi sbagliata è peggio di nessuna diagnosi, perché manda a sistemare la
-/// cosa sbagliata (la lezione di A-R9-1, dove il messaggio parlava della porta).
+/// the half that makes the check a check: there the cause is something else,
+/// and a wrong diagnosis is worse than none because it sends people to fix the
+/// wrong thing (A-R9-1's lesson).
 #[test]
 fn on_a_covered_python_the_pip_error_is_left_alone() {
     let cfg = MockConfig {
@@ -510,11 +504,10 @@ fn on_a_covered_python_the_pip_error_is_left_alone() {
     );
 }
 
-/// E se non si sa che Python sia, non si indovina.
+/// and with an unknown Python, nothing is guessed.
 ///
-/// `None` è «non lo so», non «va bene» e nemmeno «è troppo nuovo»: da
-/// un'informazione assente non si conclude niente, e l'errore resta quello del
-/// comando.
+/// `None` means "unknown", neither "fine" nor "too new": nothing is concluded
+/// from absent information, and the command's own error stands.
 #[test]
 fn an_unknown_interpreter_does_not_become_a_guess() {
     let cfg = MockConfig {

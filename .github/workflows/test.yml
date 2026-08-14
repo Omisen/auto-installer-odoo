@@ -1,10 +1,8 @@
 # =============================================================================
-# .github/workflows/test.yml
-# CI del port Rust dell'installer Odoo.
+# the fast CI: formatting, lint, build and tests on every push and PR.
 #
-# Verifica formattazione, lint, build e test ad ogni push/PR.
-# I test girano SENZA root: il sistema è modellato via il confine SystemOps
-# (mock), quindi non servono privilegi né servizi esterni nel runner.
+# the tests run WITHOUT root: the system is modelled behind the SystemOps
+# boundary, so no privileges and no external services are needed.
 # =============================================================================
 
 name: Rust CI
@@ -15,11 +13,11 @@ on:
   pull_request:
     branches: [main, dev]
 
-# Permessi minimi: la CI legge soltanto il codice.
+# least privilege: this workflow only reads the code.
 permissions:
   contents: read
 
-# Annulla run precedenti ancora in corso sullo stesso ref (risparmia minuti CI).
+# cancel superseded runs on the same ref, to save CI minutes.
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -46,7 +44,7 @@ jobs:
       - name: Cache di cargo
         uses: Swatinem/rust-cache@v2
 
-      # Ordine dal più veloce a fallire al più lento, così il feedback è rapido.
+      # ordered fastest-to-fail first, so feedback comes quickly.
       - name: Formattazione (cargo fmt --check)
         run: cargo fmt --all -- --check
 
@@ -59,10 +57,10 @@ jobs:
       - name: Build release (verifica che il binario compili)
         run: cargo build --release --locked
 
-      # Gli script di CI leggono il formato di log dell'installer, e un pattern
-      # che non combacia non dà errore: dà zero risultati — che in un test di
-      # pulizia si presenta come una verifica superata. Qui costa un secondo;
-      # scoprirlo dall'integrazione reale costa un giro intero.
+      # the CI scripts read the installer's log format, and a pattern that does
+      # not match is not an error: it is zero results, which in a cleanliness
+      # check looks like a passing verification. a second here; a whole round in
+      # the real integration.
       - name: Self-test degli script di CI (lettura del diario)
         run: bash scripts/ci/selftest-journal.sh
 

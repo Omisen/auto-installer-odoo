@@ -1,30 +1,30 @@
-//! [`Secret`]: stringa sensibile che non trapela mai nei log.
+//! [`Secret`]: a sensitive string that never leaks into the logs.
 //!
-//! La password admin non deve finire nei log né in output di `Debug` (regola di
-//! `CLAUDE.md` e del prompt di Fase 1). `Secret` avvolge la stringa e ne
-//! ridefinisce `Debug` in modo che stampi solo un placeholder; il valore reale
-//! è accessibile solo tramite [`Secret::expose`], usato esclusivamente quando
-//! il valore va scritto dove serve davvero (es. il file di config di Odoo).
+//! the master password must not appear in logs or in `Debug` output. the real
+//! value is reachable only through [`Secret::expose`], used where the secret is
+//! genuinely needed — the Odoo config file.
 
 use std::fmt;
 
-/// Stringa sensibile con `Debug` redatto. Non implementa `Display` di proposito.
+/// a sensitive string with a redacted `Debug`.
+///
+/// deliberately does not implement `Display`.
 #[derive(Clone, Default, PartialEq, Eq)]
 pub struct Secret(String);
 
 impl Secret {
-    /// Avvolge un valore sensibile.
+    /// wraps a sensitive value.
     pub fn new(value: impl Into<String>) -> Self {
         Secret(value.into())
     }
 
-    /// Espone il valore in chiaro. Usare solo dove il segreto serve davvero,
-    /// mai in un log.
+    /// exposes the plaintext. only where the secret is genuinely needed, never
+    /// in a log.
     pub fn expose(&self) -> &str {
         &self.0
     }
 
-    /// `true` se il valore è vuoto.
+    /// `true` when the value is empty.
     pub fn is_empty(&self) -> bool {
         self.0.is_empty()
     }

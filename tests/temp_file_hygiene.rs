@@ -1,19 +1,18 @@
-//! A-V3-3: nessun file temporaneo con nome prevedibile in una directory condivisa.
+//! A-V3-3: no predictably named temporary in a shared directory.
 //!
-//! Due guardie **strutturali** (leggono i sorgenti) e una unitaria sull'helper.
+//! two **structural** guards that read the sources, plus unit tests on the
+//! helper.
 //!
-//! Perché strutturali: il mock non può accorgersi di *dove* si scrive. Un test
-//! su `MockSystemOps` vede che il file è stato creato e con quale contenuto, non
-//! che il path stava in `/tmp` con un nome scritto nel sorgente e quindi noto a
-//! chiunque. Quella parte la vede solo un `grep` — ed è la stessa forma di
-//! difesa già adottata in R6-hotfix-2 per la precondizione del venv.
+//! structural because the mock cannot notice *where* a write goes: it sees the
+//! file and its contents, not that the path was in a world-writable directory
+//! under a name written in the source. only a `grep` sees that.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
 use invok::system_ops::{private_temp_path, private_temp_path_keeping_extension};
 
-/// Tutti i `.rs` sotto `dir`, ricorsivamente, come (percorso relativo, contenuto).
+/// every `.rs` under `dir`, recursively, as (relative path, contents).
 fn rust_sources(dir: &Path) -> Vec<(String, String)> {
     let mut out = Vec::new();
     let mut stack = vec![dir.to_path_buf()];
@@ -35,20 +34,16 @@ fn src_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("src")
 }
 
-/// **La forma esatta del difetto**: prendere la directory temporanea condivisa e
-/// attaccarci un nome fisso.
+/// **the defect's exact shape**: taking the shared temporary directory and
+/// appending a fixed name.
 ///
-/// `std::env::temp_dir()` di per sé va bene — è la directory che si passa a uno
-/// step come parametro iniettabile. Quello che non va bene è
-/// `temp_dir().join("qualcosa")`: `/tmp` è world-writable, e un nome scritto nel
-/// sorgente è noto a chiunque possa leggerlo. Da lì un utente locale può
-/// piazzare un symlink prima che l'installer parta, oppure sostituire il file
-/// nella finestra fra la scrittura di root e la lettura dell'utente `odoo` — che
-/// per i requirements di pip significa far installare pacchetti arbitrari nel
-/// venv, cioè esecuzione di codice come il proprietario del database.
+/// the directory itself is fine — it is passed to a step as an injectable
+/// parameter. joining a literal name onto it is not: the directory is
+/// world-writable and a name in the source is known to anyone who can read it.
+/// from there a local user can plant a symlink, or replace the file in the
+/// window between root's write and another user's read.
 ///
-/// I nomi vanno costruiti con `private_temp_path` /
-/// `private_temp_path_keeping_extension`, che aggiungono un suffisso casuale.
+/// names must come from the helpers that add a random suffix.
 #[test]
 fn no_fixed_file_name_is_joined_onto_the_shared_temp_dir() {
     for (file, content) in rust_sources(&src_dir()) {
@@ -65,14 +60,12 @@ fn no_fixed_file_name_is_joined_onto_the_shared_temp_dir() {
     }
 }
 
-/// Ogni scrittura di contenuto negli step passa da `SystemOps`.
+/// every content write inside a step goes through `SystemOps`.
 ///
-/// Non è pedanteria architetturale: `SystemOps` è dove vivono le primitive
-/// fail-closed (`create_private_file`, con `O_EXCL | O_NOFOLLOW`) ed è l'unico
-/// confine che i test su mock possono osservare. Uno `std::fs::write` diretto
-/// segue i symlink, tronca quello che trova, e non compare in nessun log di
-/// operazioni — che è esattamente com'erano scritti i due requirements di pip
-/// prima di R9.
+/// not architectural pedantry: that is where the fail-closed primitives live,
+/// and the only boundary mock tests can observe. a direct write follows
+/// symlinks, truncates what it finds, and appears in no operations log — which
+/// is exactly how the pip requirements were written before R9.
 #[test]
 fn steps_do_not_write_files_behind_system_ops() {
     let steps_dir = src_dir().join("steps");
@@ -93,12 +86,11 @@ fn steps_do_not_write_files_behind_system_ops() {
     }
 }
 
-// --- l'helper che conserva l'estensione --------------------------------------
+// --- the helper that preserves the extension --------------------------------
 
-/// `apt-get install <file>` riconosce un percorso locale **solo** se termina in
-/// `.deb`: un temporaneo `….tmp` avrebbe reso il nome imprevedibile e
-/// l'installazione impossibile. Il vincolo è esterno e non negoziabile, quindi
-/// va presidiato.
+/// the package manager recognises a local path **only** by its extension, so a
+/// `.tmp` temporary would have been unpredictable *and* uninstallable. an
+/// external, non-negotiable constraint, so it is guarded.
 #[test]
 fn the_deb_temp_name_stays_installable_and_unpredictable() {
     let dir = Path::new("/tmp");
@@ -124,8 +116,8 @@ fn the_deb_temp_name_stays_installable_and_unpredictable() {
     );
 }
 
-/// Un nome senza estensione ricade sulla forma normale invece di produrre
-/// qualcosa di malformato (niente punto finale, niente estensione inventata).
+/// a name without an extension falls back to the plain form rather than
+/// producing something malformed.
 #[test]
 fn a_name_without_extension_falls_back_to_the_plain_form() {
     let dir = Path::new("/tmp");
@@ -141,10 +133,9 @@ fn a_name_without_extension_falls_back_to_the_plain_form() {
     assert_eq!(generato.parent(), Some(dir));
 }
 
-/// I due helper producono nomi **nascosti** e non indovinabili. È la proprietà
-/// da cui dipende tutto il resto: `O_EXCL` protegge dal path già occupato, il
-/// nome casuale toglie all'attaccante la possibilità di sapere quale path
-/// occupare.
+/// both helpers produce **hidden**, unguessable names. everything else rests on
+/// that: `O_EXCL` protects against an occupied path, and the random name takes
+/// away the attacker's knowledge of which path to occupy.
 #[test]
 fn temp_names_are_hidden_and_unpredictable() {
     let dest = Path::new("/tmp/odoo-src.tar.gz");
@@ -166,21 +157,19 @@ fn temp_names_are_hidden_and_unpredictable() {
     assert_ne!(uno, due);
 }
 
-// --- il downloader crea lui il file, fail-closed ------------------------------
+// --- the downloader creates the file itself, fail-closed --------------------
 
-/// `RealDownloader` deve creare **lui** il file di destinazione, con
-/// `O_CREAT | O_EXCL | O_NOFOLLOW`, prima di consegnarne il path a `wget`.
+/// the downloader must create the destination **itself**, fail-closed, before
+/// handing the path to `wget`.
 ///
-/// `wget -O <path>` apre per nome e segue i symlink: da solo scriverebbe
-/// volentieri dove punta un link piazzato da altri. La verifica del checksum,
-/// che è la difesa sul *contenuto*, arriva dopo — troppo tardi per un file di
-/// sistema già sovrascritto.
+/// `wget -O` opens by name and follows symlinks, so on its own it would happily
+/// write wherever a planted link points. the checksum check defends the
+/// *contents* and comes later — too late for an already-overwritten system
+/// file.
 ///
-/// Il test non usa la rete e non ne ha bisogno: se il path è già occupato,
-/// l'errore deve arrivare **prima** che wget venga eseguito. Si distingue dal
-/// caso "wget ha fallito" guardando la forma dell'errore — `Io` contro
-/// `CommandFailed` — che è l'unico modo di provare che il comando non è mai
-/// partito.
+/// the test needs no network: with the path occupied the error must arrive
+/// **before** wget runs, and the error's shape is the only way to prove the
+/// command never started.
 #[test]
 fn the_downloader_refuses_a_destination_that_already_exists() {
     use invok::error::StepError;
@@ -190,7 +179,7 @@ fn the_downloader_refuses_a_destination_that_already_exists() {
     let dest = dir.path().join("gia-occupato.deb");
     fs::write(&dest, b"contenuto di qualcun altro").expect("write");
 
-    // URL che fallirebbe subito, se mai venisse contattato.
+    // a URL that would fail at once, were it ever contacted.
     let err = RealDownloader::new()
         .download("http://127.0.0.1:1/pacchetto.deb", &dest)
         .expect_err("un path già occupato deve far fallire il download");
@@ -207,8 +196,8 @@ fn the_downloader_refuses_a_destination_that_already_exists() {
     );
 }
 
-/// Stessa difesa contro un **symlink**: `O_NOFOLLOW` non lo segue, quindi il
-/// bersaglio resta intatto. È il vettore classico in una directory condivisa.
+/// the same defence against a **symlink**: it is not followed, so the target
+/// stays intact. the classic vector in a shared directory.
 #[test]
 fn the_downloader_does_not_follow_a_symlink_at_the_destination() {
     use invok::system_ops::{Downloader, RealDownloader};

@@ -1,21 +1,18 @@
-//! Il motore: [`Installer`] con `execute` + `rollback`.
+//! the engine: [`Installer`], with `execute` and `rollback`.
 //!
-//! Orchestra una sequenza di [`Step`] rispettando le 4 invarianti di
-//! `CLAUDE.md`: snapshot prima di run, persistenza dopo ogni run riuscito,
-//! rollback in ordine inverso e best-effort.
+//! orchestrates a sequence of [`Step`]s under the four invariants of
+//! `CLAUDE.md`: snapshot before run, persistence after each successful run,
+//! rollback in reverse order and best-effort.
 //!
-//! Il rollback di questo modulo è **in-process**: annulla gli step completati
-//! nella stessa esecuzione, tenuti in `completed`. Il rollback a partire dallo
-//! stato persistito da [`InstallState::save`] — per un Ctrl-C, un crash o una
-//! disinstallazione a posteriori — vive in [`crate::rollback`] e usa lo stesso
-//! contratto: `undo` in ordine inverso, best-effort, `PreState` come sola fonte
-//! di verità.
+//! the rollback here is **in-process**: it undoes the steps completed in this
+//! same run, tracked in `completed`. undoing from the state persisted by
+//! [`InstallState::save`] — after a Ctrl-C, a crash, or an uninstall much later
+//! — lives in [`crate::rollback`] under the same contract.
 //!
-//! Il progresso è notificato tramite l'astrazione
-//! [`ProgressReporter`](crate::progress::ProgressReporter): il motore **non**
-//! dipende da `indicatif`. Le firme storiche `execute`/`rollback` restano
-//! invariate (delegano a un [`NoopReporter`]); le varianti `*_with_reporter`
-//! accettano l'observer.
+//! progress is reported through the
+//! [`ProgressReporter`](crate::progress::ProgressReporter) abstraction: the
+//! engine does **not** depend on `indicatif`. `execute`/`rollback` delegate to
+//! a [`NoopReporter`]; the `*_with_reporter` variants take the observer.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
@@ -28,72 +25,45 @@ use crate::progress::{NoopReporter, ProgressReporter};
 use crate::state::{InstallConfig, InstallState, StepRecord};
 use crate::step::Step;
 
-/// Esegue gli step e, in caso di fallimento, ripristina lo stato precedente.
+/// runs the steps and, on failure, restores the previous state.
 #[derive(Debug, Default)]
 pub struct Installer {
     state: InstallState,
-    /// Alzato da fuori quando arriva `SIGINT`/`SIGTERM` (B-V3-5).
+    /// raised from outside on `SIGINT`/`SIGTERM` (B-V3-5).
     ///
-    /// Il motore **non** conosce i segnali: osserva un booleano. Chi glielo
-    /// alza — `crate::interrupt` in produzione, un test altrove — è affare di
-    /// chi costruisce l'installer. Di default è un flag mai alzato, quindi il
-    /// comportamento senza `watching_interrupt` è identico a prima.
+    /// the engine knows nothing about signals: it watches a boolean. who raises
+    /// it — `crate::interrupt` in production, a test elsewhere — is the
+    /// caller's business. the default flag is never raised, so behaviour
+    /// without [`Installer::watching_interrupt`] is unchanged.
     interrupted: Arc<AtomicBool>,
 }
 
 impl Installer {
-    /// Crea un installer con stato vuoto.
+    /// creates an installer with empty state.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Collega il flag d'interruzione osservato **fra uno step e l'altro**.
+    /// wires the interrupt flag, observed **between steps**.
     ///
-    /// # Perché fra uno step e l'altro, e non «subito»
-    ///
-    /// Interrompere uno step a metà non è una cosa che si possa fare in modo
-    /// sicuro: `apt` a metà lascia `dpkg` inconsistente, un `initdb` troncato
-    /// lascia un database inutilizzabile. Il confine sicuro è quello che il
-    /// motore già conosce — uno step è un'unità che o è completa o non è
-    /// iniziata — ed è lì che si guarda.
-    ///
-    /// In pratica l'attesa è breve e spesso nulla: il segnale arriva a **tutto
-    /// il process group**, quindi il comando esterno in corso (`apt`, `git`,
-    /// `pip`) muore da sé e lo step fallisce subito dopo. Il flag serve per i
-    /// casi in cui lo step è nostro e non ha figli da uccidere.
-    ///
-    /// Questo va **detto** all'utente e non lasciato intendere: chi preme
-    /// Ctrl-C durante `pip install` non deve credere che l'interruzione sia
-    /// istantanea.
+    /// halfway is not a safe boundary: a truncated `apt` leaves `dpkg`
+    /// inconsistent. the wait is usually nil anyway, since the signal reaches
+    /// the whole process group and the command in flight dies by itself — but
+    /// it must be *said* to the user, not implied.
     pub fn watching_interrupt(mut self, flag: Arc<AtomicBool>) -> Self {
         self.interrupted = flag;
         self
     }
 
-    /// Crea un installer che **riprende** da un manifesto parziale (A-V3-1).
+    /// creates an installer that **resumes** from a partial manifest (A-V3-1).
     ///
-    /// Gli step già registrati in `state` non vengono rieseguiti: il motore ne
-    /// reidrata lo snapshot e li considera completati. È l'unico modo di
-    /// mantenere la promessa «rilancia e prosegui» senza perdere la
-    /// **proprietà** degli artefatti.
-    ///
-    /// # Perché non basta rieseguire
-    ///
-    /// Rilanciare da zero è idempotente negli *effetti* — ogni snapshot vede il
-    /// proprio artefatto già presente e il `run` non fa nulla — ma è amnesico
-    /// sulla *proprietà*: quegli artefatti li avevamo creati **noi**, e il nuovo
-    /// manifesto li dichiarerebbe `Preexisting`. Il database creato dal primo
-    /// giro finirebbe protetto dall'anti-drop e non verrebbe rimosso mai più.
-    /// La proprietà, come per il rollback da disco, si **rilegge** — non si
-    /// rideduce.
-    ///
-    /// # Perché non basta ereditare il `PreState`
-    ///
-    /// Reidratare lo step e poi eseguirne comunque il `run` è peggio che
-    /// inutile: `PrepareOptRoot::run` con `CreatedByUs` ereditato chiamerebbe
-    /// `create_dir` su una directory che esiste già e fallirebbe. Ciò che si
-    /// eredita è il fatto che lo step **è già stato eseguito**, non solo il suo
-    /// esito.
+    /// steps already recorded are not re-run: their snapshot is rehydrated and
+    /// they count as completed. re-running would be idempotent in its effects
+    /// but amnesic about ownership — the artifacts would come back
+    /// `Preexisting` and the anti-drop rule would strand the database we
+    /// created. what is inherited is that the step **has already run**, not
+    /// merely its verdict: running it anyway would `create_dir` over an
+    /// existing directory.
     pub fn resuming_from(state: InstallState) -> Self {
         Self {
             state,
@@ -101,21 +71,26 @@ impl Installer {
         }
     }
 
-    /// Accesso in sola lettura allo stato accumulato (utile per test/ispezione).
+    /// read-only access to the accumulated state.
     pub fn state(&self) -> &InstallState {
         &self.state
     }
 
-    /// Come [`execute_with_reporter`](Installer::execute_with_reporter) ma senza
-    /// progresso (usato dai test e dai chiamlanti che non ne hanno bisogno).
+    /// as [`Installer::execute_with_reporter`], without progress reporting.
     pub fn execute(&mut self, steps: &mut [Box<dyn Step>], ctx: &Context) -> Result<(), StepError> {
         self.execute_with_reporter(steps, ctx, &NoopReporter)
     }
 
-    /// Esegue in sequenza `steps`: per ognuno `snapshot` → `run`, notificando il
-    /// `reporter`. Ogni step completato viene registrato e **persistito** su
-    /// disco (invariante 4; saltato in `dry_run`). Su fallimento: rollback dei
-    /// completati e propagazione dell'errore.
+    /// runs `steps` in sequence: `snapshot` then `run` for each, reporting to
+    /// `reporter`.
+    ///
+    /// every completed step is recorded and **persisted** to disk (invariant 4;
+    /// skipped in `dry_run`).
+    ///
+    /// # errors
+    ///
+    /// on any failure it rolls back the completed steps and propagates the
+    /// error.
     pub fn execute_with_reporter(
         &mut self,
         steps: &mut [Box<dyn Step>],
@@ -125,25 +100,23 @@ impl Installer {
         let total = steps.len();
         let mut completed: Vec<usize> = Vec::new();
 
-        // La configurazione va nello stato *prima* del primo step: è ciò che
-        // permette a `invok rollback` di sapere quali artefatti
-        // annullare se questo processo non arriva mai alla fine (vedi
-        // `crate::state::InstallConfig`). Nessuna password vi entra.
+        // the config enters the state *before* the first step: it is what lets
+        // `invok rollback` know which artifacts to undo if this process never
+        // reaches the end. no password goes in.
         //
-        // In un resume la configurazione è già nello stato e **non** viene
-        // toccata: `main` ha già verificato che quella richiesta coincida
-        // sull'identità degli artefatti (vedi `InstallConfig::same_identity`).
-        // Sovrascriverla qui significherebbe poter rinominare gli artefatti di
-        // un'installazione in corso — cioè far puntare gli undo altrove.
+        // on a resume it is already there and is **not** touched: `main` has
+        // checked that the requested one matches on artifact identity (see
+        // `InstallConfig::same_identity`). overwriting it here would allow
+        // renaming a running installation's artifacts, i.e. pointing the undos
+        // somewhere else.
         if self.state.config.is_none() {
             self.state.set_config(InstallConfig::from_context(ctx));
         }
 
         for idx in 0..steps.len() {
-            // Interruzione richiesta: si annulla ciò che è stato fatto e si
-            // esce. Il controllo sta **prima** dello step, non dopo: così
-            // l'ultimo step completato è davvero completo, e il rollback parte
-            // da uno stato che il motore sa descrivere.
+            // checked *before* the step, not after: that way the last completed
+            // step is genuinely complete and the rollback starts from a state
+            // the engine can describe.
             if self.interrupted.load(Ordering::SeqCst) {
                 warn!("interruzione richiesta: annullo gli step già eseguiti");
                 self.rollback_with_reporter(steps, &completed, ctx, reporter);
@@ -153,17 +126,16 @@ impl Installer {
             let name = steps[idx].name().to_string();
             reporter.step_start(&name, idx, total);
 
-            // Resume: lo step risulta già eseguito in un'esecuzione precedente.
-            // Si reidrata il suo snapshot e lo si considera completato, senza
-            // rieseguire né `snapshot` (fotograferebbe il sistema DOPO le nostre
-            // mutazioni) né `run` (che su un artefatto già creato fallirebbe).
+            // resume: this step ran in an earlier execution. rehydrate its
+            // snapshot and treat it as completed, re-running neither `snapshot`
+            // (it would photograph the system *after* our mutations) nor `run`
+            // (which would fail on an artifact that already exists).
             if let Some(record) = self.state.record_for(&name) {
                 let snapshot = record.snapshot.clone();
                 if let Err(e) = steps[idx].rehydrate(&snapshot) {
-                    // Fail-closed, come nel rollback da disco: senza uno
-                    // snapshot leggibile non sappiamo di chi sia l'artefatto, e
-                    // proseguire significherebbe costruire un manifesto che
-                    // mente. Meglio fermarsi prima di mutare altro.
+                    // fail-closed, as in the rollback from disk: without a
+                    // readable snapshot we do not know who owns the artifact,
+                    // and carrying on would build a manifest that lies.
                     error!(
                         step = %name,
                         error = %e,
@@ -220,15 +192,15 @@ impl Installer {
         Ok(())
     }
 
-    /// Marca l'installazione come conclusa e persiste lo stato.
+    /// marks the installation as finished and persists the state.
     ///
-    /// Da chiamare a esecuzione riuscita. Il file che resta sul disco è il
-    /// **manifesto di disinstallazione**: dice quali artefatti abbiamo creato e
-    /// quali abbiamo trovato già presenti, ed è ciò che permette a
-    /// `invok rollback` di rimuovere l'istanza in un secondo momento
-    /// senza toccare nulla del cliente (A-R5-1).
+    /// the file left behind is the **uninstall manifest**, which is what lets
+    /// `invok rollback` remove the instance later without touching the
+    /// customer's things (A-R5-1).
     ///
-    /// In `dry_run` non scrive nulla: una preview non lascia artefatti.
+    /// # errors
+    ///
+    /// propagates a persistence failure. writes nothing in `dry_run`.
     pub fn mark_finished(&mut self, ctx: &Context) -> Result<(), StepError> {
         self.state.finished = true;
         if ctx.dry_run {
@@ -237,13 +209,13 @@ impl Installer {
         self.state.save(&ctx.state_path)
     }
 
-    /// Rollback senza progresso (delega a [`NoopReporter`]).
+    /// as [`Installer::rollback_with_reporter`], without progress reporting.
     pub fn rollback(&mut self, steps: &[Box<dyn Step>], completed: &[usize], ctx: &Context) {
         self.rollback_with_reporter(steps, completed, ctx, &NoopReporter);
     }
 
-    /// Esegue l'`undo` degli step indicati in **ordine inverso** (invariante 2),
-    /// best-effort (invariante 3), notificando il `reporter`.
+    /// undoes the given steps in **reverse order** (invariant 2), best-effort
+    /// (invariant 3), reporting to `reporter`.
     pub fn rollback_with_reporter(
         &mut self,
         steps: &[Box<dyn Step>],
@@ -265,8 +237,8 @@ impl Installer {
             reporter.undo_start(name);
             info!(step = %name, "undo");
             match step.undo(ctx) {
-                // Annullato: l'artefatto non c'è più, e il manifesto non deve
-                // continuare a dire il contrario (A-R8-1, vedi sotto).
+                // undone: the artifact is gone, and the manifest must stop
+                // saying otherwise (A-R8-1).
                 Ok(()) => self.state.forget(name),
                 Err(e) => warn!(
                     step = %name,
@@ -278,13 +250,10 @@ impl Installer {
             reporter.undo_done(name);
         }
 
-        // Il manifesto aggiornato va su disco: se il processo muore ora, ciò che
-        // resta scritto dev'essere ciò che è rimasto sul sistema.
-        //
-        // E se non resta **niente**, il manifesto non deve restare nemmeno lui:
-        // un file che descrive zero artefatti è un residuo che dice il falso —
-        // farebbe credere a `invok rollback` che ci sia qualcosa da
-        // consumare, e resterebbe sul disco a tempo indeterminato.
+        // if the process dies now, what stays written must be what stayed on
+        // the system. and if **nothing** is left, the manifest must go too: a
+        // file describing zero artifacts is a leftover that lies, and would
+        // make `invok rollback` believe there is something to consume.
         if !ctx.dry_run {
             let esito = if self.state.completed.is_empty() {
                 InstallState::clear(&ctx.state_path)
@@ -303,12 +272,13 @@ impl Installer {
     }
 }
 
-/// Piano `--dry-run`: per ogni step esegue `snapshot` (read-only) e `run` in
-/// dry-run (che **logga l'intenzione senza mutare**). Nessuna persistenza,
-/// nessun rollback. Il chiamante deve garantire `ctx.dry_run == true`.
+/// the `--dry-run` plan: `snapshot` (read-only) then `run` in dry-run mode,
+/// which **logs the intent without mutating**.
 ///
-/// Uno snapshot non disponibile (es. query di sistema non ancora possibile) non
-/// interrompe il piano: viene segnalato e si prosegue col prossimo step.
+/// no persistence, no rollback. the caller must guarantee `ctx.dry_run`.
+///
+/// an unavailable snapshot does not interrupt the plan: it is reported and the
+/// next step is planned.
 pub fn dry_run_plan(steps: &mut [Box<dyn Step>], ctx: &Context, reporter: &dyn ProgressReporter) {
     let total = steps.len();
     for (idx, step) in steps.iter_mut().enumerate() {

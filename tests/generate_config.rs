@@ -1,4 +1,4 @@
-//! Test di [`GenerateConfig`] (Fase 7): undo ripristinante + rendering.
+//! [`GenerateConfig`]: the restoring undo, and the rendering.
 
 mod common;
 
@@ -77,8 +77,8 @@ fn created_by_us_generates_640_and_undo_removes() {
 
 #[test]
 fn preexisting_undo_restores_backup() {
-    // IL test nuovo: il file originale del cliente viene RIPRISTINATO, non
-    // cancellato né lasciato sovrascritto.
+    // THE test: the customer's original file is RESTORED, neither deleted nor
+    // left overwritten.
     let dir = tempfile::tempdir().expect("tempdir");
     let dest = dest_of(dir.path());
     let original = "; CONFIG ORIGINALE DEL CLIENTE\n";
@@ -95,7 +95,7 @@ fn preexisting_undo_restores_backup() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    // Dopo il run il file è la nostra config (originale messo da parte nel backup).
+    // after the run the file is ours, the original set aside in the backup.
     let after_run = std::fs::read_to_string(&dest).expect("read");
     assert_ne!(
         after_run, original,
@@ -104,7 +104,7 @@ fn preexisting_undo_restores_backup() {
 
     step.undo(&c).expect("undo");
 
-    // Dopo l'undo il file torna ESATTAMENTE l'originale del cliente.
+    // after the undo it is EXACTLY the customer's original again.
     let after_undo = std::fs::read_to_string(&dest).expect("read");
     assert_eq!(
         after_undo, original,

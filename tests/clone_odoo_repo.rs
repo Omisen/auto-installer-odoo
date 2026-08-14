@@ -1,4 +1,4 @@
-//! Test di [`CloneOdooRepo`] (Fase 6): stato sorgenti, retry, fallback tarball.
+//! [`CloneOdooRepo`]: source state, retries, tarball fallback.
 
 mod common;
 
@@ -45,17 +45,17 @@ fn absent_clones_and_undo_removes_target() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    // Clone con gli argomenti attesi.
+    // clone with the expected arguments.
     assert!(ops.contains(&Op::GitClone {
         target: repo_dir(),
         branch: "18.0".to_string(),
         depth: 5,
     }));
-    // Struttura directory creata come utente odoo.
+    // directory structure created as the `odoo` user.
     assert!(ops
         .iter()
         .any(|o| matches!(o, Op::MkdirAsUser { user, .. } if user == "odoo")));
-    // Undo: rm -rf del target (nostro perimetro).
+    // undo: recursive removal inside our perimeter.
     assert!(ops.contains(&Op::RemoveDirAll(repo_dir())));
 }
 
@@ -98,7 +98,7 @@ fn branch_mismatch_is_error_not_regenerated() {
     let mut step = CloneOdooRepo::with_ops(Box::new(mock));
     let c = ctx();
 
-    // Branch diverso → errore in snapshot, NON si rigenera silenziosamente.
+    // a different branch errors in the snapshot, never regenerates silently.
     assert!(
         step.snapshot(&c).is_err(),
         "branch mismatch deve essere un errore"
@@ -107,7 +107,7 @@ fn branch_mismatch_is_error_not_regenerated() {
 
 #[test]
 fn retries_then_succeeds_with_cleanup_between() {
-    // Clone fallisce 2 volte poi riesce → 3 tentativi, 2 pulizie tra i tentativi.
+    // two failures then success: three attempts, two cleanups between them.
     let cfg = MockConfig {
         source_state: OdooSourceState::Absent,
         git_clone_fail_times: 2,
@@ -138,7 +138,7 @@ fn retries_then_succeeds_with_cleanup_between() {
 
 #[test]
 fn falls_back_to_tarball_after_all_retries() {
-    // Tutti i tentativi di clone falliscono → scatta il fallback tarball.
+    // every clone attempt fails, so the tarball fallback fires.
     let cfg = MockConfig {
         source_state: OdooSourceState::Absent,
         git_clone_fail_times: 3,
@@ -159,10 +159,9 @@ fn falls_back_to_tarball_after_all_retries() {
 
 #[test]
 fn clone_timeout_is_retryable_and_falls_back_to_tarball() {
-    // A3.1/R2: un tentativo che *scade* non è diverso da uno che fallisce —
-    // consuma un tentativo, pulisce gli artefatti parziali e alla fine dei
-    // retry attiva il fallback tarball. Senza timeout, il primo tentativo non
-    // sarebbe mai tornato e retry e fallback non sarebbero mai scattati.
+    // an attempt that *times out* is no different from one that fails: it
+    // consumes an attempt, cleans up, and eventually triggers the fallback.
+    // without the timeout the first attempt would never have returned.
     let cfg = MockConfig {
         source_state: OdooSourceState::Absent,
         git_clone_fail_times: 3,
@@ -188,8 +187,8 @@ fn clone_timeout_is_retryable_and_falls_back_to_tarball() {
 
 #[test]
 fn timeout_on_clone_and_tarball_propagates_the_timeout_error() {
-    // Se anche il fallback scade, l'errore che arriva all'utente è il Timeout
-    // (con il comando e i secondi), non un hang e non un errore generico.
+    // if the fallback times out too, the user gets the timeout error with its
+    // command and duration — not a hang, not a generic failure.
     let cfg = MockConfig {
         source_state: OdooSourceState::Absent,
         git_clone_fail_times: 3,

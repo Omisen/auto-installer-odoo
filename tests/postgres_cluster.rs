@@ -1,18 +1,15 @@
-//! M3 — l'inizializzazione del cluster PostgreSQL, quarto asse di
-//! `setup-postgres`.
+//! M3: initialising the PostgreSQL cluster, `setup-postgres`'s fourth axis.
 //!
-//! # La divergenza più pesante fra le due famiglie
+//! the heaviest divergence between the families. on one the package's
+//! post-install creates the cluster and the service starts, so there was never
+//! an init step because none was needed. on the other the server package
+//! **initialises nothing**: without an explicit init the service does not
+//! start, and the step failed at its final check with a message sending the
+//! reader to the journal instead of naming the cause.
 //!
-//! Su Debian/Ubuntu il postinst di `postgresql` chiama `pg_createcluster` e il
-//! servizio parte: `setup-postgres` non ha mai avuto un passo di
-//! inizializzazione perché non serviva. Su Fedora `postgresql-server` **non
-//! inizializza niente** — senza `postgresql-setup --initdb` il servizio non
-//! parte, e lo step falliva alla verifica finale con un messaggio che mandava a
-//! leggere `journalctl` invece di dire la causa.
-//!
-//! Non è «un comando in più»: l'init **produce un artefatto**, il data
-//! directory, che senza un `PreState` proprio nascerebbe senza che nessuno lo
-//! annoti — cioè non sarebbe annullabile (A-R5-3).
+//! it is not "one more command": the init **produces an artifact**, the data
+//! directory, which without a `PreState` of its own would appear unrecorded —
+//! that is, not undoable (A-R5-3).
 
 mod common;
 
@@ -45,9 +42,9 @@ fn snap(step: &SetupPostgres) -> PostgresSnapshot {
     serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile")
 }
 
-// --- Il cluster si inizializza solo dove serve -------------------------------
+// --- the cluster is initialised only where needed ---------------------------
 
-/// Su Fedora il cluster va creato, e l'operazione è **registrata**.
+/// where the cluster must be created, the operation is **recorded**.
 #[test]
 fn on_fedora_the_cluster_is_initialized_and_recorded() {
     let (step, log) = esegui(MockConfig {
@@ -67,8 +64,8 @@ fn on_fedora_the_cluster_is_initialized_and_recorded() {
     );
 }
 
-/// Su Debian **non** si inizializza nulla: il pacchetto lo fa da sé, e un initdb
-/// in più su un cluster già esistente non è innocuo.
+/// where the package does it itself, **nothing** is initialised: an extra init
+/// on an existing cluster is not harmless.
 #[test]
 fn on_debian_nothing_is_initialized() {
     let (step, log) = esegui(MockConfig::default());
@@ -84,8 +81,8 @@ fn on_debian_nothing_is_initialized() {
     );
 }
 
-/// Un cluster **già inizializzato** non si tocca, nemmeno su Fedora: è
-/// `Preexisting`, e reinizializzarlo distruggerebbe i database che ospita.
+/// an **already-initialised** cluster is not touched: it is `Preexisting`, and
+/// reinitialising it would destroy the databases it holds.
 #[test]
 fn an_existing_cluster_is_left_alone() {
     let (step, log) = esegui(MockConfig {
@@ -102,12 +99,12 @@ fn an_existing_cluster_is_left_alone() {
     assert_eq!(snap(&step).cluster_initialized, PreState::Preexisting);
 }
 
-/// L'init avviene **prima** di enable e start.
+/// the init happens **before** enable and start.
 ///
-/// L'ordine non è cosmetico: è tutta la ragione per cui questo è un asse di
-/// `setup-postgres` e non uno step a sé. Su Fedora un `systemctl start` prima
-/// dell'initdb fallisce, e lo step si fermerebbe alla verifica finale dicendo di
-/// guardare `journalctl` — cioè indicando il sintomo invece della causa.
+/// the order is not cosmetic: it is the whole reason this is an axis of
+/// `setup-postgres` and not a step of its own. starting before initialising
+/// fails, and the step would stop at its final check pointing at the symptom
+/// instead of the cause.
 #[test]
 fn the_cluster_is_initialized_before_the_service_starts() {
     let (_step, log) = esegui(MockConfig {
@@ -132,13 +129,13 @@ fn the_cluster_is_initialized_before_the_service_starts() {
     );
 }
 
-// --- L'undo: il cluster segue la politica del pacchetto ----------------------
+// --- the undo: the cluster follows the package's policy ---------------------
 
-/// **Senza `--aggressive-rollback` il cluster resta.**
+/// **without the aggressive flag the cluster stays.**
 ///
-/// Un data directory vuoto è un residuo inerte; i dati di qualcun altro no. È la
-/// stessa asimmetria di D3-punto2 per il purge del pacchetto: stop e disable
-/// sono reversibili, la rimozione dei dati non lo è.
+/// an empty data directory is an inert leftover; somebody else's data is not.
+/// the same asymmetry as the package purge: stop and disable are reversible,
+/// removing data is not.
 #[test]
 fn without_the_aggressive_flag_the_cluster_survives() {
     let (step, log) = esegui(MockConfig {
@@ -156,12 +153,12 @@ fn without_the_aggressive_flag_the_cluster_survives() {
     );
 }
 
-/// Con il flag **e** con il cluster vuoto di database altrui, si rimuove.
+/// with the flag **and** no third-party database in the cluster, it is removed.
 #[test]
 fn with_the_aggressive_flag_and_an_empty_cluster_it_is_removed() {
     let (step, log) = esegui(MockConfig {
         family: OsFamily::Fedora,
-        // Solo il nostro database e quello di manutenzione: nessun dato di terzi.
+        // only ours and the maintenance database: no third-party data.
         pg_databases_list: vec!["odoo".to_string(), "postgres".to_string()],
         ..MockConfig::default()
     });
@@ -177,14 +174,13 @@ fn with_the_aggressive_flag_and_an_empty_cluster_it_is_removed() {
     );
 }
 
-/// **La protezione che conta.** Con il flag ma con database di *altri* nel
-/// cluster, il PGDATA non si tocca.
+/// **the protection that matters.** with the flag but *other people's*
+/// databases in the cluster, the data directory is left alone.
 ///
-/// `cluster_safe_to_purge` è già la domanda giusta per il pacchetto — «c'è
-/// qualcosa oltre al nostro database?» — e la sua risposta negativa protegge qui
-/// esattamente come protegge lì. Un PGDATA contiene **tutti** i database del
-/// cluster, non solo il nostro: rimuoverlo per annullare la nostra installazione
-/// sarebbe l'anti-drop violato su scala maggiore.
+/// the existing question — "is there anything besides our database?" — protects
+/// here exactly as it does for the package. a data directory holds **all** the
+/// cluster's databases: removing it to undo our installation would be the
+/// anti-drop violated on a larger scale.
 #[test]
 fn a_cluster_hosting_other_databases_is_never_removed() {
     let (step, log) = esegui(MockConfig {
@@ -207,7 +203,8 @@ fn a_cluster_hosting_other_databases_is_never_removed() {
     );
 }
 
-/// Un cluster **preesistente** non si rimuove nemmeno con il flag: non è nostro.
+/// a **pre-existing** cluster is not removed even with the flag: it is not
+/// ours.
 #[test]
 fn a_preexisting_cluster_is_never_removed() {
     let (step, log) = esegui(MockConfig {
@@ -226,15 +223,13 @@ fn a_preexisting_cluster_is_never_removed() {
     );
 }
 
-// --- Retrocompatibilità dello snapshot --------------------------------------
+// --- snapshot compatibility -------------------------------------------------
 
-/// Uno snapshot scritto **prima di M3** non ha il campo, e si legge come
-/// `Untracked`.
+/// a snapshot written **before M3** lacks the field and reads as `Untracked`.
 ///
-/// È la verità per ogni installazione esistente: sono tutte Debian, dove il
-/// cluster non lo abbiamo mai inizializzato noi. Renderlo illeggibile
-/// significherebbe rendere non annullabile lo step — stessa cura di
-/// `default_site` in R11 e di `InstallConfig` in R4.
+/// which is the truth for every existing installation: they are all on the
+/// family where we never initialised the cluster. making it unreadable would
+/// make the step undoable no more.
 #[test]
 fn a_snapshot_written_before_this_axis_still_rehydrates() {
     let legacy = serde_json::json!({
@@ -261,7 +256,7 @@ fn a_snapshot_written_before_this_axis_still_rehydrates() {
     );
 }
 
-/// E il quarto asse sopravvive all'andata e ritorno, come gli altri tre.
+/// and the fourth axis survives the round trip, like the other three.
 #[test]
 fn the_fourth_axis_survives_serialisation() {
     let (step, _log) = esegui(MockConfig {
@@ -277,22 +272,21 @@ fn the_fourth_axis_survives_serialisation() {
     assert_eq!(snap(&riletto).cluster_initialized, PreState::CreatedByUs);
 }
 
-// --- Le implementazioni reali, non quelle del mock --------------------------
+// --- the real implementations, not the mock's -------------------------------
 
-/// **Il buco che la validazione per mutazione ha trovato.**
+/// **the hole mutation testing found.**
 ///
-/// I test sopra passano dal mock, che ha una *sua* `postgres_data_dir` scelta in
-/// base alla famiglia modellata. Va bene per verificare la logica dello step —
-/// ma significa che le implementazioni vere di `Debian` e `Fedora` non erano
-/// esercitate da niente: la mutazione «Debian dichiara un PGDATA da
-/// inizializzare» sopravviveva a tutta la suite.
+/// the tests above go through the mock, which picks its *own* data directory
+/// from the modelled family. fine for the step's logic — but the real
+/// implementations were exercised by nothing, and a mutation making the wrong
+/// family declare a directory to initialise survived the whole suite.
 ///
-/// In campo l'effetto sarebbe stato un `postgresql-setup --initdb` su Ubuntu,
-/// dove quel comando non esiste — e uno step che fallisce dopo aver installato
-/// PostgreSQL, cioè un rollback per una ragione inventata.
+/// in the field that would have run an init command that does not exist there,
+/// and a step failing after PostgreSQL was installed: a rollback for an
+/// invented reason.
 ///
-/// È la stessa lezione di R9 in un'altra forma: quando il mock replica una
-/// decisione della produzione, la decisione va provata **anche** dov'è scritta.
+/// when the mock replicates a production decision, that decision must be
+/// exercised **where it is written** too.
 #[test]
 fn each_family_declares_its_own_cluster_policy() {
     use invok::distro::{debian::Debian, fedora::Fedora, Distro};
@@ -313,13 +307,13 @@ fn each_family_declares_its_own_cluster_policy() {
     );
 }
 
-/// L'init su una famiglia che non ne ha bisogno è un **no-op che riesce**, non
-/// un errore.
+/// the init on a family that does not need one is a **succeeding no-op**, not
+/// an error.
 ///
-/// Conta perché lo step lo chiama solo quando `postgres_data_dir` è `Some`: se
-/// qui ci fosse un `unreachable!()` o un errore, sarebbe un ramo che non può
-/// eseguire — e il giorno che qualcuno cambiasse quella condizione, il difetto
-/// arriverebbe in campo invece che qui.
+/// it matters because the step calls it only when a directory is declared: a
+/// panic or an error here would be a branch that cannot run, and the day
+/// somebody changed that condition the defect would land in the field instead
+/// of here.
 #[test]
 fn initialising_where_it_is_not_needed_succeeds_quietly() {
     use invok::distro::{debian::Debian, Distro};
@@ -330,15 +324,14 @@ fn initialising_where_it_is_not_needed_succeeds_quietly() {
     );
 }
 
-// --- A-MD-6: le due risposte su «dov'è il cluster» ---------------------------
+// --- A-MD-6: the two answers to "where is the cluster" ----------------------
 
-/// `systemctl show -p Environment postgresql.service`, letto come lo legge
-/// `postgresql-setup`.
+/// the unit's environment, read the way the setup tool reads it.
 ///
-/// Il fixture è il formato **vero** del comando: una riga `Environment=` con più
-/// assegnazioni separate da spazi. Scriverlo a memoria come una riga per
-/// variabile darebbe un parser che non combacia con niente — è già successo due
-/// volte in questo progetto, e sempre così (A-R8-1-ter).
+/// the fixture is the command's **real** format: one line with several
+/// space-separated assignments. writing it from memory as one line per variable
+/// would give a parser matching nothing — it has happened twice already
+/// (A-R8-1-ter).
 #[test]
 fn the_declared_pgdata_is_read_the_way_postgresql_setup_reads_it() {
     use invok::distro::fedora::pgdata_from_environment;
@@ -372,7 +365,7 @@ fn the_declared_pgdata_is_read_the_way_postgresql_setup_reads_it() {
     );
 }
 
-/// La regola: si rifiuta **solo** quando le due risposte divergono davvero.
+/// the rule: refuse **only** when the two answers genuinely diverge.
 #[test]
 fn a_conflict_is_only_a_conflict_when_both_answers_exist_and_differ() {
     use invok::steps::setup_postgres::cluster_path_conflict;
@@ -402,13 +395,12 @@ fn a_conflict_is_only_a_conflict_when_both_answers_exist_and_differ() {
     );
 }
 
-/// Lo step si ferma **nello snapshot**, cioè prima di qualunque mutazione.
+/// the step stops **in the snapshot**, before any mutation.
 ///
-/// È la differenza fra una precondizione e un undo: qui non c'è niente da
-/// annullare perché non è stato fatto niente. E il caso è raggiungibile davvero
-/// — un PostgreSQL già installato con un drop-in che sposta PGDATA — che è
-/// esattamente la macchina su cui il danno sarebbe peggiore, perché in
-/// `/var/lib/pgsql/data` può esserci un cluster precedente del cliente.
+/// the difference between a precondition and an undo: there is nothing to undo
+/// because nothing was done. and the case is genuinely reachable — an existing
+/// PostgreSQL with a drop-in moving the data directory — which is exactly the
+/// machine where the damage would be worst.
 #[test]
 fn a_cluster_configured_elsewhere_stops_the_installation_before_it_starts() {
     let cfg = MockConfig {
@@ -433,11 +425,11 @@ fn a_cluster_configured_elsewhere_stops_the_installation_before_it_starts() {
     );
 }
 
-/// E quando le due risposte coincidono — o la unit non dice niente — lo step
-/// procede come ha sempre fatto.
+/// and when the answers agree — or the unit says nothing — the step proceeds as
+/// it always has.
 ///
-/// È la metà che rende il controllo un controllo: senza, «rifiuta sempre»
-/// passerebbe il test qui sopra e nessuno se ne accorgerebbe.
+/// the half that makes the check a check: without it, "always refuse" would
+/// pass the test above unnoticed.
 #[test]
 fn the_usual_fedora_is_not_stopped_by_this_check() {
     for dichiarato in [

@@ -1,13 +1,12 @@
-//! A-V3-1: un manifesto già sul disco non viene mai sovrascritto in silenzio.
+//! A-V3-1: a manifest already on disk is never silently overwritten.
 //!
-//! Due livelli, entrambi senza root e senza toccare il sistema:
-//! - la **politica** (`state::start_decision`) — installare, riprendere o
-//!   rifiutare — che è una funzione pura;
-//! - il **resume del motore**, cioè cosa succede davvero agli step già eseguiti.
+//! two levels, both unprivileged: the **policy** — install, resume or refuse —
+//! which is a pure function, and the **engine's resume**, i.e. what really
+//! happens to steps that already ran.
 //!
-//! Il difetto che questi test presidiano non era in uno step: era in `main`,
-//! fra pezzi coperti singolarmente. Per questo la regola è stata spostata in
-//! libreria: perché un test potesse raggiungerla.
+//! the defect these guard was not in a step but in `main`, between pieces each
+//! covered on its own. that is why the rule moved into the library: so a test
+//! could reach it.
 
 use std::sync::{Arc, Mutex};
 
@@ -19,7 +18,7 @@ use invok::state::{
 use invok::step::Step;
 use invok::steps::noop::{NoopStep, UndoLog};
 
-// --- helper ------------------------------------------------------------------
+// --- helpers ----------------------------------------------------------------
 
 fn ctx_with_state(dir: &tempfile::TempDir) -> Context {
     Context {
@@ -33,7 +32,7 @@ fn ctx_with_state(dir: &tempfile::TempDir) -> Context {
     .with_state_path(dir.path().join("state.json"))
 }
 
-/// Manifesto di un'installazione interrotta: alcuni step registrati, non conclusa.
+/// the manifest of an interrupted installation: some steps, not finished.
 fn partial_state(ctx: &Context, steps: &[(&str, PreState)]) -> InstallState {
     let mut state = InstallState::default();
     state.set_config(InstallConfig::from_context(ctx));
@@ -46,7 +45,7 @@ fn partial_state(ctx: &Context, steps: &[(&str, PreState)]) -> InstallState {
     state
 }
 
-// --- la politica: installare, riprendere, rifiutare ---------------------------
+// --- the policy: install, resume, refuse ------------------------------------
 
 #[test]
 fn no_manifest_means_a_first_installation() {
@@ -59,9 +58,9 @@ fn no_manifest_means_a_first_installation() {
     assert_eq!(decision, StartDecision::Fresh);
 }
 
-/// Il caso che dà il nome ad A-V3-1: una seconda installazione su un'istanza
-/// completa. Prima veniva accettata, e il manifesto — l'unica traccia di cosa
-/// rimuovere — veniva riscritto con tutto marcato come preesistente.
+/// the case A-V3-1 is named for: a second installation over a complete one. it
+/// used to be accepted, and the manifest — the only record of what to remove —
+/// was rewritten with everything marked pre-existing.
 #[test]
 fn a_finished_installation_is_refused_not_overwritten() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -78,9 +77,8 @@ fn a_finished_installation_is_refused_not_overwritten() {
     );
 }
 
-/// `--force` è la via d'uscita esplicita: si reinstalla, ma il manifesto
-/// precedente va messo da parte (l'archiviazione è di `main`, qui si verifica
-/// che la politica la richieda).
+/// `--force` is the explicit way out: reinstall, but set the previous manifest
+/// aside. archiving is `main`'s job; this checks the policy demands it.
 #[test]
 fn force_turns_a_refusal_into_a_replacement() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -98,10 +96,9 @@ fn force_turns_a_refusal_into_a_replacement() {
     );
 }
 
-/// Un manifesto parziale con gli stessi parametri è un'installazione
-/// interrotta: si riprende. È il flusso che `CLAUDE.md` dichiara supportato
-/// («rilancia e prosegui»), e quello che prima perdeva la proprietà degli step
-/// già eseguiti.
+/// a partial manifest with the same parameters is an interrupted installation,
+/// so it resumes. the supported flow, and the one that used to lose ownership
+/// of the steps already run.
 #[test]
 fn a_partial_manifest_with_the_same_parameters_is_resumed() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -113,9 +110,9 @@ fn a_partial_manifest_with_the_same_parameters_is_resumed() {
     assert_eq!(start_decision(&state, &cfg, false), StartDecision::Resume);
 }
 
-/// Riprendere con parametri diversi produrrebbe un manifesto a metà fra due
-/// istanze: metà undo punterebbero altrove. Nel caso del database è la
-/// violazione diretta dell'anti-drop.
+/// resuming with different parameters would produce a manifest straddling two
+/// instances, with half the undos pointing elsewhere. for the database that is
+/// a direct anti-drop violation.
 #[test]
 fn resuming_with_different_artifacts_is_refused_and_says_which() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -143,8 +140,8 @@ fn resuming_with_different_artifacts_is_refused_and_says_which() {
     );
 }
 
-/// I campi che non nominano un artefatto non bloccano il resume: cambiare porta
-/// o amministratore che rilancia non rende il manifesto incoerente.
+/// fields that name no artifact do not block a resume: a different port, or a
+/// different administrator, does not make the manifest incoherent.
 #[test]
 fn non_identifying_fields_do_not_block_a_resume() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -159,8 +156,8 @@ fn non_identifying_fields_do_not_block_a_resume() {
     assert_eq!(start_decision(&state, &cfg, false), StartDecision::Resume);
 }
 
-/// Manifesto pre-R4, senza configurazione: non si può stabilire se descriva gli
-/// stessi artefatti. Fail-closed, come per uno snapshot illeggibile.
+/// a pre-R4 manifest with no configuration: identity cannot be established, so
+/// fail-closed, as with an unreadable snapshot.
 #[test]
 fn a_manifest_without_config_is_not_resumed() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -179,11 +176,11 @@ fn a_manifest_without_config_is_not_resumed() {
     );
 }
 
-// --- il resume del motore -----------------------------------------------------
+// --- the engine's resume ----------------------------------------------------
 
-/// Uno step già registrato non viene rieseguito. Osservabile senza spiare il
-/// motore: lo step live è configurato per **fallire** al `run`, quindi se
-/// l'esecuzione arriva in fondo è perché non è stato rieseguito.
+/// an already-recorded step is not re-run. observable without spying on the
+/// engine: the live step is configured to **fail** its run, so reaching the end
+/// proves it was not re-run.
 #[test]
 fn resume_does_not_re_run_completed_steps() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -214,21 +211,21 @@ fn resume_does_not_re_run_completed_steps() {
     assert_eq!(nomi, vec!["alpha", "beta"]);
 }
 
-/// **Il test del difetto.** Al rilancio, uno step già eseguito vedrebbe il
-/// proprio artefatto già presente e lo dichiarerebbe `Preexisting`: corretto
-/// come fotografia, disastroso come verdetto di proprietà. Con il resume la
-/// proprietà si **rilegge** dal manifesto, e l'undo continua ad agire.
+/// **the defect's test.** on a re-run, a step that already executed would see
+/// its own artifact and declare it `Preexisting`: correct as a photograph,
+/// disastrous as a verdict of ownership. with the resume, ownership is
+/// **re-read** from the manifest and the undo keeps acting.
 #[test]
 fn resume_inherits_ownership_instead_of_re_deducing_it() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx_with_state(&dir);
     let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
 
-    // Il manifesto dice: alpha l'abbiamo creato noi.
+    // the manifest says we created it.
     let state = partial_state(&ctx, &[("alpha", PreState::CreatedByUs)]);
 
-    // Lo step live è configurato come lo vedrebbe uno snapshot rifatto oggi:
-    // l'artefatto c'è già, quindi "preesistente".
+    // the live step is configured as a fresh snapshot would see it today: the
+    // artifact is there, hence "pre-existing".
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(
             NoopStep::new("alpha")
@@ -256,8 +253,8 @@ fn resume_inherits_ownership_instead_of_re_deducing_it() {
     );
 }
 
-/// La configurazione registrata non viene sovrascritta da quella corrente: è
-/// l'identità degli artefatti su cui agiranno gli undo.
+/// the recorded configuration is not overwritten by the current one: it is the
+/// identity of the artifacts the undos will act on.
 #[test]
 fn resume_keeps_the_recorded_config() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -265,8 +262,8 @@ fn resume_keeps_the_recorded_config() {
     let originale = InstallConfig::from_context(&ctx);
     let state = partial_state(&ctx, &[("alpha", PreState::CreatedByUs)]);
 
-    // Il motore riceve un Context con un database diverso: se sovrascrivesse la
-    // config, gli undo del manifesto punterebbero al database sbagliato.
+    // the engine gets a context naming a different database: overwriting the
+    // config would point the undos at the wrong one.
     let mut altro = ctx_with_state(&dir);
     altro.db_name = "fatturazione".to_string();
 
@@ -281,8 +278,8 @@ fn resume_keeps_the_recorded_config() {
     );
 }
 
-/// Uno snapshot persistito illeggibile ferma il resume invece di inventare un
-/// verdetto: stesso fail-closed del rollback da disco.
+/// an unreadable persisted snapshot stops the resume rather than inventing a
+/// verdict: the same fail-closed rule as the rollback from disk.
 #[test]
 fn an_unreadable_snapshot_stops_the_resume() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -307,8 +304,8 @@ fn an_unreadable_snapshot_stops_the_resume() {
     );
 }
 
-/// Un'installazione ripresa e portata a termine produce un manifesto **unico**:
-/// gli step ereditati non vengono duplicati e il flag di conclusione c'è.
+/// an installation resumed and completed produces a **single** manifest:
+/// inherited steps are not duplicated, and the finished flag is set.
 #[test]
 fn a_resumed_installation_finishes_with_a_single_coherent_manifest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -336,7 +333,7 @@ fn a_resumed_installation_finishes_with_a_single_coherent_manifest() {
     assert_eq!(nomi, vec!["alpha", "beta", "gamma"]);
     assert!(riletto.finished, "l'installazione ripresa è conclusa");
 
-    // Le proprietà ereditate sopravvivono al giro completo.
+    // the inherited ownership survives the whole pass.
     let alpha: PreState =
         serde_json::from_value(riletto.completed[0].snapshot.clone()).expect("prestate");
     let beta: PreState =
@@ -345,12 +342,12 @@ fn a_resumed_installation_finishes_with_a_single_coherent_manifest() {
     assert_eq!(beta, PreState::Preexisting);
 }
 
-// --- A-R9-1: la porta occupata da noi stessi non blocca il resume ------------
+// --- A-R9-1: a port held by ourselves does not block the resume -------------
 
-/// Il preflight sulla porta esiste per intercettare un conflitto con **terzi**.
-/// Dopo `setup-systemd` il servizio in ascolto è il nostro: un'installazione
-/// interrotta allo step 18 di 24 non deve diventare irriprendibile per colpa del
-/// servizio che ha appena installato.
+/// the port preflight exists to catch a conflict with **somebody else**. once
+/// the service step has run, the listener is ours: an installation interrupted
+/// after it must not become unresumable because of the service it just
+/// installed.
 #[test]
 fn a_manifest_past_setup_systemd_owns_the_http_port() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -382,8 +379,8 @@ fn a_manifest_past_setup_systemd_owns_the_http_port() {
     );
 }
 
-/// Un manifesto vuoto non possiede nulla: una prima installazione deve passare
-/// dal controllo sulla porta come sempre.
+/// an empty manifest owns nothing: a first installation still goes through the
+/// port check.
 #[test]
 fn an_empty_manifest_owns_no_port() {
     assert!(!InstallState::default().owns_the_http_port());

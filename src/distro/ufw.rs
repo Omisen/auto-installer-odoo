@@ -1,10 +1,10 @@
-//! Il firewall della famiglia Debian: `ufw`.
+//! the Debian family's firewall: `ufw`.
 
 use super::Firewall;
 use crate::error::StepError;
 use crate::system_ops::{capture_command, run_command};
 
-/// `ufw`, il firewall di Debian/Ubuntu.
+/// `ufw`, Debian and Ubuntu's firewall.
 #[derive(Debug, Default)]
 pub struct Ufw;
 
@@ -41,18 +41,15 @@ impl Firewall for Ufw {
     }
 }
 
-/// La regola compare in `ufw status`? Confronto per **token**, non per
-/// sottostringa (A-V3-7).
+/// does the rule appear in `ufw status`? compared by **token**, not by
+/// substring (A-V3-7).
 ///
-/// # Il difetto che chiude
+/// `status.contains("80/tcp")` answers `true` on a machine that only has an
+/// `8080/tcp` rule. from there the port 80 rule never enters the delta, `run`
+/// never opens it, and nginx is configured and reloaded correctly while
+/// staying **unreachable from outside** — with nothing odd in the report.
 ///
-/// `status.contains("80/tcp")` risponde `true` su una macchina che ha soltanto
-/// una regola `8080/tcp` — un'altra app web, un reverse proxy, un runner. Da lì:
-/// la regola per la porta 80 non entra nel delta, il `run` non la apre, e nginx
-/// viene configurato e ricaricato correttamente ma resta **irraggiungibile
-/// dall'esterno**. Nel report non c'è niente di anomalo da leggere.
-///
-/// # Come si legge `ufw status`
+/// # how `ufw status` reads
 ///
 /// ```text
 /// Status: active
@@ -64,18 +61,17 @@ impl Firewall for Ufw {
 /// 80/tcp (v6)                ALLOW       Anywhere (v6)
 /// ```
 ///
-/// La regola è il **primo token** della riga (colonna `To`). Il suffisso
-/// `(v6)` è un token a parte, quindi la variante IPv6 della stessa porta
-/// combacia — ed è giusto: è la stessa regola.
+/// the rule is the line's **first token**, the `To` column. the `(v6)` suffix
+/// is a token of its own, so the IPv6 variant of a port matches — correctly,
+/// since it is the same rule.
 ///
-/// # Cosa non distingue, dichiarato
-///
-/// Un profilo applicativo (`Nginx Full`) ha uno spazio nella colonna `To` e non
-/// verrà riconosciuto come `80/tcp`, anche se apre quella porta. La conseguenza
-/// è che aggiungeremmo `80/tcp` al delta e l'undo la rimuoverebbe: rimuoviamo
-/// solo ciò che abbiamo aggiunto noi, quindi la promessa chirurgica regge.
+/// declared limitation: an application profile such as `Nginx Full` has a
+/// space in the `To` column and will not be recognised as `80/tcp`, even
+/// though it opens that port. we would then add `80/tcp` to the delta and the
+/// undo would remove it — still only what we added, so the surgical promise
+/// holds.
 pub fn rule_in_status(status: &str, rule: &str) -> bool {
-    /// I token che compaiono in prima colonna senza essere regole.
+    /// tokens that appear in the first column without being rules.
     const INTESTAZIONI: [&str; 3] = ["To", "--", "Status:"];
 
     status

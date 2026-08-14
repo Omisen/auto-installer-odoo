@@ -1,48 +1,38 @@
-//! [`SetupCacheDir`]: possiede `<odoo_home>/.cache`, così il rollback può
-//! rimuoverla.
+//! [`SetupCacheDir`]: owns `<odoo_home>/.cache`, so the rollback can remove it.
 //!
-//! # Perché esiste (A-R5-3, seconda metà)
+//! # why it exists (A-R5-3, second half)
 //!
-//! `/opt/odoo` è l'`$HOME` dell'utente `odoo`, ed è la directory che l'installer
-//! — trovandola già esistente — marca `Preexisting` e non svuota mai. Ma
-//! *dentro* quella home girano parecchi programmi per conto nostro: `pip`,
-//! `odoo-bin`, il servizio stesso. Tutti scrivono in `$HOME/.cache`, che è dove
-//! su Linux le cache vanno a finire.
+//! `/opt/odoo` is the `odoo` user's `$HOME`, which the installer marks
+//! `Preexisting` and never empties. but several programs run inside it on our
+//! behalf — `pip`, `odoo-bin`, the service — and they all write to
+//! `$HOME/.cache`.
 //!
-//! R6 aveva chiuso il caso più grosso spostando la cache di `pip` dentro il venv
-//! (`--cache-dir`). Non bastava: il job Ubuntu 22.04 di R6-hotfix-2, che è il
-//! primo ad arrivare **in fondo** all'installazione, ha trovato di nuovo
-//! `/opt/odoo/.cache` dopo un rollback completo. Con l'installazione intera girano
-//! anche `odoo-bin -i base` e il servizio Odoo, e i produttori di cache si
-//! moltiplicano: lo scan dei font di fontconfig, il `selfcheck` delle versioni di
-//! `pip` (che nelle versioni fino alla 23 ignora `--cache-dir` e scrive comunque
-//! nella cache utente), e chiunque altro domani.
+//! R6 closed the biggest case by moving pip's cache into the venv. it was not
+//! enough: the first CI run to reach **the end** of an installation found
+//! `/opt/odoo/.cache` again after a complete rollback, because fontconfig and
+//! pip's own version selfcheck write there too.
 //!
-//! Inseguire i produttori uno per uno è una battaglia che si perde: sono
-//! programmi di terzi e cambiano comportamento fra versioni. Qui si cambia
-//! domanda — non «chi ha scritto in `.cache`?» ma «di chi **è** `.cache`?». Se
-//! la creiamo noi è nostra, e il rollback la rimuove; se c'era già è del
-//! cliente, e non si tocca. Il numero di produttori diventa irrilevante.
+//! chasing the producers is a losing battle — they are third-party programs
+//! whose behaviour changes between versions. so the question changes: not "who
+//! wrote into `.cache`" but "**whose** is `.cache`". if we create it, the
+//! rollback removes it; if it was there, it is the customer's. the number of
+//! producers becomes irrelevant.
 //!
-//! # Rapporto con `SetupDataDir`
+//! # compared with `SetupDataDir`
 //!
-//! Stessa meccanica (possedere un ramo dentro la home altrui), **gate diverso**:
-//! il filestore contiene dati applicativi e la sua rimozione è subordinata anche
-//! alla proprietà del database. Una cache no: è rigenerabile per definizione, e
-//! l'unica domanda è chi ha creato la directory. Nessuna condizione in più.
+//! same mechanics, **different gate**: the filestore holds application data, so
+//! its removal also depends on owning the database. a cache is regenerable by
+//! definition, and the only question is who created the directory.
 //!
-//! # Posizione nella sequenza
+//! # position in the sequence
 //!
-//! Presto: subito dopo `setup-log-dir`, prima che qualunque cosa giri come
-//! utente `odoo`. Lo snapshot deve vedere la home **prima** che i produttori di
-//! cache la tocchino, altrimenti troverebbe una `.cache` "preesistente" che
-//! preesistente non è.
+//! early, before anything runs as `odoo`, or the snapshot would find a
+//! "pre-existing" `.cache` that is nothing of the sort.
 //!
-//! Il bonus è l'ordine dell'undo. Gli undo girano al contrario, quindi essere
-//! presto qui significa essere **tardi** là: la cache viene rimossa dopo che il
-//! servizio è stato fermato, il venv cancellato e i sorgenti rimossi — cioè dopo
-//! che ogni possibile scrittore ha smesso di scrivere. È l'opposto del compromesso
-//! che `setup-data-dir` deve accettare (vedi la sua nota sull'ordine).
+//! the bonus is the undo's order: undos run backwards, so early here means
+//! **late** there — the cache goes after the service is stopped, the venv
+//! deleted and the sources removed, i.e. after every possible writer has
+//! stopped. the opposite of the compromise `setup_data_dir` must accept.
 
 use serde::{Deserialize, Serialize};
 use tracing::info;
@@ -53,22 +43,21 @@ use crate::state::PreState;
 use crate::step::{decode_snapshot, Step};
 use crate::system_ops::SystemOps;
 
-/// Nome della directory cache nella home dell'utente `odoo`.
+/// the cache directory's name inside the `odoo` user's home.
 const CACHE_SUBDIR: &str = ".cache";
 
-/// Snapshot persistito dello step.
+/// the step's persisted snapshot.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CacheDirSnapshot {
-    /// Stato di `<odoo_home>/.cache` prima di noi.
+    /// the cache's state before us.
     pub prestate: PreState,
-    /// Il livello più alto che mancava e che quindi abbiamo creato noi. Per
-    /// `.cache` coincide sempre con la directory stessa (è un solo livello), ma
-    /// resta persistito perché è l'undo a decidere cosa rimuovere, e deve
-    /// rileggerlo invece di ricalcolarlo.
+    /// the highest missing level, hence the one we created. always the
+    /// directory itself here, but persisted anyway: the undo decides what to
+    /// remove by **re-reading** this, not by recomputing it.
     pub created_root: Option<std::path::PathBuf>,
 }
 
-/// Crea (e quindi possiede) `<odoo_home>/.cache`.
+/// creates, and therefore owns, `<odoo_home>/.cache`.
 pub struct SetupCacheDir {
     ops: Box<dyn SystemOps>,
     snap: CacheDirSnapshot,
@@ -126,9 +115,8 @@ impl Step for SetupCacheDir {
             return Ok(());
         }
 
-        // Creata come utente `odoo`: chi ci scriverà è lui, non root. Se la
-        // creassimo root i programmi lanciati come odoo non potrebbero usarla,
-        // e ne aprirebbero un'altra da qualche altra parte.
+        // created as `odoo`, because that is who will write there: root-owned,
+        // the programs would open another cache somewhere else.
         self.ops.mkdir_p_as_user(&ctx.odoo_user, &cache)?;
         self.snap.prestate = PreState::CreatedByUs;
         info!(cache = %cache.display(), "run: cache creata (owned {}:{})", ctx.odoo_user, ctx.odoo_user);
@@ -144,9 +132,9 @@ impl Step for SetupCacheDir {
             return Ok(());
         }
 
-        // Nessun gate oltre al PreState: è una cache, il suo contenuto è
-        // rigenerabile e non appartiene a nessun database. L'unica domanda che
-        // conta l'abbiamo già fatta nello snapshot.
+        // no gate beyond the `PreState`: a cache is regenerable and belongs to
+        // no database, so the only question that matters was asked in the
+        // snapshot.
         let target = self
             .snap
             .created_root

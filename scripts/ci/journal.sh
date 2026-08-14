@@ -1,72 +1,68 @@
 #!/usr/bin/env bash
-# Lettura del DIARIO dell'esecuzione dall'output dell'installer.
+# reads the run's JOURNAL from the installer's output.
 #
-# Perché esiste un file a parte. Queste funzioni interpretano un formato — quello
-# di `tracing` — e un formato si sbaglia in silenzio: un pattern che non combacia
-# non produce un errore, produce ZERO RISULTATI. E zero risultati, in un test di
-# pulizia, si presenta come «tutti i pacchetti del delta sono stati purgati» ✔
-# quando in realtà non se n'è verificato nemmeno uno. Stando qui, la logica è
-# esercitabile da `selftest-journal.sh` contro un campione fedele, nella CI
-# veloce, senza aspettare un'installazione reale.
+# why a separate file: these functions interpret a format, and a format goes
+# wrong in silence — a pattern that does not match produces no error, it produces
+# ZERO RESULTS. and zero results, in a cleanliness check, looks like "every
+# package in the delta was purged" when not one was verified. living here, the
+# logic can be exercised by the self-test against a faithful sample, in the fast
+# CI, without waiting for a real installation.
 #
-# ## Diario ≠ manifesto
+# ## journal is not manifest
 #
-# Il manifesto (`state.json`) dice cosa c'è ANCORA sul sistema: quando un
-# rollback annulla uno step, quel record sparisce. Va benissimo per «cosa resta»,
-# ed è inutilizzabile per «cosa è stato fatto» — in `MODE=probe` l'installazione
-# si annulla da sé e il manifesto è correttamente vuoto. Il diario di ciò che è
-# accaduto vive nel log, che non viene riscritto.
+# the manifest says what is STILL on the system: when a rollback undoes a step,
+# that record disappears. perfect for "what remains", useless for "what was
+# done" — in probe mode the installation undoes itself and the manifest is
+# rightly empty. the account of what happened lives in the log, which is not
+# rewritten.
 #
-# ## Le due trappole del formato, entrambe pagate in campo
+# ## the format's two traps, both paid for in the field
 #
-# 1. **Gli ANSI ci sono anche su pipe.** `fmt::layer()` di `tracing-subscriber`
-#    non fa auto-detect del terminale: colora sempre. In un file catturato
-#    «progress:» è in realtà «progress\e[0m\e[2m:\e[0m», e nessun pattern scritto
-#    guardando ciò che si LEGGE a schermo combacia. GitHub rende gli escape
-#    invisibili nei suoi log, quindi il difetto è invisibile due volte.
-# 2. **`pacchetti=` non ha virgolette.** È un campo `Display` (`%`), non `Debug`:
-#    il valore non è quotato e arriva fino a fine riga. `step="..."` invece è
-#    quotato, perché è una stringa. Nella stessa riga convivono le due forme.
+# 1. **the ANSI codes are there on a pipe too.** the logging layer does no
+#    terminal auto-detection: it always colours. in a captured file a plain word
+#    carries escapes around it, and no pattern written by looking at what one
+#    READS on screen matches. the CI web view renders escapes invisible, so the
+#    defect is invisible twice.
+# 2. **one field is not quoted.** it is a `Display` field, not `Debug`: the value
+#    is unquoted and runs to end of line, while a neighbouring string field is
+#    quoted. both forms live on the same line.
 
-# Toglie i codici ANSI. Da applicare SEMPRE prima di qualunque altra lettura.
+# strips the ANSI codes. ALWAYS applied before any other reading.
 journal_strip_ansi() {
   sed 's/\x1b\[[0-9;]*[a-zA-Z]//g' "$1"
 }
 
-# Gli step portati a termine, uno per riga: dalle righe di progresso «✔ <nome>».
+# the completed steps, one per line, from the progress lines.
 journal_steps() {
   sed -n 's/.*progress: ✔ \([a-z0-9-]*\).*/\1/p' "$1" | sort -u
 }
 
-# I pacchetti nominati da uno step, uno per riga.
+# the packages named by a step, one per line.
 #
-# `$2` è il messaggio che identifica la lista ("pacchetti aggiunti da noi" o
-# "pacchetti già presenti, mai toccati"), `$3` il nome dello step.
+# `$2` is the message identifying the list, `$3` the step's name.
 #
-# Lo step si passa e non si indovina: il delta di `bootstrap-prerequisites`
-# (git/curl/wget/gettext) resta installato DI PROPOSITO, e confonderlo con quello
-# di `install-system-dependencies` farebbe fallire la verifica di purga proprio
-# sulle immagini minimali — dove quelle utility non sono preinstallate e quindi
-# finiscono davvero nel delta.
+# the step is passed and not guessed: the bootstrap delta stays installed ON
+# PURPOSE, and confusing it with the dependencies' delta would fail the purge
+# check on minimal images — where those utilities are not preinstalled and so do
+# enter the delta.
 #
-# Un risultato VUOTO è legittimo (in `MODE=probe` lo step può non essere stato
-# raggiunto) e non deve essere un errore: il `grep` che scarta le righe vuote
-# esce 1 quando non trova nulla, e sotto `set -o pipefail` farebbe abortire lo
-# script chiamante. Il `|| true` è quindi parte del contratto, non pigrizia.
+# an EMPTY result is legitimate (in probe mode the step may not have been
+# reached) and must not be an error: the grep exits non-zero on no match, and
+# under pipefail that would abort the caller. the `|| true` is part of the
+# contract, not laziness.
 journal_packages() {
   sed -n "s/.*delta pacchetti: $2 step=\"$3\" pacchetti=//p" "$1" \
     | tr ' ' '\n' | grep -v '^$' | sort -u || true
 }
 
-# L'interprete che l'installer ha scelto per il virtualenv, o vuoto se ha usato
-# quello di sistema (M11).
+# the interpreter chosen for the virtualenv, or empty when the system one was
+# used (M11).
 #
-# **L'ordine dei pezzi nella riga è il punto.** `tracing` stampa prima il
-# messaggio e poi i campi, quindi `interprete=` viene DOPO il testo: un pattern
-# che li cercasse nell'ordine in cui si pensano — campo, poi messaggio — non
-# combacia con niente e restituisce silenzio. È lo stesso modo in cui questo
-# parsing si è già rotto due volte, ed è per questo che vive qui, con un campione
-# fedele accanto, invece che in una riga di `integration-test.sh`.
+# **the order of the pieces on the line is the point.** the logger prints the
+# message first and the fields after, so the field comes AFTER the text: a
+# pattern looking for them in the order one thinks them — field, then message —
+# matches nothing and returns silence. the same way this parsing has already
+# broken twice, which is why it lives here next to a faithful sample.
 journal_python_plan() {
   sed -n 's/.*virtualenv nascerà.*interprete=\([a-z0-9.]*\).*/\1/p' "$1" | head -1
 }

@@ -1,4 +1,4 @@
-//! Test di [`SetupPostgres`] (Fase 5): i tre assi indipendenti e la D4.
+//! [`SetupPostgres`]: the independent state axes and rule D4.
 
 mod common;
 
@@ -38,8 +38,8 @@ fn has(ops: &[Op], pred: impl Fn(&Op) -> bool) -> bool {
 
 #[test]
 fn installed_but_stopped_starts_then_stops_no_purge() {
-    // PostgreSQL installato + enabled, ma fermo. Lo avviamo; l'undo lo ferma
-    // (D4) ma NON disabilita (era già enabled) e NON purga.
+    // installed and enabled but stopped: we start it, and the undo stops it
+    // again without disabling or purging.
     let cfg = MockConfig {
         installed_packages: installed(&["postgresql"]),
         service_enabled: true,
@@ -78,7 +78,7 @@ fn all_absent_installs_enables_starts_then_reverts_no_purge() {
     assert!(has(&ops, |o| matches!(o, Op::PkgInstall(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceEnable(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceStart(_))));
-    // undo: stop + disable, ma NO purge (default).
+    // undo: stop and disable, but NO purge by default.
     assert!(has(&ops, |o| matches!(o, Op::ServiceStop(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceDisable(_))));
     assert!(
@@ -89,7 +89,7 @@ fn all_absent_installs_enables_starts_then_reverts_no_purge() {
 
 #[test]
 fn purge_only_with_aggressive_rollback() {
-    // Stesso stato (tutto assente → installed CreatedByUs), due politiche.
+    // the same starting state, under two policies.
     let without = run_cycle(MockConfig::default(), false);
     assert!(
         !has(&without, |o| matches!(o, Op::PkgRemove(_))),
@@ -106,7 +106,7 @@ fn purge_only_with_aggressive_rollback() {
 
 #[test]
 fn aggressive_purge_declined_when_other_databases_present() {
-    // --aggressive-rollback ma il cluster ospita un DB non-Odoo → NON purgare.
+    // aggressive, but the cluster hosts another database: NO purge.
     let cfg = MockConfig {
         pg_databases_list: vec!["clientapp".to_string()],
         ..Default::default()
@@ -116,14 +116,14 @@ fn aggressive_purge_declined_when_other_databases_present() {
         !has(&ops, |o| matches!(o, Op::PkgRemove(_))),
         "con altri database nel cluster il purge va declinato"
     );
-    // stop+disable sono comunque applicati.
+    // stop and disable still apply.
     assert!(has(&ops, |o| matches!(o, Op::ServiceStop(_))));
     assert!(has(&ops, |o| matches!(o, Op::ServiceDisable(_))));
 }
 
 #[test]
 fn aggressive_purge_allowed_when_only_our_database() {
-    // Nessun altro DB (solo il nostro / nessuno) + aggressive → purge consentito.
+    // no other database, and aggressive: the purge is allowed.
     let cfg = MockConfig {
         pg_databases_list: vec!["odoo".to_string()], // il nostro
         ..Default::default()
@@ -137,7 +137,7 @@ fn aggressive_purge_allowed_when_only_our_database() {
 
 #[test]
 fn already_active_is_left_running() {
-    // Era già attivo (Preexisting) → l'undo NON deve fermarlo (D4).
+    // already running before us: the undo must NOT stop it (D4).
     let cfg = MockConfig {
         installed_packages: installed(&["postgresql"]),
         service_enabled: true,

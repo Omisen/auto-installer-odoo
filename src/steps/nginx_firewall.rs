@@ -1,12 +1,10 @@
-//! [`NginxFirewall`] (13d): apre le porte su ufw, col **pattern delta**.
+//! [`NginxFirewall`]: opens the ports through the **delta pattern**.
 //!
-//! # Mutazione insidiosa: regole ufw
+//! firewall rules are the customer's system configuration, so the same pattern
+//! as the packages applies: the undo removes **only** the rules we added,
+//! **never** one that was already there.
 //!
-//! Le regole firewall sono config di sistema del cliente. Come per l'apt di
-//! Fase 4, si applica il pattern delta: l'undo rimuove **solo** le regole che
-//! abbiamo aggiunto noi (il delta), **mai** una regola che il cliente aveva già.
-//!
-//! Se ufw non è installato o non è attivo → no-op (non forziamo il firewall).
+//! an absent or inactive firewall means a no-op: we do not force one on.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -18,7 +16,7 @@ use crate::system_ops::SystemOps;
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NginxFirewallSnapshot {
-    /// Regole che aggiungiamo noi (non presenti prima): le sole rimovibili.
+    /// the rules we add, and the only ones removable.
     pub delta: Vec<String>,
 }
 
@@ -43,14 +41,12 @@ impl NginxFirewall {
         rules
     }
 
-    /// ufw è utilizzabile (installato e attivo)?
+    /// is the firewall usable, i.e. installed and active?
     fn ufw_usable(&self) -> bool {
         let distro = self.ops.distro();
         let firewall = distro.firewall();
-        // Il nome viene dallo strumento, non da una costante: «ufw non trovato»
-        // detto su Fedora manda a cercare qualcosa che lì non esiste (osservato
-        // in campo). È la stessa classe di «esegui apt-get update» detto a chi
-        // ha dnf.
+        // the name comes from the tool, not a constant: naming the wrong one
+        // sends the reader looking for something their machine does not have.
         let nome = firewall.name();
         if !firewall.available() {
             warn!("{nome} non trovato: apertura firewall saltata (apri manualmente 80/443)");
@@ -74,7 +70,7 @@ impl Step for NginxFirewall {
         if !ctx.with_nginx || !self.ufw_usable() {
             return Ok(());
         }
-        // Delta = regole desiderate che NON sono già presenti.
+        // the delta is the wanted rules that are NOT already there.
         for rule in Self::desired_rules(ctx) {
             if !self.ops.distro().firewall().rule_exists(rule)? {
                 self.snap.delta.push(rule.to_string());
@@ -104,7 +100,7 @@ impl Step for NginxFirewall {
             info!("undo (dry-run): rimuoverei solo le regole del delta");
             return Ok(());
         }
-        // Rimuovi SOLO il delta: mai una regola preesistente del cliente.
+        // remove ONLY the delta: never a pre-existing rule of the customer's.
         for rule in &self.snap.delta {
             if let Err(e) = self.ops.distro().firewall().delete(rule) {
                 warn!(rule = %rule, error = %e, "undo: rimozione regola ufw fallita, proseguo (best-effort)");
@@ -117,10 +113,9 @@ impl Step for NginxFirewall {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Stesso ragionamento del delta apt: il delta ufw va **riletto**, non
-    /// ricalcolato. Dopo il run le regole desiderate esistono tutte, e un delta
-    /// ricalcolato porterebbe l'undo a chiudere anche una porta che il cliente
-    /// aveva aperto per conto suo.
+    /// the same reasoning as the package delta: it is **re-read**, not
+    /// recomputed. after the run every wanted rule exists, so a recomputed
+    /// delta would have the undo close a port the customer opened themselves.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;

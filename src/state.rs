@@ -1,50 +1,18 @@
-//! Pattern `PreState` e persistenza dello stato su disco.
+//! the `PreState` pattern and state persistence.
 //!
-//! Implementa l'invariante 4 di `CLAUDE.md`: `completed` + snapshot vanno
-//! scritti su `/var/lib/invok/state.json` (owned root, `0600`).
-//! Il percorso storico `/opt/odoo/.installer-state.json` resta **leggibile**
-//! (vedi [`resolve_state_path`]) ma non viene più scritto: il manifesto non può
-//! vivere dentro il perimetro che il rollback deve rimuovere, o l'ultimo undo
-//! trova la directory occupata proprio da lui (A-V3-2).
+//! implements invariant 4 of `CLAUDE.md`: `completed` plus snapshots go to
+//! `/var/lib/invok/state.json` (owned root, `0600`).
 //!
-//! # Il consumatore dello stato: il comando `rollback` (R4)
+//! three consumers read it back: `invok rollback`, a re-run deciding whether to
+//! resume ([`start_decision`]), and an uninstall long after the fact.
 //!
-//! Il file di stato viene **scritto** dopo ogni step riuscito ([`InstallState::save`],
-//! chiamata da [`crate::engine::Installer::execute_with_reporter`]),
-//! **riletto** da `invok rollback` ([`InstallState::load`], vedi
-//! [`crate::rollback`]) e **rimosso** a fine installazione riuscita
-//! ([`InstallState::clear`], chiamata da `main`) o a rollback completato.
+//! # why the state also carries the configuration
 //!
-//! Il rollback esiste quindi in due forme, con la stessa semantica:
-//! - **in-process** — [`crate::engine::Installer`] annulla gli step completati
-//!   nella *stessa* esecuzione quando uno step fallisce;
-//! - **da disco** — [`crate::rollback::rollback_from_state`] ricostruisce gli
-//!   step dai record persistiti e ne esegue gli `undo` in ordine inverso. È la
-//!   via per ripulire dopo un Ctrl-C, un `kill -9` o un power-loss, e per
-//!   disinstallare un'installazione riuscita.
-//!
-//! # Perché lo stato porta anche la configurazione
-//!
-//! Uno `StepRecord` dice *in che stato era* l'artefatto (il `PreState`), non
-//! *quale* artefatto fosse: `CreateDatabase` serializza `CreatedByUs`, ma il
-//! nome del database vive nel [`Context`]. Per il rollback in-process non è un
-//! problema (il `Context` è lì); per il rollback da disco lo sarebbe.
-//!
-//! Ricavare la configurazione una seconda volta dalla cascata CLI/`.env`/default
-//! **non è un'opzione sicura**: un utente che ha installato con
-//! `--db-name fatturazione` e lancia `invok rollback` senza flag
-//! ricadrebbe sul default `odoo` e il rollback droppererebbe un database che non
-//! ha mai creato — la violazione più diretta della protezione anti-drop. Perciò
-//! l'installazione persiste la propria configurazione ([`InstallConfig`])
-//! insieme ai record: il rollback usa **quella**, cioè l'identità reale degli
-//! artefatti creati.
-//!
-//! **Nessuna password è persistita**: l'undo non ne ha bisogno (drop di ruoli e
-//! database avviene via `psql` come utente `postgres`), e un segreto non scritto
-//! è un segreto che non può trapelare.
-//!
-//! Il path è configurabile (vedi [`crate::context::Context::state_path`]) così
-//! i test girano senza root e senza toccare il sistema.
+//! a [`StepRecord`] says *what state* an artifact was in, not *which* artifact
+//! it was. re-deriving the names from the CLI/`.env`/default cascade is not
+//! safe: after `--db-name fatturazione`, a bare `invok rollback` would fall
+//! back to `odoo` and drop a database it never created. **no password is
+//! persisted**: no undo needs one, and an unwritten secret cannot leak.
 
 use std::fs;
 use std::io::Write;
@@ -57,62 +25,41 @@ use crate::context::Context;
 use crate::distro::OsFamily;
 use crate::error::StepError;
 
-/// Directory del manifesto in produzione. Creata da [`InstallState::save`] e
-/// rimossa, se vuota, da [`InstallState::clear`].
+/// manifest directory in production, removed when empty by
+/// [`InstallState::clear`].
 pub const DEFAULT_STATE_DIR: &str = "/var/lib/invok";
 
-/// Percorso di default del file di stato in produzione (root, `0600`).
+/// default state file path in production (root, `0600`).
 ///
-/// **Fuori da `/opt/odoo`** (A-V3-2). Il manifesto è l'ultimo artefatto a
-/// morire: `clear` lo rimuove *dopo* che tutti gli undo sono girati, perché un
-/// rollback che non arriva in fondo deve poter essere ripetuto. Finché viveva
-/// dentro `/opt/odoo`, l'undo di `PrepareOptRoot` — che è l'**ultimo** a girare,
-/// essendo il primo step — trovava lì il manifesto, vedeva una directory non
-/// vuota e rinunciava a rimuoverla (mai `rm -rf`). Spostare lock e log non
-/// bastava: era questo il terzo residente, ed è il motivo per cui `/opt/odoo`
-/// sopravviveva comunque a ogni rollback.
+/// **outside `/opt/odoo`** (A-V3-2): the manifest is the last artifact to die,
+/// so inside that directory it kept it non-empty and `PrepareOptRoot`'s undo —
+/// the last to run — always gave up on it.
 pub const DEFAULT_STATE_PATH: &str = "/var/lib/invok/state.json";
 
-/// Percorso storico del manifesto, dentro `/opt/odoo` (fino alla 2.1.0).
-///
-/// Non si scrive più qui, ma si continua a **leggere**: un'istanza installata
-/// da una versione precedente ha il suo unico manifesto in questa posizione, e
-/// rendergliela invisibile significherebbe renderla non disinstallabile — cioè
-/// il danno che A-V3-1 descrive, causato dalla correzione di un altro finding.
-/// Vedi [`resolve_state_path`].
+/// historical manifest path, inside `/opt/odoo`, up to 2.1.0.
 pub const LEGACY_STATE_PATH: &str = "/opt/odoo/.installer-state.json";
 
-/// Percorso del manifesto quando il progetto si chiamava `odoo-installer`
-/// (dalla 2.2.0 alla 2.4.0, prima del rename in `invok`).
-///
-/// Stessa regola del precedente, e vale la pena dire perché il rename l'ha resa
-/// necessaria una seconda volta: le macchine dei clienti non si rinominano
-/// insieme al repository. Un'istanza installata dalla 2.4.0 ha il suo unico
-/// manifesto qui, e il manifesto è l'**unica** traccia di quali artefatti
-/// abbiamo creato noi e quali abbiamo trovato già presenti. Smettere di
-/// leggerlo non lascerebbe un'istanza "da rimuovere a mano": lascerebbe
-/// un'istanza che nessuno sa più come rimuovere senza indovinare — e indovinare
-/// è esattamente ciò che l'anti-drop vieta.
+/// manifest path from 2.2.0 to 2.4.0, before the rename to `invok`.
 pub const RENAMED_STATE_PATH: &str = "/var/lib/odoo-installer/state.json";
 
-/// I percorsi storici, dal più recente al più vecchio.
+/// the historical paths, newest first: still **read**, never written.
 ///
-/// L'ordine conta: se per qualche ragione ne esistessero due, si consuma il più
-/// recente. Un elenco e non due costanti sciolte, perché il prossimo rename —
-/// e questo progetto ne ha già fatti due — deve aggiungere una riga, non
-/// cambiare una firma.
+/// customer machines are not renamed along with the repository, and the
+/// manifest is the only record of what we created. dropping a path would leave
+/// an instance nobody can uninstall without guessing. the next rename adds a
+/// line here.
 pub const LEGACY_STATE_PATHS: &[&str] = &[RENAMED_STATE_PATH, LEGACY_STATE_PATH];
 
-/// Il file di stato è **affidabile** come sorgente di un'operazione distruttiva?
+/// is the state file a trustworthy source for a destructive operation?
 ///
-/// Il manifesto guida dei `rm -rf`, dei `dropdb` e dei `userdel`. Prima di
-/// eseguirli va stabilito che quel file non sia sotto il controllo di qualcun
-/// altro (A-V3-8): dev'essere di **root**, non scrivibile da gruppo o altri, e
-/// deve stare in una directory a sua volta non scrivibile da terzi — altrimenti
-/// chiunque potrebbe sostituirlo e scegliere lui cosa faremo sparire.
+/// it drives `rm -rf`, `dropdb` and `userdel`, so it must belong to root, not
+/// be group- or world-writable, and sit in a directory third parties cannot
+/// write (A-V3-8). not applied to `--dry-run`, which only prints.
 ///
-/// Non si applica al `--dry-run`, che stampa soltanto: lì poter ispezionare un
-/// manifesto copiato altrove è comodo e non fa danni.
+/// # errors
+///
+/// [`StepError::Precondition`] naming what disqualified the file, or
+/// [`StepError::Io`] when it cannot be stat'd.
 pub fn ensure_trustworthy(path: &Path) -> Result<(), StepError> {
     use std::os::unix::fs::MetadataExt;
 
@@ -133,14 +80,11 @@ pub fn ensure_trustworthy(path: &Path) -> Result<(), StepError> {
     })
 }
 
-/// La regola di [`ensure_trustworthy`], sui soli numeri.
+/// [`ensure_trustworthy`]'s rule, over the numbers alone.
 ///
-/// Separata perché il caso **positivo** — file di root, `0600`, in una directory
-/// non scrivibile da terzi — non è riproducibile in un test che gira senza
-/// privilegi: un file creato in una tempdir appartiene all'utente che esegue i
-/// test. Con i permessi come parametri la regola si verifica per intero, in
-/// entrambe le direzioni. Stesso motivo per cui esistono `checks::ensure_root_euid`
-/// e `checks::ensure_sudo_user`.
+/// split out because the positive case — a root-owned `0600` file — cannot be
+/// reproduced by an unprivileged test. same reason as
+/// `checks::ensure_root_euid`.
 pub fn trust_verdict(uid: u32, mode: u32, parent_mode: Option<u32>) -> Result<(), String> {
     if uid != 0 {
         return Err(format!("non appartiene a root (uid {uid})"));
@@ -151,9 +95,8 @@ pub fn trust_verdict(uid: u32, mode: u32, parent_mode: Option<u32>) -> Result<()
             mode & 0o777
         ));
     }
-    // La directory conta quanto il file: in una directory scrivibile da terzi il
-    // file si sostituisce senza bisogno di poterlo modificare. Lo sticky bit —
-    // `/tmp` — toglie proprio quella possibilità, quindi non è un problema.
+    // a world-writable directory lets the file be replaced without being
+    // writable itself; the sticky bit removes that, so `/tmp` is fine.
     if let Some(dir_mode) = parent_mode {
         let sticky = dir_mode & 0o1000 != 0;
         if dir_mode & 0o022 != 0 && !sticky {
@@ -167,27 +110,17 @@ pub fn trust_verdict(uid: u32, mode: u32, parent_mode: Option<u32>) -> Result<()
     Ok(())
 }
 
-/// Sceglie il manifesto da consumare quando l'utente non passa `--state`.
-///
-/// Ordine: il percorso corrente se esiste, altrimenti quello storico se esiste,
-/// altrimenti di nuovo il corrente (così il messaggio d'errore nomina il posto
-/// giusto in cui l'utente dovrebbe cercarlo). Non tenta alcuna migrazione: un
-/// rollback non è il momento per spostare file, e il manifesto storico verrà
-/// comunque rimosso dal `clear` a pulizia completata.
+/// picks the manifest to consume when the user passes no `--state`.
 pub fn resolve_state_path() -> PathBuf {
     let legacy: Vec<&Path> = LEGACY_STATE_PATHS.iter().map(Path::new).collect();
     pick_state_path(Path::new(DEFAULT_STATE_PATH), &legacy)
 }
 
-/// La regola di [`resolve_state_path`], con i percorsi come parametri.
+/// [`resolve_state_path`]'s rule, with the paths as parameters so it can be
+/// checked against fixtures instead of the test machine's filesystem.
 ///
-/// Esiste separata per la stessa ragione per cui `Context::state_path` è
-/// configurabile: la scelta va verificata con percorsi di prova, non contro il
-/// filesystem della macchina che esegue i test.
-///
-/// `legacy` è un elenco, non un percorso singolo: i posti storici sono due dal
-/// rename in `invok` (`/var/lib/odoo-installer/`, e prima ancora `/opt/odoo`), e
-/// saranno tre al prossimo. Si scorrono in ordine e vince il primo che esiste.
+/// current path if it exists, then each `legacy` one, then the current path
+/// again so an error names where to look. no migration is attempted.
 pub fn pick_state_path(current: &Path, legacy: &[&Path]) -> PathBuf {
     if current.exists() {
         return current.to_path_buf();
@@ -200,50 +133,39 @@ pub fn pick_state_path(current: &Path, legacy: &[&Path]) -> PathBuf {
     current.to_path_buf()
 }
 
-/// Modalità del file di stato: leggibile/scrivibile solo dal proprietario.
+/// readable and writable by the owner only.
 const STATE_FILE_MODE: u32 = 0o600;
 
-/// Stato preesistente di un artefatto rispetto all'installer.
+/// an artifact's state before the installer touched it.
 ///
-/// È la sola fonte di verità per l'undo (invariante 1): `undo` agisce **solo**
-/// se lo step è `completed` E `PreState == CreatedByUs`.
+/// the only source of truth for the undo (invariant 1): `undo` acts **only**
+/// when the step is completed and `PreState == CreatedByUs`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum PreState {
-    /// `run()` non ancora eseguito → nessun undo.
+    /// `run()` has not executed yet → no undo.
     #[default]
     Untracked,
-    /// L'artefatto esisteva già prima di noi → undo NO-OP (non è nostro da
-    /// distruggere).
+    /// it was there before us → the undo is a no-op, not ours to destroy.
     Preexisting,
-    /// Creato da noi → undo rimuove.
+    /// we created it → the undo removes it.
     CreatedByUs,
 }
 
-/// Record di uno step completato con successo, persistito su disco.
+/// a successfully completed step, persisted to disk.
 ///
-/// Lo `snapshot` è un valore JSON opaco al motore: ogni step serializza qui il
-/// proprio `PreState` (o una struttura più ricca). È l'informazione che
-/// *servirà* a ricostruire l'undo in un'esecuzione successiva — oggi viene
-/// scritta ma non ancora riletta (vedi la nota nel doc del modulo).
+/// `snapshot` is opaque JSON: each step serialises its own `PreState`, and
+/// [`crate::step::Step::rehydrate`] reads it back to rebuild the undo later.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct StepRecord {
     pub name: String,
     pub snapshot: serde_json::Value,
 }
 
-/// Configurazione dell'installazione persistita insieme ai record.
+/// the installation's configuration, persisted alongside the records.
 ///
-/// Contiene **l'identità degli artefatti** che gli `undo` devono poter
-/// nominare: quale utente, quale database, quale directory. Senza, il rollback
-/// da disco non saprebbe *cosa* rimuovere (vedi il doc del modulo).
-///
-/// # Cosa NON contiene, di proposito
-///
-/// Nessuna password (`admin_passwd`, `db_password`). Nessun `undo` ne ha
-/// bisogno: il drop del ruolo e del database passa da `psql`/`dropdb` eseguiti
-/// come utente `postgres`, non dall'autenticazione del ruolo Odoo. Persistere
-/// un segreto che non serve sarebbe superficie d'attacco gratuita, per quanto il
-/// file sia `0600` root.
+/// holds the **identity of the artifacts** the undos must name: which user,
+/// which database, which directory. deliberately holds **no password**: no undo
+/// needs one, since roles and databases are dropped as `postgres`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InstallConfig {
     pub odoo_version: String,
@@ -254,58 +176,36 @@ pub struct InstallConfig {
     pub odoo_home: PathBuf,
     pub install_dir: PathBuf,
     pub port: u16,
-    /// `None` = Odoo logga su journal/stdout (nessuna log dir creata).
+    /// `None` means Odoo logs to journal/stdout, so no log dir was created.
     pub odoo_logfile: Option<PathBuf>,
     pub with_nginx: bool,
-    /// Utente che ha lanciato `sudo`: possiede control-script e `.bashrc`.
+    /// user who ran `sudo`; owns the control script and the `.bashrc`.
     pub sudo_user: Option<String>,
-    /// La famiglia della distribuzione su cui l'installazione è avvenuta.
+    /// distribution family the installation happened on, hence which commands
+    /// must remove those artifacts.
     ///
-    /// # Perché è qui e non si rileva al momento del rollback
-    ///
-    /// Perché è **la stessa domanda a cui risponde tutto il resto di questa
-    /// struct**: uno `StepRecord` dice *in che stato* era un artefatto, non quale
-    /// fosse; qui si registra *quale*. La famiglia dice con quali comandi quegli
-    /// artefatti sono stati creati, e quindi con quali vanno rimossi. Rilevarla
-    /// dal sistema al momento del rollback sarebbe una deduzione a posteriori, ed
-    /// è così che in questo progetto sono nati A-V3-1 e A-R8-1.
-    ///
-    /// `serde(default)` per retrocompatibilità: un manifesto scritto prima che
-    /// questo campo esistesse si legge come `Debian`, che è la verità — ogni
-    /// installazione precedente è apt. Stessa cura per cui `config` è `Option`
-    /// dalla R4 e il percorso storico resta leggibile dalla R7.
+    /// stored rather than detected at rollback time: an after-the-fact
+    /// inference is how A-V3-1 and A-R8-1 were born. `serde(default)` reads an
+    /// older manifest as `Debian`, which is the truth — every earlier
+    /// installation was apt.
     #[serde(default)]
     pub os_family: OsFamily,
 
-    /// La versione dell'installer che ha **scritto** questo manifesto.
+    /// installer version that **wrote** this manifest.
     ///
-    /// Serve a rendere azionabile un messaggio che oggi esiste già ma non sa
-    /// spiegarsi: quando `rollback` incontra uno step che questo binario non
-    /// conosce, avvisa e prosegue — corretto, ma chi legge non sa *perché*. Con
-    /// la versione registrata la diagnosi diventa «il manifesto l'ha scritto la
-    /// 2.3.0, questo binario è la 2.1.0: aggiorna l'installer prima di
-    /// annullare», che è azionabile (`A-V3-16`).
-    ///
-    /// `Option` + `serde(default)` per retrocompatibilità, come `config` dalla R4
-    /// e `os_family` qui sopra: un manifesto scritto prima che questo campo
-    /// esistesse resta leggibile e vale `None` — «non lo so», che è la verità.
-    /// Renderlo obbligatorio significherebbe rendere non disinstallabile
-    /// un'istanza già in campo, cioè lo stesso danno di A-V3-1 per un'altra
-    /// strada.
+    /// makes the "unknown step" warning actionable: "written by 2.3.0, this
+    /// binary is 2.1.0 — upgrade before undoing" (A-V3-16). `Option` +
+    /// `serde(default)` keeps older manifests readable as `None`; making it
+    /// mandatory would strand an already-deployed instance.
     #[serde(default)]
     pub installer_version: Option<String>,
 }
 
-/// La nota da mostrare quando il manifesto è stato scritto da un installer
-/// **diverso** da quello che sta girando. Pura.
+/// the note to show when a different installer version wrote the manifest.
 ///
-/// `None` quando coincidono — il caso normale — e anche quando il manifesto non
-/// porta la versione: da un'informazione assente non si conclude niente, e un
-/// manifesto pre-`A-V3-16` è semplicemente vecchio, non sospetto.
-///
-/// Non è un rifiuto: il rollback resta best-effort e deve andare avanti anche
-/// così. È un'informazione per chi legge il report, ed è esattamente ciò che
-/// mancava al warning sugli step sconosciuti.
+/// `None` when they match, and also when the manifest carries no version:
+/// nothing is concluded from absent information. not a refusal — the rollback
+/// stays best-effort — but the context the unknown-step warning was missing.
 pub fn version_mismatch_note(manifesto: Option<&str>, in_esecuzione: &str) -> Option<String> {
     let scritto_da = manifesto?;
     if scritto_da == in_esecuzione {
@@ -319,7 +219,7 @@ pub fn version_mismatch_note(manifesto: Option<&str>, in_esecuzione: &str) -> Op
 }
 
 impl InstallConfig {
-    /// Estrae dal [`Context`] i soli campi che servono al rollback da disco.
+    /// extracts from the [`Context`] the fields the rollback from disk needs.
     pub fn from_context(ctx: &Context) -> Self {
         InstallConfig {
             installer_version: Some(crate::INSTALLER_VERSION.to_string()),
@@ -338,28 +238,21 @@ impl InstallConfig {
         }
     }
 
-    /// Le due configurazioni nominano gli **stessi artefatti**?
+    /// do the two configurations name the **same artifacts**?
     ///
-    /// Serve al resume (A-V3-1): riprendere un'installazione interrotta con
-    /// parametri diversi produrrebbe un manifesto che descrive un'istanza mai
-    /// esistita — metà artefatti con un nome, metà con un altro — e gli undo
-    /// punterebbero in parte altrove. Nel caso del database è la violazione
-    /// diretta dell'anti-drop: si riprenderebbe con `--db-name` diverso e il
-    /// rollback droppererebbe un database che non abbiamo creato.
-    ///
-    /// Si confrontano solo i campi che **identificano** un artefatto. Restano
-    /// fuori, di proposito: `port` e `odoo_logfile` (nessun undo li usa per
-    /// nominare qualcosa — il logfile è coperto dalla directory, che è un
-    /// artefatto proprio di `SetupLogDir`), `with_nginx` (aggiunge step, non
-    /// rinomina i precedenti) e `sudo_user` (chi riprende può legittimamente
-    /// essere un altro amministratore).
+    /// gates the resume (A-V3-1): resuming with a different `--db-name` would
+    /// build a manifest straddling two instances, and the rollback would drop a
+    /// database we never created.
     pub fn same_identity(&self, other: &Self) -> bool {
         self.identity() == other.identity()
     }
 
-    /// I campi confrontati da [`same_identity`](InstallConfig::same_identity),
-    /// etichettati, per poter **dire all'utente cosa** non coincide invece di
-    /// un generico "parametri diversi".
+    /// the fields [`InstallConfig::same_identity`] compares, labelled so the
+    /// user can be told **which** one differs.
+    ///
+    /// left out on purpose: `port` and `odoo_logfile` (no undo names anything
+    /// by them), `with_nginx` (adds steps, renames nothing) and `sudo_user` (a
+    /// different administrator may legitimately resume).
     pub fn identity(&self) -> Vec<(&'static str, String)> {
         vec![
             ("versione Odoo", self.odoo_version.clone()),
@@ -371,39 +264,23 @@ impl InstallConfig {
                 "directory di installazione",
                 self.install_dir.display().to_string(),
             ),
-            // La famiglia non *nomina* un artefatto, ma cambia il **significato**
-            // dei nomi registrati: un delta di trenta pacchetti scritto da apt
-            // non è riprendibile da dnf, e gli undo userebbero comandi che non
-            // reclamano nulla. Un mismatch qui è grave quanto un `--db-name`
-            // diverso, e stando in `identity()` produce il messaggio che dice
-            // **quale** campo non coincide invece di un rifiuto generico.
-            //
-            // Non rompe la retrocompatibilità: su un manifesto pre-2.3 il default
-            // `Debian` coincide con il `Debian` corrente e il confronto passa
-            // come prima.
+            // the family does not name an artifact but changes what the
+            // recorded names mean: an apt delta is not resumable by dnf.
             ("famiglia OS", self.os_family.to_string()),
         ]
     }
 
-    /// Il manifesto descrive un'installazione **di questo installer**?
+    /// does the manifest describe an installation made by **this** installer?
     ///
-    /// # Perché serve, e perché sta qui (A-V3-8)
+    /// A-V3-8: undos delete trees rooted at paths from the state file, and the
+    /// old guard compared two values that both came from that same file. this
+    /// anchors them to `ODOO_HOME`, a constant no manifest can override, which
+    /// covers every undo using `odoo_home` at once.
     ///
-    /// Gli `undo` cancellano alberi a partire da percorsi che arrivano dal file
-    /// di stato, e `--state <FILE>` accetta qualunque percorso. La rete che
-    /// c'era — `steps::remove_created_root`, che pretende `target` sotto `home`
-    /// — non proteggeva da nulla, perché **`home` e `target` vengono entrambi
-    /// dallo stesso file**: con `odoo_home: "/"` e `created_root: "/etc"` la
-    /// guardia passava senza obiezioni.
+    /// # errors
     ///
-    /// La correzione non è irrigidire quella guardia ma **ancorarla a un valore
-    /// che non arriva dal file**: `ODOO_HOME` è dichiarata costante
-    /// architetturale e non sovrascrivibile (`config.rs`), quindi un manifesto
-    /// che ne dichiara un'altra non descrive un'installazione fatta da questo
-    /// programma. Validare qui — al confine, quando i dati non fidati entrano —
-    /// copre in un colpo solo *tutti* gli undo che usano `odoo_home`, non solo
-    /// quell'unica funzione: la rimozione della home, il `chown` di ripristino,
-    /// il filestore e la cache.
+    /// [`StepError::Precondition`] when the declared home is not `ODOO_HOME`,
+    /// or the install dir is not strictly below it.
     pub fn validate_perimeter(&self) -> Result<(), StepError> {
         let atteso = Path::new(crate::config::ODOO_HOME);
         if self.odoo_home != atteso {
@@ -428,24 +305,14 @@ impl InstallConfig {
         Ok(())
     }
 
-    /// Ricostruisce il [`Context`] per il rollback da disco.
+    /// rebuilds the [`Context`] for a rollback from disk.
     ///
-    /// I campi non persistiti restano ai default: le password sono vuote
-    /// (nessun undo le usa) e `os_info` è `None` (serve solo a `run`).
+    /// unpersisted fields keep their defaults: passwords are empty and
+    /// `os_info` is `None`, since only `run` needs it.
     ///
-    /// # `os_family` va impostata ESPLICITAMENTE, e non è un dettaglio
-    ///
-    /// È l'unico campo con un `Default` che gli `undo` **leggono davvero**.
-    /// Lasciarlo cadere nel `..Default::default()` qui sotto lo farebbe valere
-    /// `Debian` per ogni rollback — anche per un'installazione Fedora — e il
-    /// difetto sarebbe silenzioso: nessun test che non guardi *questo* campo se
-    /// ne accorgerebbe, e in campo si vedrebbe solo un `apt-get` che fallisce su
-    /// una macchina senza apt, con i pacchetti lasciati installati.
-    ///
-    /// È lo stesso difetto di forma che ha prodotto A-V3-1 e A-R8-1 — un dato
-    /// che c'era e non è stato letto — nel punto esatto in cui questo lavoro
-    /// esiste per impedirlo. C'è un test dedicato, ed è scritto per morire se
-    /// questa riga sparisce.
+    /// `os_family` is set **explicitly**: it is the one defaulted field the
+    /// undos actually read, and letting it fall through would make every
+    /// rollback act as `Debian`, silently, on Fedora too.
     pub fn to_context(
         &self,
         dry_run: bool,
@@ -464,7 +331,7 @@ impl InstallConfig {
             odoo_logfile: self.odoo_logfile.clone(),
             with_nginx: self.with_nginx,
             sudo_user: self.sudo_user.clone(),
-            // Vedi il doc sopra: esplicita, mai dal `..Default::default()`.
+            // explicit, never from `..Default::default()`: see the doc above.
             os_family: self.os_family,
             dry_run,
             aggressive_rollback,
@@ -474,49 +341,36 @@ impl InstallConfig {
     }
 }
 
-/// Esito della decisione presa all'avvio di un'installazione (A-V3-1).
-///
-/// È una **politica pura**, come `rollback::confirmation_gate`: `main` la
-/// applica e ne formatta i messaggi, ma la regola sta qui e si verifica senza
-/// filesystem, senza root e senza terminale. Non è un vezzo — il difetto che
-/// questa decisione chiude viveva in `main`, fra pezzi che i test coprivano
-/// singolarmente, ed è precisamente il tipo di codice che questo progetto ha
-/// imparato a non lasciare fuori dalla libreria.
+/// what a starting installation decided to do (A-V3-1).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum StartDecision {
-    /// Nessun manifesto utile: prima installazione.
+    /// no usable manifest: first installation.
     Fresh,
-    /// Manifesto parziale e compatibile: si riprende.
+    /// partial and compatible manifest: resume.
     Resume,
-    /// `--force` su un manifesto esistente: si archivia e si riparte da capo.
+    /// `--force` over an existing manifest: archive it and start over.
     Replace,
-    /// Manifesto di un'installazione **conclusa**: si rifiuta.
+    /// manifest of a **finished** installation: refuse.
     RefuseFinished,
-    /// Manifesto parziale che nomina artefatti diversi da quelli richiesti.
-    /// Porta le differenze (campo, valore registrato, valore richiesto).
+    /// partial manifest naming other artifacts, as (field, recorded,
+    /// requested).
     RefuseIdentityMismatch(Vec<(&'static str, String, String)>),
-    /// Manifesto parziale senza configurazione (formato pre-R4): non si può
-    /// stabilire se descriva gli stessi artefatti, quindi non si riprende.
+    /// partial manifest with no configuration (pre-R4): identity cannot be
+    /// established, so we do not resume.
     RefuseUnknownIdentity,
 }
 
-/// La regola di avvio: installare, riprendere o rifiutare.
+/// the start rule: install, resume or refuse.
 ///
-/// # Perché un manifesto non si sovrascrive mai in silenzio
+/// A-V3-1: before R8 the install path never opened the manifest, so a second
+/// run truncated it into one where nothing is ours — and the rollback then
+/// declared "nothing left" and cleared it, stranding the instance. the partial
+/// case resumes rather than refuses, because "run it again and carry on" is a
+/// supported flow, but only when the artifact identity matches.
 ///
-/// Prima di R8 il percorso di installazione non apriva mai il manifesto:
-/// `Installer::new()` e, al primo step, `save` che tronca. Su un'installazione
-/// già conclusa il risultato era un manifesto in cui **niente è nostro** — gli
-/// snapshot vedono correttamente ogni artefatto già presente — e da lì il
-/// rollback eseguiva ventiquattro undo NO-OP, dichiarava «nessun residuo» e
-/// cancellava lo stato: Odoo installato per sempre, senza più traccia di cosa
-/// rimuovere.
-///
-/// Il caso **parziale** è la stessa perdita in forma più insidiosa, perché
-/// colpisce il flusso che il progetto dichiara supportato («rilancia e
-/// prosegui»): gli step del primo giro tornerebbero `Preexisting` e il database
-/// creato allora finirebbe protetto dall'anti-drop. Per questo si riprende
-/// invece di rifiutare — ma solo a parità di identità degli artefatti.
+/// a **pure policy**, like `rollback::confirmation_gate`: `main` applies it and
+/// formats the messages. the defect it closes used to live in `main`, where no
+/// test reached it.
 pub fn start_decision(
     state: &InstallState,
     requested: &InstallConfig,
@@ -551,42 +405,35 @@ pub fn start_decision(
     }
 }
 
-/// Stato completo dell'installazione persistito su disco.
+/// the installation state persisted to disk.
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct InstallState {
-    /// Step completati, in ordine di esecuzione. Il rollback li percorre in
-    /// ordine inverso (invariante 2).
+    /// completed steps in execution order; the rollback walks them backwards.
     pub completed: Vec<StepRecord>,
-    /// Configurazione dell'installazione in corso, necessaria al rollback da
-    /// disco per sapere *quali* artefatti annullare.
+    /// configuration of this installation, so the rollback from disk knows
+    /// *which* artifacts to undo.
     ///
-    /// `Option` + `#[serde(default)]` per retrocompatibilità: un file di stato
-    /// scritto da una versione precedente a R4 non ha questo campo e resta
-    /// leggibile. Il comando `rollback` lo rileva e si ferma con un messaggio
-    /// esplicito invece di indovinare la configurazione — indovinare significa
-    /// rischiare di droppare il database sbagliato.
+    /// `Option` + `serde(default)`: a pre-R4 file stays readable, and
+    /// `rollback` stops with an explicit message rather than guessing names.
     #[serde(default)]
     pub config: Option<InstallConfig>,
-    /// `true` quando l'installazione è arrivata in fondo.
+    /// set once the installation reached the end.
     ///
-    /// Distingue le due cose che il file di stato può descrivere, e che
-    /// richiedono messaggi (non comportamenti) diversi: **un'installazione
-    /// funzionante da disinstallare** oppure **i residui di una run
-    /// interrotta**. Vedi [`crate::rollback::install_status`].
-    ///
-    /// Dedurlo dal numero di step non basta: la sequenza canonica cambia fra
-    /// versioni, e uno stato completo scritto da una versione con meno step
-    /// verrebbe riletto come "interrotto". Il flag lo dice e basta.
+    /// separates "a working installation to uninstall" from "the leftovers of
+    /// an interrupted run", which need different messages. inferring it from
+    /// the step count would misread a complete state written by a version with
+    /// fewer steps.
     #[serde(default)]
     pub finished: bool,
 }
 
 impl InstallState {
-    /// Carica lo stato dal file. Un file assente equivale a stato vuoto: è la
-    /// condizione normale di una prima esecuzione, non un errore.
+    /// loads the state from `path`.
     ///
-    /// È il punto d'ingresso del rollback da disco
-    /// ([`crate::rollback::rollback_from_state`]).
+    /// # errors
+    ///
+    /// [`StepError::Io`] when the file exists but cannot be read or parsed. a
+    /// missing file yields an empty state: the normal first-run condition.
     pub fn load(path: &Path) -> Result<Self, StepError> {
         match fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes).map_err(|e| {
@@ -600,9 +447,12 @@ impl InstallState {
         }
     }
 
-    /// Scrive lo stato su disco creando il file con permessi `0600` fin dalla
-    /// creazione (nessuna finestra a permessi larghi). Se il file esisteva già,
-    /// i permessi vengono comunque forzati a `0600`.
+    /// writes the state, creating the file `0600` from creation so there is no
+    /// window at wider permissions.
+    ///
+    /// # errors
+    ///
+    /// [`StepError::Io`] on any filesystem or serialisation failure.
     pub fn save(&self, path: &Path) -> Result<(), StepError> {
         if let Some(parent) = path.parent() {
             if !parent.as_os_str().is_empty() {
@@ -617,7 +467,7 @@ impl InstallState {
             )
         })?;
 
-        // `mode()` applica i permessi solo alla *creazione* del file.
+        // `mode()` applies at creation only.
         let mut file = fs::OpenOptions::new()
             .write(true)
             .create(true)
@@ -627,43 +477,26 @@ impl InstallState {
             .map_err(|e| StepError::io(path, e))?;
         file.write_all(&json).map_err(|e| StepError::io(path, e))?;
 
-        // Se il file preesisteva con permessi diversi, `mode()` non li tocca:
-        // forziamo `0600` esplicitamente.
+        // an already-existing file keeps its own permissions, so force them.
         fs::set_permissions(path, fs::Permissions::from_mode(STATE_FILE_MODE))
             .map_err(|e| StepError::io(path, e))?;
 
         Ok(())
     }
 
-    /// Rimuove il file di stato. Idempotente: un file già assente non è errore.
+    /// removes the state file. idempotent: an absent file is not an error.
     ///
-    /// Chiamata **solo** dal comando `rollback` a pulizia completata: lì lo
-    /// stato ha davvero esaurito il suo scopo, perché ciò che descriveva non
-    /// esiste più.
+    /// called only after a rollback has cleaned everything up. NOT on a
+    /// successful installation (A-R5-1): there the complete state is the
+    /// uninstall manifest, and clearing it left `invok rollback` answering
+    /// "nothing to undo" on a working instance.
     ///
-    /// # Perché NON a fine installazione riuscita (A-R5-1)
+    /// also removes [`DEFAULT_STATE_DIR`] when empty, restricted to that
+    /// constant so a `--state` elsewhere never removes somebody else's.
     ///
-    /// Fino a R4 `main` chiamava `clear` a successo avvenuto, per non lasciare
-    /// un file "stantìo". Il ragionamento veniva da quando l'unico consumatore
-    /// ipotizzato era un *resume*, per il quale uno stato completo sarebbe
-    /// stato effettivamente spazzatura. Ma il consumatore che è stato
-    /// implementato è il *rollback*, e per lui uno stato completo non è
-    /// spazzatura: è il **manifesto di disinstallazione**, l'unica traccia di
-    /// quali artefatti quell'installazione ha creato e quali ha trovato già lì.
-    /// Cancellandolo si rendeva impossibile proprio il caso d'uso principale del
-    /// comando — `invok rollback` su un'istanza funzionante rispondeva
-    /// "nessuna installazione da annullare".
+    /// # errors
     ///
-    /// Ora a fine successo lo stato viene **marcato** ([`InstallState::finished`])
-    /// e conservato.
-    /// # Perché rimuove anche la directory
-    ///
-    /// `save` crea `/var/lib/invok` per ospitare il manifesto: è un
-    /// artefatto nostro, e lasciarne il guscio vuoto dopo una pulizia riuscita
-    /// sarebbe lo stesso residuo che A-V3-2 rimprovera a `/opt/odoo`, solo più
-    /// piccolo. La rimozione è ristretta alla **costante** [`DEFAULT_STATE_DIR`]
-    /// e alla sola directory vuota: un `--state` che punti altrove non fa
-    /// sparire la directory di qualcun altro.
+    /// [`StepError::Io`] when the file exists but cannot be removed.
     pub fn clear(path: &Path) -> Result<(), StepError> {
         match fs::remove_file(path) {
             Ok(()) => {}
@@ -672,71 +505,48 @@ impl InstallState {
         }
 
         if path.parent() == Some(Path::new(DEFAULT_STATE_DIR)) {
-            // Best-effort e mai forzata: `remove_dir` fallisce da sé se dentro
-            // c'è rimasto qualcosa, ed è il comportamento voluto.
+            // never forced: `remove_dir` fails by itself if anything is left.
             let _ = fs::remove_dir(DEFAULT_STATE_DIR);
         }
 
         Ok(())
     }
 
-    /// Aggiunge un record di step completato allo stato in memoria.
+    /// appends a completed step to the in-memory state.
     pub fn record(&mut self, record: StepRecord) {
         self.completed.push(record);
     }
 
-    /// Registra la configurazione dell'installazione (una sola volta, prima del
-    /// primo step): è ciò che permette al rollback da disco di sapere *quali*
-    /// artefatti annullare.
+    /// records the installation's configuration, once, before the first step.
     pub fn set_config(&mut self, config: InstallConfig) {
         self.config = Some(config);
     }
 
-    /// Dimentica uno step: il suo artefatto non esiste più.
+    /// forgets a step: its artifact no longer exists.
     ///
-    /// Chiamata dal rollback in-process dopo un `undo` **riuscito** (A-R8-1). Il
-    /// manifesto descrive *cosa c'è ancora sul sistema*, non *cosa è stato fatto
-    /// a un certo punto*: se continuasse a elencare uno step annullato, un
-    /// rilancio lo salterebbe credendolo già fatto — e l'installazione
-    /// proseguirebbe su artefatti che non esistono.
-    ///
-    /// Un `undo` **fallito** non chiama questa funzione, di proposito: lì
-    /// l'artefatto è (forse) ancora lì, e il record è l'unica traccia del
-    /// residuo che `invok rollback` potrà ritentare.
+    /// A-R8-1: the manifest describes what is *still* on the system. a record
+    /// left behind would make a re-run skip that step and carry on over
+    /// artifacts that no longer exist. a **failed** undo keeps its record — it
+    /// is the only trace of the leftover to retry.
     pub fn forget(&mut self, name: &str) {
         self.completed.retain(|r| r.name != name);
     }
 
-    /// Il record di uno step già completato, se c'è. È il punto d'appoggio del
-    /// resume (A-V3-1): il motore lo usa per sapere che quello step **è già
-    /// stato eseguito**, e ne reidrata lo snapshot invece di rifarlo.
+    /// the record of an already-completed step, if any.
     ///
-    /// La ricerca è per **nome**, non per posizione: la sequenza canonica può
-    /// cambiare fra versioni dell'installer, e un manifesto scritto da una
-    /// versione con meno step non deve essere riletto per indice — è lo stesso
-    /// motivo per cui esiste il flag `finished`.
+    /// looked up by **name**, not by position: the canonical sequence changes
+    /// between versions, so an older manifest must not be read by index.
     pub fn record_for(&self, name: &str) -> Option<&StepRecord> {
         self.completed.iter().find(|r| r.name == name)
     }
 
-    /// La porta HTTP è occupata da un servizio **di questa installazione**?
+    /// is the HTTP port held by a service of **this** installation?
     ///
-    /// Vero quando il manifesto registra `setup-systemd` come completato: da quel
-    /// momento il servizio Odoo è installato e attivo, quindi è lui a tenere la
-    /// porta.
-    ///
-    /// Serve al **resume** (A-R9-1): il controllo di preflight sulla porta esiste
-    /// per intercettare un conflitto con *qualcun altro*. In un resume, se il
-    /// primo giro era arrivato oltre `setup-systemd`, quel qualcun altro siamo
-    /// noi — e rifiutare l'esecuzione renderebbe irriprendibile proprio
-    /// l'installazione che stiamo riprendendo. Se invece `setup-systemd` non era
-    /// passato, la porta è di un terzo e il conflitto è reale: il controllo va
-    /// fatto.
-    ///
-    /// Si legge dal manifesto e non si deduce dal sistema, per la stessa ragione
-    /// per cui il rollback rilegge i `PreState` invece di rifare gli snapshot:
-    /// "chi tiene la porta" non è osservabile, "chi l'ha aperta" sì — ed è
-    /// scritto.
+    /// true once the manifest records `setup-systemd`. the resume path uses it
+    /// to skip the port check (A-R9-1): otherwise the installation would be
+    /// rejected by the service it had just installed. read from the manifest,
+    /// not inferred — "who holds the port" is not observable, "who opened it"
+    /// is written down.
     pub fn owns_the_http_port(&self) -> bool {
         self.record_for("setup-systemd").is_some()
     }

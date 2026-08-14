@@ -1,4 +1,4 @@
-//! Test di [`CreateOdooUser`] (Fase 3): logica di decisione via mock, senza root.
+//! [`CreateOdooUser`]: the decision logic through a mock, without root.
 
 mod common;
 
@@ -27,7 +27,7 @@ fn persisted(step: &CreateOdooUser) -> CreateUserSnapshot {
 
 #[test]
 fn created_by_us_runs_useradd_and_undo_userdel_without_r() {
-    // Utente assente; home inesistente (per isolare la parte useradd/userdel).
+    // no user and no home, to isolate the create/delete part.
     let cfg = MockConfig {
         user_exists: false,
         path_exists: false,
@@ -45,7 +45,7 @@ fn created_by_us_runs_useradd_and_undo_userdel_without_r() {
 
     let ops = ops_of(&log);
 
-    // run: useradd con gli argomenti attesi.
+    // run: `useradd` with the expected arguments.
     let created = ops.iter().find_map(|op| match op {
         Op::CreateUser(spec) => Some(spec),
         _ => None,
@@ -56,7 +56,7 @@ fn created_by_us_runs_useradd_and_undo_userdel_without_r() {
     assert!(spec.system && spec.create_home && spec.user_group);
     assert_eq!(spec.shell, "/bin/false");
 
-    // run: chown esplicito odoo:odoo + chmod 0750 sulla home.
+    // run: an explicit chown and chmod on the home.
     assert!(ops.iter().any(
         |op| matches!(op, Op::ChownNamed { owner, group, .. } if owner == "odoo" && group == "odoo")
     ));
@@ -64,20 +64,20 @@ fn created_by_us_runs_useradd_and_undo_userdel_without_r() {
         .iter()
         .any(|op| matches!(op, Op::Chmod { mode, .. } if *mode == 0o750)));
 
-    // undo: userdel + groupdel, MAI con la home (nessun path/`-r`).
+    // undo: user and group removal, NEVER the home.
     assert!(ops.contains(&Op::DeleteUser("odoo".to_string())));
     assert!(ops.contains(&Op::DeleteGroup("odoo".to_string())));
-    // Struttura del confine: DeleteUser porta solo il nome utente, nessun path.
-    // (la home la rimuove PrepareOptRoot.undo).
+    // the boundary's shape: the delete carries only the user name, no path —
+    // the home belongs to another step's undo.
 }
 
 #[test]
 fn preexisting_user_is_never_touched() {
-    // Utente già presente: niente useradd in run, niente userdel in undo.
+    // an existing user: nothing created, nothing deleted.
     //
-    // La home appartiene già all'utente (uid non-root): è la situazione sana, ed
-    // è quella in cui questo step non ha davvero nulla da fare. Se la home fosse
-    // di root scatterebbe la precondizione di A-V3-4 — che è un altro test.
+    // the home already belongs to them, which is the healthy situation and the
+    // one where this step genuinely has nothing to do. a root-owned home would
+    // trip A-V3-4's precondition, which is another test.
     let cfg = MockConfig {
         user_exists: true,
         path_exists: true,
@@ -95,7 +95,7 @@ fn preexisting_user_is_never_touched() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    // Nessuna mutazione: un utente preesistente non viene mai toccato.
+    // no mutation: a pre-existing user is never touched.
     assert!(
         ops.is_empty(),
         "un utente Preexisting non deve subire alcuna azione, trovato: {ops:?}"
@@ -104,8 +104,8 @@ fn preexisting_user_is_never_touched() {
 
 #[test]
 fn undo_restores_original_owner_when_home_was_preexisting() {
-    // Home preesistente owned uid/gid 1000: dopo il nostro chown a odoo, l'undo
-    // deve ripristinare l'owner originale (non lasciarla a un utente cancellato).
+    // a pre-existing home owned by someone else: after our chown the undo must
+    // restore the original owner, not leave it to a deleted user.
     let original = OwnerId {
         uid: 1000,
         gid: 1000,
@@ -134,7 +134,7 @@ fn undo_restores_original_owner_when_home_was_preexisting() {
         }),
         "undo deve ripristinare l'owner originale della home, trovato: {ops:?}"
     );
-    // E comunque userdel senza -r.
+    // and the deletion still carries no `-r`.
     assert!(ops.contains(&Op::DeleteUser("odoo".to_string())));
 }
 
@@ -152,7 +152,7 @@ fn dry_run_creates_nothing() {
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
-    // In dry-run lo stato resta Untracked → undo NO-OP.
+    // a dry run leaves the state untracked, so the undo is a no-op.
     assert_eq!(persisted(&step).user_prestate, PreState::Untracked);
     step.undo(&c).expect("undo");
 
@@ -162,15 +162,14 @@ fn dry_run_creates_nothing() {
     );
 }
 
-// --- A-V3-4: utente preesistente e home non usabile --------------------------
+// --- A-V3-4: an existing user with an unusable home -------------------------
 
-/// Utente `odoo` già presente **e** `/opt/odoo` preesistente di proprietà di
-/// root: l'installazione è impossibile, e lo si deve dire **prima** di mutare.
+/// an existing user **and** a pre-existing root-owned home make the
+/// installation impossible, and that must be said **before** mutating.
 ///
-/// Senza questa precondizione l'errore arrivava tre step più avanti, come
-/// *Permission denied* su un `sudo -u odoo mkdir -p /opt/odoo/.cache`: un
-/// sintomo che non nomina né la causa (la home è di root) né la condizione che
-/// la rende un problema (l'utente esiste già, quindi nessuno gliela consegna).
+/// without this precondition the error arrived three steps later as a
+/// *Permission denied* on a `mkdir`: a symptom naming neither the cause nor the
+/// condition that makes it one.
 #[test]
 fn a_preexisting_user_with_a_root_owned_home_is_refused_before_mutating() {
     let cfg = MockConfig {
@@ -197,7 +196,7 @@ fn a_preexisting_user_with_a_root_owned_home_is_refused_before_mutating() {
         "il messaggio deve dire all'utente cosa può fare: {msg}"
     );
 
-    // Precondizione, non undo: si fallisce senza aver toccato nulla.
+    // a precondition, not an undo: it fails having touched nothing.
     assert!(
         ops_of(&log).iter().all(|op| !matches!(
             op,
@@ -208,9 +207,9 @@ fn a_preexisting_user_with_a_root_owned_home_is_refused_before_mutating() {
     );
 }
 
-/// La precondizione riguarda **solo** l'utente preesistente: se lo creiamo noi,
-/// una home root-owned è la norma — l'abbiamo appena creata con `PrepareOptRoot`
-/// e stiamo per consegnargliela.
+/// the precondition concerns **only** a pre-existing user: when we create it, a
+/// root-owned home is the norm — we just made it, and are about to hand it
+/// over.
 #[test]
 fn a_root_owned_home_is_fine_when_we_create_the_user() {
     let cfg = MockConfig {
@@ -228,22 +227,22 @@ fn a_root_owned_home_is_fine_when_we_create_the_user() {
     step.run(&c).expect("run");
 }
 
-// --- A-MD-3: un esito voluto non si comunica come fallimento ----------------
+// --- A-MD-3: a wanted outcome is not reported as a failure ------------------
 
-/// **Il difetto, visto a ogni rollback su Fedora.**
+/// **the defect, seen on every rollback of one family.**
 ///
 /// ```text
 /// WARN undo: groupdel fallito/orfano, proseguo (best-effort) group=odoo
 ///      error=comando `groupdel -- odoo` fallito (exit 6): group 'odoo' does not exist
 /// ```
 ///
-/// Su Fedora `userdel` porta via anche il gruppo primario, quindi il `groupdel`
-/// che segue trova il vuoto. L'undo è corretto — il gruppo *non c'è*, che è il
-/// risultato voluto — ma lo comunicava come fallimento: chi leggeva un rollback
-/// riuscito trovava un `WARN` e si chiedeva se qualcosa fosse rimasto indietro.
+/// there `userdel` takes the primary group with it, so the following
+/// `groupdel` finds nothing. the undo is correct — the group *is gone*, which
+/// is the wanted result — but it was reported as a failure, so a successful
+/// rollback looked suspicious.
 ///
-/// È la categoria di A-V3-10: cosmetico, e proprio per questo insidioso, perché
-/// compare **sempre** e insegna a ignorare i warning.
+/// A-V3-10's category: cosmetic, and insidious precisely because it appears
+/// **every time** and teaches people to ignore warnings.
 #[test]
 fn a_group_removed_together_with_the_user_is_not_a_failure() {
     use invok::steps::create_odoo_user::group_already_gone;
@@ -259,13 +258,13 @@ fn a_group_removed_together_with_the_user_is_not_a_failure() {
     );
 }
 
-/// Ma un fallimento **vero** resta un fallimento: il gruppo c'è ancora, ed è un
-/// residuo che l'utente deve sapere di avere.
+/// but a **real** failure stays one: the group is still there, and that is a
+/// leftover the user needs to know about.
 #[test]
 fn a_real_groupdel_failure_is_still_reported() {
     use invok::steps::create_odoo_user::group_already_gone;
 
-    // Il caso concreto: il gruppo è ancora primario per un altro utente.
+    // the concrete case: the group is still another user's primary.
     let in_uso = StepError::CommandFailed {
         command: "groupdel -- odoo".to_string(),
         status: "8".to_string(),
@@ -288,18 +287,17 @@ fn a_real_groupdel_failure_is_still_reported() {
         );
     }
 
-    // Un errore che non viene da un comando non è nemmeno classificabile.
+    // an error that did not come from a command is not classifiable.
     assert!(!group_already_gone(&StepError::Precondition(
         "altro".into()
     )));
 }
 
-/// Il discriminante è l'**exit code**, non il testo.
+/// the discriminant is the **exit code**, not the text.
 ///
-/// `groupdel` scrive «group 'odoo' does not exist» nella lingua del sistema: un
-/// controllo sullo stderr fallirebbe su una macchina localizzata — la stessa
-/// trappola di `apt-cache policy` in R6, dove è servito `LC_ALL=C`. Il codice 6
-/// è documentato da shadow-utils e non si traduce.
+/// `groupdel` writes its message in the system's language, so a check on stderr
+/// would fail on a localised machine — `apt-cache policy`'s trap. the code is
+/// documented by shadow-utils and does not translate.
 #[test]
 fn the_verdict_does_not_depend_on_the_system_language() {
     use invok::steps::create_odoo_user::group_already_gone;

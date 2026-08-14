@@ -1,4 +1,4 @@
-//! Test di [`CreateDbRole`] (Fase 5): creazione ruolo, escape, password non loggata.
+//! [`CreateDbRole`]: role creation, SQL escaping, password never logged.
 
 mod common;
 
@@ -26,7 +26,7 @@ fn absent_role_is_created_and_dropped() {
     };
     let (mock, log) = MockSystemOps::new(cfg);
     let mut step = CreateDbRole::with_ops(Box::new(mock));
-    let c = ctx("odoo", None); // peer auth (nessuna password)
+    let c = ctx("odoo", None); // peer auth, no password
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
@@ -48,14 +48,14 @@ fn role_with_password_records_only_presence_not_value() {
     };
     let (mock, log) = MockSystemOps::new(cfg);
     let mut step = CreateDbRole::with_ops(Box::new(mock));
-    // Password con apice singolo (verifica anche che non rompa nulla a valle).
+    // a password with a single quote, which must not break anything.
     let c = ctx("odoo", Some("p'wn"));
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
     let ops = ops_of(&log);
-    // L'op registra solo has_password: il valore non è mai catturato/loggato.
+    // the op records only `has_password`: the value is never captured.
     assert!(ops.contains(&Op::PgCreateRole {
         role: "odoo".to_string(),
         has_password: true,

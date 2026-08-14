@@ -1,28 +1,24 @@
-//! M2 — le due liste devono **corrispondersi**, non solo essere congelate.
+//! M2: the two catalogues must **correspond**, not merely be frozen.
 //!
-//! La lezione di R6-hotfix-2 era «congela la lista, così un refactor che perde
-//! un pacchetto lo dice subito». Con due famiglie la lezione si estende: se le
-//! due liste vivono in due file, aggiungere una dipendenza a una sola compila
-//! benissimo, e la mancanza si scopre quando una VM Fedora non compila più —
-//! cioè nel posto più caro possibile.
+//! the earlier lesson was "freeze the list, so a refactor that loses a package
+//! says so at once". with two families it extends: if the lists live in two
+//! files, adding a dependency to only one compiles fine, and the gap surfaces
+//! when a VM stops building — the most expensive place possible.
 //!
-//! È il test per cui `DepId` esiste. Non serve alla risoluzione, che continua a
-//! lavorare su nomi: serve a rendere la corrispondenza **verificabile**.
+//! this is why `DepId` exists. resolution still works on names; the identifier
+//! makes the correspondence **checkable**.
 //!
-//! # Cosa questo test NON può dire
-//!
-//! Che i nomi Fedora siano **giusti**. Sono la traduzione della lista Debian e
-//! nessuno li ha ancora provati su una macchina vera: quel controllo lo fa
-//! `sudo invok --dry-run` su una VM Fedora, che risolve tutti i gruppi
-//! senza mutare nulla e riporta in un solo messaggio quelli che non esistono.
-//! Qui si verifica la **struttura** — che nessun bisogno sia scoperto — che è
-//! l'unica cosa che un test su mock può garantire.
+//! what this cannot say is whether the translated names are **right**. that
+//! check is a dry run on a real VM, which resolves every group without mutating
+//! and reports the missing ones in a single message. here only the
+//! **structure** is verified — that no need is uncovered — which is all a mock
+//! test can guarantee.
 
 use invok::packaging::apt::AptBackend;
 use invok::packaging::dnf::DnfBackend;
 use invok::packaging::{DepId, PackageManager};
 
-/// Ogni bisogno dichiarato è coperto da **entrambe** le famiglie.
+/// every declared need is covered by **both** families.
 #[test]
 fn every_need_is_covered_by_every_family() {
     let cataloghi = [
@@ -45,11 +41,11 @@ fn every_need_is_covered_by_every_family() {
     }
 }
 
-/// Nessuna voce di catalogo è **vuota**.
+/// no catalogue entry is **empty**.
 ///
-/// Una voce senza pacchetti passerebbe un controllo ingenuo di «il bisogno è
-/// elencato» pur non installando nulla — dichiarare di coprire un bisogno senza
-/// coprirlo è peggio che ometterlo, perché toglie anche il sospetto.
+/// an entry with no packages would pass a naive "the need is listed" check
+/// while installing nothing — claiming to cover a need without covering it is
+/// worse than omitting it, because it removes the suspicion too.
 #[test]
 fn no_catalog_entry_is_empty() {
     for (famiglia, catalog) in [
@@ -73,12 +69,11 @@ fn no_catalog_entry_is_empty() {
     }
 }
 
-/// Un bisogno può costare **più pacchetti** su una famiglia e uno sull'altra: è
-/// il caso di `build-essential`, che su Fedora non esiste come metapacchetto.
+/// a need may cost **several packages** on one family and one on the other: the
+/// build toolchain has no metapackage everywhere.
 ///
-/// Il test serve a fissare che la corrispondenza **non è 1:1** — chi la
-/// irrigidisse in «un bisogno, un pacchetto» romperebbe proprio il caso che ha
-/// motivato la struttura.
+/// the test pins that the correspondence is **not** one-to-one — tightening it
+/// would break the very case that motivated the structure.
 #[test]
 fn a_need_may_cost_more_packages_on_one_family() {
     let debian = AptBackend.catalog();
@@ -106,11 +101,11 @@ fn a_need_may_cost_more_packages_on_one_family() {
     );
 }
 
-/// Lo **stesso** pacchetto può soddisfare due bisogni: su Fedora `Jpeg` e
-/// `Jpeg8` collassano entrambi su `libjpeg-turbo-devel`.
+/// the **same** package may satisfy two needs: on one family two identifiers
+/// collapse onto a single name.
 ///
-/// È esattamente A-MD-1, e su questa famiglia non è un caso di bordo ma la
-/// norma: la deduplica dei nomi risolti è ciò che tiene onesto il delta.
+/// exactly A-MD-1, and there it is the norm rather than an edge case:
+/// deduplicating resolved names is what keeps the delta honest.
 #[test]
 fn two_needs_may_share_one_package_on_fedora() {
     let fedora = DnfBackend.catalog();
@@ -132,12 +127,12 @@ fn two_needs_may_share_one_package_on_fedora() {
     );
 }
 
-/// I pacchetti del **server** PostgreSQL non sono gli stessi, e il marker nemmeno.
+/// the PostgreSQL **server** packages differ, and so does the marker.
 ///
-/// Su Fedora `postgresql` è il solo client: installarlo soltanto porterebbe a un
-/// `systemctl start postgresql` che fallisce senza dire perché, e usarlo come
-/// marker farebbe risultare `Preexisting` un server che non c'è — quindi nessuno
-/// stop, nessun undo, e un cluster lasciato in piedi.
+/// on one family the bare name is the client only: installing just that gives a
+/// start that fails without saying why, and using it as the marker would call a
+/// non-existent server `Preexisting` — no stop, no undo, a cluster left
+/// running.
 #[test]
 fn the_postgres_server_is_a_different_package_on_each_family() {
     let debian = AptBackend.catalog();
@@ -151,17 +146,17 @@ fn the_postgres_server_is_a_different_package_on_each_family() {
     assert_eq!(debian.postgres_marker, "postgresql");
     assert_eq!(fedora.postgres_marker, "postgresql-server");
 
-    // nginx invece si chiama uguale su entrambe: non tutto diverge, e fingere il
-    // contrario aggiungerebbe una traduzione da mantenere per niente.
+    // nginx is named the same on both: not everything diverges, and pretending
+    // otherwise would add a translation to maintain for nothing.
     assert_eq!(debian.nginx, fedora.nginx);
 }
 
-/// I nomi Fedora **divergono** da quelli Debian: se qualcuno copiasse la lista
-/// Debian in `dnf.rs` senza tradurla, il test di copertura sopra passerebbe lo
-/// stesso — ogni bisogno sarebbe «coperto», da un nome che su Fedora non esiste.
+/// the two catalogues' names **diverge**: copying one into the other
+/// untranslated would still pass the coverage test above — every need
+/// "covered", by a name that does not exist there.
 ///
-/// Non si verifica quali siano i nomi giusti (solo una VM può dirlo), ma che una
-/// traduzione ci sia stata.
+/// this does not check which names are right (only a VM can say), but that a
+/// translation happened at all.
 #[test]
 fn the_fedora_names_are_not_the_debian_ones() {
     let debian: Vec<String> = AptBackend
@@ -185,16 +180,16 @@ fn the_fedora_names_are_not_the_debian_ones() {
         fedora.len()
     );
 
-    // I casi che divergono in modo non meccanico, fissati perché una futura
-    // "pulizia" non li riporti a una traduzione ingenua `-dev` → `-devel`.
+    // the non-mechanical cases, pinned so a future "cleanup" does not reduce
+    // them to a naive suffix swap.
     for atteso in [
         "openldap-devel",      // libldap2-dev
         "cyrus-sasl-devel",    // libsasl2-dev
         "libjpeg-turbo-devel", // libjpeg-dev
         "libxslt-devel",       // libxslt1-dev: cade l'1
-        // zlib1g-dev non diventa `zlib-devel`: Fedora 41 è migrata a zlib-ng, e
-        // `zlib-devel` è solo un `Provides`. Due passaggi, non uno — e il
-        // secondo lo si scopre solo su una macchina vera.
+        // the zlib case is two steps, not one: that release migrated to a
+        // different implementation and the obvious name is only a `Provides`.
+        // the second step shows up on a real machine only.
         "zlib-ng-compat-devel",
     ] {
         assert!(
@@ -205,20 +200,17 @@ fn the_fedora_names_are_not_the_debian_ones() {
     }
 }
 
-// --- I comandi: ciò che una macchina reale non può smentire in tempo --------
+// --- the commands: what a real machine cannot disprove in time --------------
 
-/// **Il punto ratificato del Bivio 2.**
+/// **the ratified point of the second fork.**
 ///
-/// Il default di `dnf remove` è rimuovere anche le dipendenze diventate orfane:
-/// sarebbe esattamente l'`apt-get autoremove` globale che R0 ha **bandito**
-/// dall'undo perché non è delimitato dal nostro delta. Su apt quella rimozione è
-/// un'azione esplicita, confinata a `--aggressive-rollback`; su dnf accadrebbe
-/// in **ogni** rollback, e potrebbe portarsi via una libreria condivisa con
-/// software del cliente.
+/// one manager removes orphaned dependencies by default: exactly the global
+/// autoremove that R0 **banned** from the undo, because it is not bounded by
+/// our delta. there it would happen in **every** rollback, and could take away
+/// a library shared with the customer's software.
 ///
-/// Il flag si passa sempre, anche se il default un giorno cambiasse: un
-/// comportamento su cui poggia una promessa non si lascia decidere a un file di
-/// configurazione che non controlliamo.
+/// the flag is always passed, even if the default changed one day: a behaviour
+/// a promise rests on is not left to a configuration file we do not control.
 #[test]
 fn dnf_remove_never_touches_orphaned_dependencies() {
     let args = invok::packaging::dnf::remove_args(&["pippo", "pluto"]);
@@ -232,12 +224,11 @@ fn dnf_remove_never_touches_orphaned_dependencies() {
     assert!(args.iter().any(|a| a == "pippo") && args.iter().any(|a| a == "pluto"));
 }
 
-/// Le dipendenze **deboli** non entrano nel delta.
+/// **weak** dependencies stay out of the delta.
 ///
-/// `install_weak_deps=False` è la controparte di `--no-install-recommends`:
-/// senza, il gestore tira dentro i `Recommends`, che finiscono nel delta e che
-/// l'undo poi rimuoverebbe — pacchetti che nessuno ha chiesto, tolti a qualcuno
-/// che non li aveva chiesti.
+/// the counterpart of the recommends switch: without it the manager pulls in
+/// suggestions that land in the delta and that the undo would then remove —
+/// packages nobody asked for, taken from somebody who did not ask for them.
 #[test]
 fn neither_family_installs_weak_dependencies() {
     let dnf = invok::packaging::dnf::install_args(&["pippo"]);
@@ -253,18 +244,16 @@ fn neither_family_installs_weak_dependencies() {
     );
 }
 
-/// **Verificato in campo (Fedora 41, dnf5 5.2.17):** dnf5 non accetta il
-/// separatore `--`, che su apt è metà della doppia difesa contro l'argument
-/// injection (R1).
+/// **verified in the field:** the newer manager rejects the `--` separator that
+/// is half the double defence against argument injection (R1).
 ///
-/// `dnf install -- <pkg>` risponde `Unknown argument "--"` ed esce 2: metterlo
-/// non irrobustisce niente, **rompe il comando**. Su questa famiglia resta quindi
-/// il solo validatore, e la superficie reale è nulla — i nomi arrivano dal
-/// catalogo, che è fatto di costanti nel sorgente.
+/// it answers `Unknown argument "--"` and exits non-zero: adding it hardens
+/// nothing and **breaks the command**. on that family only the validator
+/// remains, and the real surface is nil — the names come from the catalogue,
+/// which is made of constants in the source.
 ///
-/// Il test esiste perché la tentazione di «riallineare le due famiglie»
-/// riaggiungendo il separatore è concreta, e il sintomo sarebbe
-/// un'installazione che fallisce al primo pacchetto.
+/// the test exists because the urge to "realign the two families" is concrete,
+/// and the symptom would be an installation failing on its first package.
 #[test]
 fn dnf_does_not_use_the_argument_separator() {
     for args in [
@@ -277,12 +266,12 @@ fn dnf_does_not_use_the_argument_separator() {
         );
     }
 
-    // Su rpm invece il separatore è accettato, e lì la doppia difesa regge.
-    // (`is_installed` usa `rpm -q -- <pkg>`.)
+    // the query tool does accept the separator, and there the double defence
+    // holds.
 }
 
-/// Le due famiglie usano verbi diversi, e va bene: ciò che deve coincidere è la
-/// **promessa**, non il comando.
+/// the families use different verbs, and that is fine: what must coincide is
+/// the **promise**, not the command.
 #[test]
 fn the_two_families_speak_different_commands() {
     let apt = invok::packaging::apt::remove_args(&["pippo"]);
@@ -296,8 +285,8 @@ fn the_two_families_speak_different_commands() {
     );
 }
 
-/// Il confronto per token vale anche su firewalld: `80/tcp` **non** è dentro
-/// `8080/tcp`. È A-V3-7 sulla seconda famiglia, prima che possa succedere.
+/// the token comparison holds on the other firewall too: A-V3-7 on the second
+/// family, before it can happen.
 #[test]
 fn firewalld_does_not_find_port_80_inside_port_8080() {
     use invok::distro::firewalld::port_in_list;
@@ -308,31 +297,30 @@ fn firewalld_does_not_find_port_80_inside_port_8080() {
     assert!(!port_in_list("", "80/tcp"));
 }
 
-/// Il suggerimento diagnostico nomina il comando **della famiglia**.
+/// the diagnostic hint names **the family's** command.
 ///
-/// «Esegui `apt-get update`» detto a chi sta su Fedora è peggio di nessun
-/// suggerimento: manda a provare un comando che non esiste e fa dubitare del
-/// resto della diagnosi — proprio nel momento in cui l'installazione si è
-/// fermata e l'utente sta cercando di capire perché.
+/// naming the wrong one is worse than no hint: it sends the reader to a command
+/// their machine does not have and casts doubt on the rest of the diagnosis —
+/// exactly when the installation has stopped and they are trying to understand
+/// why.
 #[test]
 fn the_refresh_hint_names_the_right_command() {
     assert_eq!(AptBackend.refresh_command(), "apt-get update");
     assert_eq!(DnfBackend.refresh_command(), "dnf makecache");
 }
 
-/// **I tre nomi virtuali trovati in campo su Fedora 41.**
+/// **the three virtual names found in the field.**
 ///
-/// `wget`, `zlib-devel` e `openjpeg2-devel` non sono pacchetti su quella
-/// release: sono `Provides` di altri. Un nome virtuale è installabile ma
-/// `rpm -q` non lo riconosce, quindi `dnf remove` uscirebbe 0 rimuovendo zero
-/// pacchetti: il delta lo elencherebbe, il report direbbe «rimosso», e il
-/// pacchetto resterebbe installato. Residuo **invisibile** — la cosa peggiore,
-/// ed è esattamente A5.1-bis nella sua versione rpm.
+/// they are not packages on that release but `Provides` of others. a virtual
+/// name is installable, yet the query tool does not know it, so removal exits
+/// zero having removed nothing: the delta would list it, the report would say
+/// "removed", and the package would stay. an **invisible** leftover — the worst
+/// kind, and A5.1-bis in its rpm form.
 ///
-/// Il test congela il nome **reale** in ciascun gruppo. Senza, una futura
-/// "pulizia" della lista potrebbe ridurli al nome canonico e riaprire il difetto
-/// in silenzio: l'installazione continuerebbe a funzionare, e solo il rollback
-/// mentirebbe.
+/// the test freezes the **real** name in each group. without it a future
+/// "cleanup" could reduce them to the canonical name and silently reopen the
+/// defect: the installation would keep working, and only the rollback would
+/// lie.
 #[test]
 fn the_fedora_list_declares_the_real_name_for_each_virtual_one() {
     let specs = DnfBackend.catalog();

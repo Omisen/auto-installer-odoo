@@ -1,16 +1,15 @@
-//! [`NginxInstall`] (13a): installa e abilita Nginx, se `--with-nginx`.
+//! [`NginxInstall`]: installs and enables Nginx, under `--with-nginx`.
 //!
-//! Primo dei cinque sotto-step in cui spezziamo `setup_nginx`. Tutti sono
-//! **gated** da `ctx.with_nginx`: se assente, l'intera fase è inerte (snapshot
-//! `Untracked`, run/undo no-op), esattamente come `SetupLogDir` col logfile
-//! disabilitato.
+//! the first of the six sub-steps `setup_nginx` is split into. all of them are
+//! **gated** on `ctx.with_nginx`: without it the whole phase is inert, exactly
+//! like `SetupLogDir` with no log file.
 //!
-//! Coerenza di policy con PostgreSQL (D3): l'undo fa **stop + disable** ma
-//! **NON purga** di default; il purge solo con `--aggressive-rollback`.
+//! policy consistent with PostgreSQL (D3): the undo does **stop + disable** but
+//! does **not** purge by default.
 //!
-//! Essendo il **primo** sotto-step della fase, è l'**ultimo** a essere annullato:
-//! il suo undo ospita perciò il reload di riallineamento finale, quando Nginx
-//! sopravvive al rollback perché era del cliente. Vedi
+//! being the **first** sub-step it is the **last** to be undone, so its undo
+//! hosts the final realignment reload for when Nginx survives the rollback
+//! because it was the customer's. see
 //! [`NginxReload`](crate::steps::nginx_reload).
 
 use serde::{Deserialize, Serialize};
@@ -36,7 +35,7 @@ pub struct NginxInstall {
 }
 
 impl NginxInstall {
-    /// Il pacchetto di nginx secondo il gestore di questa famiglia.
+    /// the nginx package, per this family's manager.
     fn package(&self) -> String {
         self.ops.packages().catalog().nginx
     }
@@ -98,7 +97,7 @@ impl Step for NginxInstall {
             info!("undo (dry-run): stop/disable nginx; purge solo se aggressive");
             return Ok(());
         }
-        // stop + disable se abilitato da noi (D4/D3).
+        // stop and disable only what we enabled (D4, D3).
         if self.snap.enabled == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_stop(NGINX_SERVICE) {
                 warn!(error = %e, "undo: stop nginx fallito, proseguo (best-effort)");
@@ -107,7 +106,7 @@ impl Step for NginxInstall {
                 warn!(error = %e, "undo: disable nginx fallito, proseguo (best-effort)");
             }
         }
-        // purge solo con --aggressive-rollback (coerenza D3).
+        // purge only under `--aggressive-rollback` (D3).
         if self.snap.installed == PreState::CreatedByUs {
             if ctx.aggressive_rollback {
                 crate::steps::remove_with_recovery(
@@ -123,15 +122,14 @@ impl Step for NginxInstall {
             }
         }
 
-        // Riallineamento finale. Questo è l'**ultimo** sotto-step Nginx a essere
-        // annullato (gli undo girano in ordine inverso), quindi qui i file sono
-        // già stati ripristinati: il nostro vhost è rimosso e il default site
-        // del cliente è tornato al suo posto. Se nginx è ancora in piedi — cioè
-        // era suo, non nostro — sta però ancora **servendo** la config che
-        // aveva caricato, la nostra. Senza questo reload i file sarebbero a
-        // posto ma il sito del cliente resterebbe giù fino a un reload manuale.
+        // the final realignment. this is the **last** nginx sub-step to be
+        // undone, so the files are already restored: our vhost is gone and the
+        // customer's default site is back. if nginx is still up — theirs, not
+        // ours — it is nonetheless still **serving** the config it loaded,
+        // ours. without this reload the files would be right while their site
+        // stayed down until someone reloaded by hand.
         //
-        // Come nel run: non si ricarica una config che non passa `nginx -t`.
+        // as in the run: never reload a config that fails `nginx -t`.
         if self.ops.service_is_active(NGINX_SERVICE) {
             if !self.ops.nginx_test() {
                 warn!(

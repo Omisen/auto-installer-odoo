@@ -1,6 +1,5 @@
-//! Coordinamento ruolo/DB (Fase 5): al rollback l'undo del database precede
-//! l'undo del ruolo (ordine inverso), così il DB sparisce prima del ruolo che
-//! lo possiede.
+//! role and database coordination: the database's undo precedes the role's, so
+//! it disappears before the role that owns it.
 
 mod common;
 
@@ -17,7 +16,7 @@ use invok::steps::noop::NoopStep;
 #[test]
 fn rollback_drops_database_before_role() {
     let dir = tempfile::tempdir().expect("tempdir");
-    // Log condiviso fra i due step, per osservarne l'ordine reciproco.
+    // a log shared by both steps, to observe their relative order.
     let log: OpLog = Arc::new(Mutex::new(Vec::new()));
 
     let role_ops = MockSystemOps::with_log(
@@ -35,7 +34,7 @@ fn rollback_drops_database_before_role() {
         Arc::clone(&log),
     );
 
-    // Ordine di produzione: ruolo → database → (step che fallisce).
+    // production order: role → database → a failing step.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(CreateDbRole::with_ops(Box::new(role_ops))),
         Box::new(CreateDatabase::with_ops(Box::new(db_ops))),

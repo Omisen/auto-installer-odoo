@@ -1,15 +1,13 @@
-//! M0 — la famiglia della distribuzione si **rilegge**, non si rideduce.
+//! M0: the distribution family is **re-read**, never re-derived.
 //!
-//! Questi test presidiano un difetto che oggi non esiste ancora, e che esiste
-//! per non farlo nascere: quando ci saranno due gestori di pacchetti, l'`undo`
-//! del delta dovrà sapere quale invocare, e l'unica fonte accettabile è il
-//! manifesto scritto dall'installazione che quegli artefatti li ha creati.
+//! with two package managers the delta's undo has to know which to invoke, and
+//! the only acceptable source is the manifest written by the installation that
+//! created those artifacts.
 //!
-//! Il punto più delicato è uno solo — `InstallConfig::to_context` — e c'è un
-//! test scritto apposta per morire se quella riga sparisce, perché il difetto
-//! sarebbe altrimenti **silenzioso**: la famiglia ricadrebbe sul default
-//! `Debian` e in campo si vedrebbe solo un `apt-get` che fallisce su una
-//! macchina senza apt.
+//! there is one delicate point — `InstallConfig::to_context` — and a test
+//! written to die if that line disappears, because the defect would otherwise
+//! be **silent**: the family would fall back to the default and the field would
+//! only see a package manager failing on a machine that does not have it.
 
 use std::io::Write;
 use std::path::{Path, PathBuf};
@@ -24,7 +22,7 @@ use invok::state::{
     start_decision, InstallConfig, InstallState, PreState, StartDecision, StepRecord,
 };
 
-// --- helper ------------------------------------------------------------------
+// --- helpers ----------------------------------------------------------------
 
 fn write_os_release(dir: &Path, body: &str) -> PathBuf {
     let path = dir.join("os-release");
@@ -51,7 +49,7 @@ fn config_for(family: OsFamily) -> InstallConfig {
     }
 }
 
-// --- La derivazione: un gate solo, e nessun ripiego --------------------------
+// --- derivation: one gate, and no fallback ----------------------------------
 
 #[test]
 fn the_family_comes_from_the_os_id_and_nowhere_else() {
@@ -59,19 +57,18 @@ fn the_family_comes_from_the_os_id_and_nowhere_else() {
     assert_eq!(OsFamily::from_os_id("debian"), Some(OsFamily::Debian));
     assert_eq!(OsFamily::from_os_id("fedora"), Some(OsFamily::Fedora));
 
-    // Una distribuzione che non trattiamo non ha famiglia: `None`, non un
-    // ripiego. È l'unico posto in cui si decide che una distro ci è ignota, e
-    // deve poter dire di no.
+    // a distribution we do not handle has no family: `None`, not a fallback.
+    // the only place that decision is taken, and it must be able to say no.
     assert_eq!(OsFamily::from_os_id("arch"), None);
     assert_eq!(OsFamily::from_os_id(""), None);
 }
 
-/// `ID_LIKE=fedora` **non** apre la porta alle derivate.
+/// `ID_LIKE` does **not** open the door to derivatives.
 ///
-/// Rocky, AlmaLinux e CentOS Stream lo dichiarano: leggerlo le farebbe entrare
-/// senza che nessuno le abbia mai provate. Per una famiglia nuova si parte
-/// chiusi — e non è in contraddizione con A5.1-bis, che riguarda il non
-/// respingere release *più recenti* di una famiglia già supportata.
+/// several declare it, and honouring it would let them in without anyone ever
+/// having tried them. for a new family we start closed — no contradiction with
+/// A5.1-bis, which is about not rejecting *newer* releases of a supported
+/// family.
 #[test]
 fn id_like_does_not_admit_untested_derivatives() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -108,12 +105,11 @@ fn a_supported_os_carries_its_family() {
     );
 }
 
-/// Fedora è **accettata**, con la sua soglia di versione.
+/// the rpm family is **accepted**, with its own version threshold.
 ///
-/// In M0 questo stesso caso era un rifiuto: la famiglia era riconosciuta ma non
-/// c'era ancora un backend dnf, e accettarla avrebbe prodotto un'installazione
-/// che si ferma a metà. Con M2 il backend esiste, quindi la risposta cambia — ed
-/// è un cambiamento **voluto**, non una regressione: è il senso della fase.
+/// in M0 this same case was a refusal: the family was recognised but had no
+/// backend, and accepting it would have produced an installation that stops
+/// halfway. with the backend the answer changes — a **deliberate** change.
 #[test]
 fn fedora_is_accepted_from_its_minimum_version() {
     let fedora = |version: &str| OsInfo {
@@ -133,20 +129,15 @@ fn fedora_is_accepted_from_its_minimum_version() {
     );
 }
 
-/// La soglia è aperta verso l'alto **anche** su Fedora — un rifiuto senza prova
-/// blocca il caso buono (A5.1-bis) — ma «accettiamo» non vuol dire «tacciamo».
+/// the threshold is open upwards here too, but "we accept" does not mean "we
+/// keep quiet".
 ///
-/// Da M5 la CI gira il ciclo completo su **Fedora 41**, quindi quella release
-/// non è più «non provata»: l'avviso deve tacere lì e parlare oltre. Prima di
-/// M5 la costante valeva «nessuna release provata» e l'avviso scattava sempre —
-/// era la verità di allora, e il cambiamento è il senso della fase.
-///
-/// Da **M11** la soglia è la **44**: la CI la installa davvero, per una strada
-/// diversa dalla 41 (là il Python di sistema è coperto dai pin di Odoo, qui il
-/// venv nasce su `python3.13` installato apposta). L'avviso quindi tace anche
-/// lì — ed è corretto che taccia: ciò che quella release ha di diverso è
-/// **gestito**, non ignorato. Il Python di sistema scoperto resta invece
-/// segnalato da `untested_python_warning`, che ha una costante sua.
+/// the CI now runs the full cycle on two releases of this family, by two
+/// different routes — one where the system Python is covered by Odoo's pins,
+/// one where the venv is built on an interpreter installed for the occasion. so
+/// the warning is silent on both, correctly: what differs there is **handled**,
+/// not ignored. an uncovered system Python is reported by its own warning, with
+/// its own constant.
 #[test]
 fn only_a_fedora_newer_than_the_ci_one_is_flagged() {
     assert!(
@@ -169,17 +160,16 @@ fn only_a_fedora_newer_than_the_ci_one_is_flagged() {
     assert!(is_newer_than_tested("fedora", "99"));
 }
 
-/// Una distribuzione di cui non conosciamo nemmeno la famiglia non ha soglia
-/// superiore: darle un avviso sarebbe un ramo che non può eseguire, perché
-/// `OsFamily::from_os_id` l'ha già respinta.
+/// a distribution whose family we do not know has no upper threshold: warning
+/// about it would be an unreachable branch, since it is rejected first.
 #[test]
 fn an_unknown_distribution_has_no_upper_threshold() {
     assert!(!is_newer_than_tested("arch", "99"));
 }
 
-/// I comandi obbligatori seguono la famiglia: chiedere `apt-get` per nome era il
-/// **primo** punto che un'esecuzione su Fedora incontrava, e falliva lì con un
-/// messaggio che parlava di Debian.
+/// the mandatory commands follow the family: naming one outright was the
+/// **first** thing a run on the other family met, failing with a message about
+/// the wrong one.
 #[test]
 fn the_required_commands_follow_the_family() {
     assert_eq!(
@@ -189,14 +179,14 @@ fn the_required_commands_follow_the_family() {
     assert_eq!(required_commands(OsFamily::Fedora), ["dnf", "systemctl"]);
 }
 
-// --- La persistenza: il manifesto porta la famiglia --------------------------
+// --- persistence: the manifest carries the family ---------------------------
 
-/// **Il test che presidia il punto più facile da sbagliare.**
+/// **the guard on the easiest thing to get wrong.**
 ///
-/// `to_context` costruisce il resto del `Context` con `..Default::default()`.
-/// Se `os_family` cadesse lì dentro, ogni rollback lavorerebbe come `Debian` —
-/// anche quello di un'installazione Fedora — e nessun test che non guardi
-/// *questo* campo se ne accorgerebbe.
+/// `to_context` builds the rest of the context from defaults. if the family
+/// fell through there, every rollback would act as one family — including the
+/// other's installations — and no test that does not look at *this* field would
+/// notice.
 #[test]
 fn to_context_propagates_the_recorded_family_not_the_default() {
     let ctx = config_for(OsFamily::Fedora).to_context(false, false, PathBuf::from("/tmp/s.json"));
@@ -222,7 +212,7 @@ fn from_context_records_the_family() {
     );
 }
 
-/// Andata e ritorno su disco: ciò che si scrive è ciò che si rilegge.
+/// a round trip through disk: what is written is what is read back.
 #[test]
 fn the_family_survives_a_round_trip_through_the_manifest() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -243,13 +233,12 @@ fn the_family_survives_a_round_trip_through_the_manifest() {
     );
 }
 
-/// **Retrocompatibilità.** Un manifesto scritto prima che il campo esistesse non
-/// lo dichiara, e va letto come `Debian` — che è la verità, perché ogni
-/// installazione precedente è apt.
+/// **backward compatibility.** a manifest written before the field existed does
+/// not declare it, and must read as the default — which is the truth, since
+/// every earlier installation used that manager.
 ///
-/// Il fixture è il formato reale, non una ricostruzione a memoria: rendere
-/// illeggibile un manifesto significa rendere **non disinstallabile** un'istanza
-/// già in campo, che è il danno di A-V3-1 per un'altra strada.
+/// the fixture is the real format, not a reconstruction: making a manifest
+/// unreadable makes an already-deployed instance **un-uninstallable**.
 #[test]
 fn a_manifest_written_before_this_field_reads_as_debian() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -286,11 +275,11 @@ fn a_manifest_written_before_this_field_reads_as_debian() {
     assert_eq!(config.db_name, "citest", "il resto si legge come prima");
 }
 
-// --- L'identità: riprendere con un'altra famiglia non è riprendere -----------
+// --- identity: resuming under another family is not resuming ----------------
 
-/// La famiglia non *nomina* un artefatto, ma cambia il **significato** dei nomi
-/// registrati: un delta scritto da apt non è riprendibile da dnf. Sta quindi in
-/// `identity()`, e il rifiuto dice **quale** campo non coincide.
+/// the family does not *name* an artifact but changes what the recorded names
+/// **mean**: a delta written by one manager is not resumable by the other. so
+/// it lives in the identity, and the refusal says **which** field differs.
 #[test]
 fn resuming_with_a_different_family_is_refused_by_name() {
     let mut state = InstallState::default();
@@ -315,9 +304,9 @@ fn resuming_with_a_different_family_is_refused_by_name() {
     }
 }
 
-/// …e con la **stessa** famiglia si riprende, come prima. Un manifesto pre-2.3
-/// (che si legge come `Debian`) su una macchina Debian deve restare riprendibile:
-/// il campo nuovo non deve rompere il resume delle installazioni già in corso.
+/// …and with the **same** family it resumes as before. an older manifest, read
+/// as the default, on a matching machine must stay resumable: the new field
+/// must not break installations already in progress.
 #[test]
 fn resuming_on_the_same_family_still_works() {
     let mut state = InstallState::default();
@@ -333,22 +322,21 @@ fn resuming_on_the_same_family_still_works() {
     );
 }
 
-// --- La discordanza: si avvisa, non si decide --------------------------------
+// --- disagreement: warn, do not decide --------------------------------------
 
-/// Il sistema si legge per **avvisare**, mai per agire. Rifiutare renderebbe non
-/// disinstallabile un'istanza; dedurre la famiglia dal sistema violerebbe la
-/// regola per cui questo campo esiste.
+/// the system is read to **warn**, never to act. refusing would make an
+/// instance un-uninstallable, and inferring the family from the system would
+/// break the rule this field exists for.
 #[test]
 fn a_family_mismatch_warns_and_does_not_decide() {
-    // Concordi → nessun avviso.
+    // agreement: no warning.
     assert!(family_mismatch(OsFamily::Debian, Some(OsFamily::Debian)).is_none());
     assert!(family_mismatch(OsFamily::Fedora, Some(OsFamily::Fedora)).is_none());
 
-    // Sistema non identificabile → nessun avviso: non sappiamo abbastanza per
-    // dire che c'è una discordanza.
+    // an unidentifiable system: we do not know enough to claim a mismatch.
     assert!(family_mismatch(OsFamily::Debian, None).is_none());
 
-    // Discordi → avviso che nomina **entrambe** e dichiara con quale si procede.
+    // disagreement: a warning naming **both**, and which one we proceed with.
     let avviso = family_mismatch(OsFamily::Debian, Some(OsFamily::Fedora))
         .expect("una discordanza va detta");
     assert!(
@@ -365,19 +353,19 @@ fn a_family_mismatch_warns_and_does_not_decide() {
     );
 }
 
-/// L'`ID` per l'avviso si legge **senza validare**: il rollback deve funzionare
-/// anche su un sistema su cui rifiuteremmo di installare. Disinstallare
-/// un'istanza non richiede che la macchina sia ancora adatta a ospitarla.
+/// the `ID` for the warning is read **without validating**: a rollback must
+/// work even on a system we would refuse to install on. uninstalling does not
+/// require the machine to still be suitable.
 #[test]
 fn the_id_for_the_warning_is_read_without_validating() {
     let dir = tempfile::tempdir().expect("tempdir");
 
-    // Una release troppo vecchia per installarci: `check_os_from` la rifiuta…
+    // a release too old to install on, which validation rejects…
     let vecchia = write_os_release(dir.path(), "ID=ubuntu\nVERSION_ID=\"18.04\"\n");
     assert!(check_os_from(&vecchia).is_err());
-    // …ma l'ID si legge lo stesso, ed è ciò che serve all'avviso.
+    // …but the ID still reads, which is what the warning needs.
     assert_eq!(os_id_from(&vecchia).as_deref(), Some("ubuntu"));
 
-    // File assente → nessuna risposta, e quindi nessun avviso (vedi sopra).
+    // a missing file gives no answer, and therefore no warning.
     assert_eq!(os_id_from(&dir.path().join("assente")), None);
 }

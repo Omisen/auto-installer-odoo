@@ -1,7 +1,7 @@
-//! Test end-to-end del motore contro le 4 invarianti di `CLAUDE.md`.
+//! the engine end to end, against the four invariants of `CLAUDE.md`.
 //!
-//! Non toccano il sistema: usano `NoopStep` e una directory temporanea per il
-//! file di stato, quindi girano senza root.
+//! nothing touches the system: `NoopStep` plus a tempdir for the state file, so
+//! everything runs unprivileged.
 
 use std::os::unix::fs::PermissionsExt;
 use std::sync::{Arc, Mutex};
@@ -12,8 +12,8 @@ use invok::state::{InstallState, PreState, StepRecord};
 use invok::step::Step;
 use invok::steps::noop::{NoopStep, UndoLog};
 
-/// Context non-dry con file di stato in una tempdir (niente root, niente `/opt`).
-/// Il motore usa solo `dry_run` e `state_path`; il resto è irrilevante qui.
+/// a non-dry context with its state file in a tempdir. the engine only uses the
+/// dry-run flag and that path; the rest is irrelevant here.
 fn ctx_with_state(dir: &tempfile::TempDir) -> Context {
     Context {
         dry_run: false,
@@ -22,14 +22,14 @@ fn ctx_with_state(dir: &tempfile::TempDir) -> Context {
     .with_state_path(dir.path().join(".installer-state.json"))
 }
 
-/// Invariante 2: il rollback esegue gli `undo` dall'ultimo completato al primo.
+/// invariant 2: the rollback undoes from the last completed step to the first.
 #[test]
 fn rollback_runs_undo_in_reverse_order() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx_with_state(&dir);
     let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
 
-    // alpha, beta completano; gamma fallisce al run e innesca il rollback.
+    // the first two complete; the third fails and triggers the rollback.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha").with_undo_log(Arc::clone(&log))),
         Box::new(NoopStep::new("beta").with_undo_log(Arc::clone(&log))),
@@ -45,19 +45,18 @@ fn rollback_runs_undo_in_reverse_order() {
 
     assert!(result.is_err(), "l'esecuzione deve fallire su gamma");
     let order = log.lock().expect("lock").clone();
-    // Solo alpha e beta erano completati; gamma non ha completato → niente undo.
-    // Ordine inverso: prima beta, poi alpha.
+    // only the completed ones are undone, in reverse order.
     assert_eq!(order, vec!["beta".to_string(), "alpha".to_string()]);
 }
 
-/// Invariante 3: un `undo` che fallisce non impedisce agli altri di eseguire.
+/// invariant 3: a failing undo does not stop the others.
 #[test]
 fn rollback_is_best_effort() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx_with_state(&dir);
     let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
 
-    // beta fallirà l'undo; alpha deve comunque essere ripulito dopo.
+    // the second's undo fails; the first must still be cleaned up after it.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha").with_undo_log(Arc::clone(&log))),
         Box::new(
@@ -77,19 +76,19 @@ fn rollback_is_best_effort() {
 
     assert!(result.is_err(), "l'esecuzione deve fallire su gamma");
     let order = log.lock().expect("lock").clone();
-    // beta agisce (e fallisce), ma alpha viene comunque ripulito dopo di lui.
+    // it acts and fails, and the other is cleaned up regardless.
     assert_eq!(order, vec!["beta".to_string(), "alpha".to_string()]);
 }
 
-/// Invariante 3 / protezione: uno step `Preexisting` non compie azioni di undo,
-/// pur essendo `undo` invocato dal motore.
+/// invariant 3 and the protection: a `Preexisting` step performs no undo
+/// action, even though the engine invokes its undo.
 #[test]
 fn preexisting_step_undo_is_noop() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx_with_state(&dir);
     let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
 
-    // alpha è preesistente (non nostro): undo deve essere NO-OP.
+    // pre-existing, so not ours: the undo must be a no-op.
     let alpha = NoopStep::new("alpha")
         .preexisting()
         .with_undo_log(Arc::clone(&log));
@@ -108,20 +107,20 @@ fn preexisting_step_undo_is_noop() {
     let result = installer.execute(&mut steps, &ctx);
 
     assert!(result.is_err(), "l'esecuzione deve fallire su beta");
-    // undo è stato invocato su alpha...
+    // the undo was invoked…
     assert_eq!(
         alpha_calls.load(std::sync::atomic::Ordering::SeqCst),
         1,
         "undo di alpha deve essere invocato dal motore"
     );
-    // ...ma non ha compiuto alcuna azione (log vuoto: nessun artefatto nostro).
+    // …but performed no action: an empty log means no artifact of ours.
     assert!(
         log.lock().expect("lock").is_empty(),
         "un undo su Preexisting non deve compiere azioni"
     );
 }
 
-/// Invariante 4: lo stato scritto e riletto mantiene i `completed`; permessi 0600.
+/// invariant 4: the state survives a write/read round trip, `0600`.
 #[test]
 fn install_state_roundtrip_and_permissions() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -139,27 +138,27 @@ fn install_state_roundtrip_and_permissions() {
 
     state.save(&path).expect("save");
 
-    // Permessi 0600.
+    // permissions.
     let mode = std::fs::metadata(&path)
         .expect("metadata")
         .permissions()
         .mode();
     assert_eq!(mode & 0o777, 0o600, "il file di stato deve essere 0600");
 
-    // Round-trip: i record sopravvivono al ciclo scrittura/lettura.
+    // the records survive the round trip.
     let reloaded = InstallState::load(&path).expect("load");
     assert_eq!(reloaded, state);
     assert_eq!(reloaded.completed.len(), 2);
     assert_eq!(reloaded.completed[0].name, "alpha");
     assert_eq!(reloaded.completed[1].name, "beta");
 
-    // load su file assente → stato vuoto (prima esecuzione), non errore.
+    // a missing file yields an empty state, not an error.
     InstallState::clear(&path).expect("clear");
     let empty = InstallState::load(&path).expect("load assente");
     assert!(empty.completed.is_empty());
 }
 
-/// Percorso felice: tutti gli step completano, lo stato è persistito su disco.
+/// the happy path: every step completes and the state is persisted.
 #[test]
 fn successful_run_persists_all_steps() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -181,14 +180,14 @@ fn successful_run_persists_all_steps() {
     assert_eq!(persisted.completed[1].name, "beta");
 }
 
-// --- B-V3-5: interruzione dall'esterno --------------------------------------
+// --- B-V3-5: interruption from outside --------------------------------------
 
 use std::sync::atomic::{AtomicBool, Ordering};
 
-/// **Il difetto che chiude.** Un Ctrl-C uccideva il processo all'istante, quindi
-/// il rollback in-process non partiva mai e il sistema restava a metà. Ora
-/// l'interruzione è una richiesta che il motore osserva: gli step già eseguiti
-/// vengono annullati, in ordine inverso, come per un fallimento.
+/// **the defect it closes.** a Ctrl-C killed the process outright, so the
+/// in-process rollback never ran and the system was left half-done. the
+/// interruption is now a request the engine watches, and the completed steps
+/// are undone as if a step had failed.
 #[test]
 fn an_interrupt_rolls_back_what_was_already_done() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -196,7 +195,7 @@ fn an_interrupt_rolls_back_what_was_already_done() {
     let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
     let interrupted = Arc::new(AtomicBool::new(false));
 
-    // `beta` alza il flag mentre gira: è ciò che fa un Ctrl-C durante uno step.
+    // the flag is raised mid-step, which is what a Ctrl-C does.
     let flag_per_beta = Arc::clone(&interrupted);
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha").with_undo_log(Arc::clone(&log))),
@@ -217,8 +216,8 @@ fn an_interrupt_rolls_back_what_was_already_done() {
         "il messaggio deve dire cosa è successo: {err}"
     );
 
-    // `gamma` non è mai partito, e i due precedenti sono stati annullati in
-    // ordine inverso — esattamente come per un fallimento.
+    // the next step never started, and the previous two were undone in reverse
+    // order — exactly as on a failure.
     let azioni = log.lock().expect("log").clone();
     assert_eq!(
         azioni,
@@ -227,9 +226,9 @@ fn an_interrupt_rolls_back_what_was_already_done() {
     );
 }
 
-/// Lo step in corso viene **portato a termine**: fermarlo a metà lascerebbe
-/// `dpkg` inconsistente o un database inizializzato a metà. Il confine sicuro è
-/// quello che il motore già conosce — uno step o è completo o non è iniziato.
+/// the step in flight is **carried to completion**: stopping it halfway would
+/// leave the package manager inconsistent or a database half-initialised. the
+/// safe boundary is the one the engine already knows.
 #[test]
 fn the_step_in_flight_is_allowed_to_finish() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -250,10 +249,9 @@ fn the_step_in_flight_is_allowed_to_finish() {
     let mut installer = Installer::new().watching_interrupt(Arc::clone(&interrupted));
     let _ = installer.execute(&mut steps, &ctx);
 
-    // La prova che alpha è stato portato a termine è che il rollback lo
-    // **annulla**: un undo viene invocato solo su uno step completato. Non la
-    // si cerca nel manifesto, perché lì — giustamente — dopo il rollback alpha
-    // non c'è più: il manifesto dice cosa resta, non cosa è stato fatto.
+    // the proof it completed is that the rollback **undoes** it: an undo runs
+    // only on a completed step. not sought in the manifest, where — rightly —
+    // it is gone afterwards: the manifest says what remains, not what was done.
     let azioni = log.lock().expect("log").clone();
     assert_eq!(
         azioni,
@@ -266,8 +264,8 @@ fn the_step_in_flight_is_allowed_to_finish() {
     );
 }
 
-/// Senza interruzione il comportamento è quello di sempre: il flag di default
-/// non è alzato da nessuno, e `watching_interrupt` è opzionale.
+/// without an interruption nothing changes: the default flag is never raised,
+/// and wiring one is optional.
 #[test]
 fn without_an_interrupt_nothing_changes() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -278,12 +276,12 @@ fn without_an_interrupt_nothing_changes() {
         Box::new(NoopStep::new("beta")),
     ];
 
-    // Senza `watching_interrupt`.
+    // without the flag wired.
     Installer::new()
         .execute(&mut steps, &ctx)
         .expect("nessuna interruzione: l'esecuzione arriva in fondo");
 
-    // E con un flag mai alzato.
+    // and with a flag nobody raises.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha")),
         Box::new(NoopStep::new("beta")),
@@ -294,17 +292,16 @@ fn without_an_interrupt_nothing_changes() {
         .expect("flag mai alzato: nessun effetto");
 }
 
-/// **A-R8-1.** Dopo un fallimento, il rollback automatico annulla gli step già
-/// eseguiti — e il manifesto **non deve continuare a elencarli**.
+/// **A-R8-1.** after a failure the automatic rollback undoes the completed
+/// steps — and the manifest **must stop listing them**.
 ///
-/// È il flusso che README e wiki descrivono da sempre: «se fallisce, correggi la
-/// causa e rilancia». Con il resume introdotto in R8, un manifesto che elencava
-/// step già annullati faceva saltare al rilancio proprio quelli: l'installazione
-/// proseguiva dando per esistenti `/opt/odoo`, l'utente e il database che il
-/// rollback aveva appena rimosso.
+/// the documented flow is "if it fails, fix the cause and run it again". with
+/// the resume introduced in R8, a manifest still listing undone steps made the
+/// re-run skip exactly those: the installation carried on assuming the home,
+/// the user and the database the rollback had just removed.
 ///
-/// La regola che lo chiude: **il manifesto dice cosa c'è ancora sul sistema**,
-/// non cosa è stato fatto a un certo punto.
+/// the rule that closes it: **the manifest says what is still on the system**,
+/// not what was done at some point.
 #[test]
 fn a_rolled_back_step_is_re_executed_on_the_next_run() {
     use std::sync::atomic::AtomicUsize;
@@ -312,7 +309,7 @@ fn a_rolled_back_step_is_re_executed_on_the_next_run() {
     let dir = tempfile::tempdir().expect("tempdir");
     let ctx = ctx_with_state(&dir);
 
-    // Giro 1: alpha riesce, beta fallisce → il rollback annulla alpha.
+    // first pass: one succeeds, the next fails, and the rollback undoes it.
     let mut steps: Vec<Box<dyn Step>> = vec![
         Box::new(NoopStep::new("alpha")),
         Box::new(NoopStep::new("beta").fail_on_run()),
@@ -330,7 +327,7 @@ fn a_rolled_back_step_is_re_executed_on_the_next_run() {
             .collect::<Vec<_>>()
     );
 
-    // Giro 2: si rilancia. alpha dev'essere RIESEGUITO, non saltato.
+    // second pass: it must be RE-RUN, not skipped.
     let esecuzioni = Arc::new(AtomicUsize::new(0));
     let contatore = Arc::clone(&esecuzioni);
     let mut steps: Vec<Box<dyn Step>> = vec![
@@ -351,10 +348,9 @@ fn a_rolled_back_step_is_re_executed_on_the_next_run() {
     );
 }
 
-/// Ma un undo **fallito** lascia il record: lì l'artefatto è (forse) ancora sul
-/// sistema, e quel record è l'unica traccia del residuo che
-/// `invok rollback` potrà ritentare. Dimenticarlo sarebbe perdere
-/// l'informazione proprio nel caso in cui serve.
+/// but a **failed** undo keeps its record: there the artifact may still be on
+/// the system, and that record is the only trace of the leftover to retry.
+/// forgetting it would lose the information exactly where it is needed.
 #[test]
 fn a_failed_undo_keeps_its_record() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -375,13 +371,12 @@ fn a_failed_undo_keeps_its_record() {
     );
 }
 
-/// Se dopo il rollback non resta **niente**, il manifesto non deve restare
-/// nemmeno lui.
+/// with **nothing** left after the rollback, the manifest must go too.
 ///
-/// Un file che descrive zero artefatti è un residuo che dice il falso: farebbe
-/// credere a `invok rollback` che ci sia qualcosa da consumare, e
-/// resterebbe sul disco a tempo indeterminato. Trovato dalla CI, che asseriva
-/// — giustamente — che il manifesto fosse stato consumato.
+/// a file describing zero artifacts is a leftover that lies: it would make
+/// `invok rollback` believe there is something to consume, and would stay on
+/// disk indefinitely. found by the CI, which rightly asserted the manifest had
+/// been consumed.
 #[test]
 fn an_empty_manifest_is_removed_not_left_behind() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -399,8 +394,8 @@ fn an_empty_manifest_is_removed_not_left_behind() {
     );
 }
 
-/// Ma se qualcosa resta — un undo fallito — il manifesto **deve** restare: è
-/// l'unica traccia del residuo che `invok rollback` potrà ritentare.
+/// but if something remains — a failed undo — the manifest **must** stay: it is
+/// the only trace of the leftover to retry.
 #[test]
 fn a_manifest_with_residue_stays_on_disk() {
     let dir = tempfile::tempdir().expect("tempdir");

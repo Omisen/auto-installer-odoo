@@ -1,18 +1,16 @@
-//! [`CloneOdooRepo`] (9a): clona i sorgenti Odoo in `<install_dir>/odoo`.
+//! [`CloneOdooRepo`]: clones the Odoo sources into `<install_dir>/odoo`.
 //!
-//! È il primo dei tre sotto-step in cui spezziamo il monolitico `install_odoo`
-//! del Bash. Tutte le operazioni girano come **utente odoo** (privilegio
-//! minimo), non root.
+//! the first of the three sub-steps the Bash monolith is broken into.
+//! everything runs as the **odoo** user, not root.
 //!
-//! # Perimetro e coordinamento del contenitore
+//! # perimeter and container
 //!
-//! Questo step crea `<install_dir>` (es. `/opt/odoo/odoo18`) e le sue
-//! sottocartelle. **Non** tocca `/opt/odoo`, che è di
-//! [`PrepareOptRoot`](crate::steps::prepare_opt_root): `<install_dir>` è un
-//! livello sotto, interamente nostro. Qui `rm -rf` è legittimo (è la nostra
-//! cartella di sorgenti). L'undo rimuove il repo e, come per `/opt/odoo` in
-//! Fase 2, rimuove il **contenitore** `<install_dir>` solo se vuoto (dopo che
-//! gli undo di venv/config sono girati prima, in ordine inverso).
+//! this step creates `<install_dir>` and its subdirectories, and does **not**
+//! touch `/opt/odoo`, which belongs to
+//! [`PrepareOptRoot`](crate::steps::prepare_opt_root). one level below,
+//! entirely ours, `rm -rf` is legitimate. the undo removes the repository and
+//! the **container** only if empty — the venv and config undos have run first,
+//! in the reverse order.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -31,33 +29,33 @@ const DEFAULT_DEPTH: u32 = 5;
 const DEFAULT_RETRIES: u32 = 3;
 const DEFAULT_BACKOFF_SECS: u64 = 2;
 
-/// Snapshot serializzabile del clone.
+/// the clone's serialisable snapshot.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct CloneSnapshot {
     pub prestate: PreState,
-    /// git | git-existing | tarball | tarball-existing | "" (assente).
+    /// how the sources got there, or empty when absent.
     pub source_mode: String,
 }
 
-/// Clona i sorgenti Odoo (reversibile) con retry + fallback tarball.
+/// clones the Odoo sources, reversibly, with retries and a tarball fallback.
 pub struct CloneOdooRepo {
     ops: Box<dyn SystemOps>,
     retries: u32,
     depth: u32,
     backoff_base_secs: u64,
     snap: CloneSnapshot,
-    /// Dir esistente ma non valida da rigenerare (rimossa prima del clone).
+    /// an existing but invalid directory, removed before cloning.
     had_invalid_dir: bool,
 }
 
 impl CloneOdooRepo {
-    /// Costruttore di **produzione**: legge i parametri di rete dall'ambiente e
-    /// applica il backoff reale fra un tentativo di clone e il successivo.
+    /// the **production** constructor: reads the network parameters from the
+    /// environment and applies the real backoff between attempts.
     ///
-    /// Non è la stessa cosa di [`Self::with_ops`], che azzera il backoff perché i
-    /// test non devono dormire. Costruire questo step per il `run` con il
-    /// costruttore dei test renderebbe il retry di R2 **inutile**: tre tentativi
-    /// istantanei su una rete che non risponde sono un tentativo solo.
+    /// not the same as [`Self::with_ops`], which zeroes the backoff because
+    /// tests must not sleep. building this for a real `run` with the test
+    /// constructor would make the retry **useless**: three instant attempts
+    /// against an unresponsive network are one attempt.
     pub fn for_run(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -69,7 +67,7 @@ impl CloneOdooRepo {
         }
     }
 
-    /// Costruttore per i test: `SystemOps` iniettabile, **nessun backoff** (sleep 0).
+    /// the test constructor: injectable `SystemOps` and **no backoff**.
     pub fn with_ops(ops: Box<dyn SystemOps>) -> Self {
         Self {
             ops,
@@ -94,7 +92,7 @@ impl CloneOdooRepo {
     }
 }
 
-/// Legge una variabile d'ambiente come `u32`, con default.
+/// reads an environment variable as a `u32`, with a default.
 fn env_u32(key: &str, default: u32) -> u32 {
     std::env::var(key)
         .ok()
@@ -119,7 +117,8 @@ impl Step for CloneOdooRepo {
                     self.snap.prestate = PreState::Preexisting;
                     self.snap.source_mode = "git-existing".to_string();
                 } else {
-                    // Branch diverso: potrebbe contenere lavoro. NON rigenerare.
+                    // a different branch may hold work in progress: do NOT
+                    // regenerate.
                     return Err(StepError::Precondition(format!(
                         "repository esistente su branch '{branch}', atteso '{}'. \
                          Rimuovi manualmente {} se vuoi ri-clonare",
@@ -133,9 +132,8 @@ impl Step for CloneOdooRepo {
                 self.snap.source_mode = "tarball-existing".to_string();
             }
             OdooSourceState::InvalidDir => {
-                // Dir sotto <install_dir> (nostro perimetro) senza .git né
-                // odoo-bin: non è un checkout valido. La rigeneriamo, ma lo
-                // segnaliamo esplicitamente.
+                // inside our perimeter with neither marker: not a valid
+                // checkout. regenerated, but said out loud.
                 warn!(
                     dir = %repo_dir.display(),
                     "directory sorgenti esistente ma non valida: verrà rigenerata"
@@ -161,17 +159,17 @@ impl Step for CloneOdooRepo {
         let user = &ctx.odoo_user;
         let repo_dir = Self::repo_dir(ctx);
 
-        // Struttura directory come utente odoo.
+        // directory structure, as the `odoo` user.
         self.ops.mkdir_p_as_user(user, &ctx.install_dir)?;
         self.ops
             .mkdir_p_as_user(user, &ctx.install_dir.join(MODULES_SUBDIR))?;
 
-        // Directory non valida preesistente → rimuovila prima di clonare.
+        // a pre-existing invalid directory goes before cloning.
         if self.had_invalid_dir {
             self.ops.remove_dir_all(&repo_dir)?;
         }
 
-        // Clone con retry + backoff.
+        // clone, with retries and backoff.
         let mut cloned = false;
         for attempt in 1..=self.retries {
             match self
@@ -186,7 +184,7 @@ impl Step for CloneOdooRepo {
                 }
                 Err(e) => {
                     warn!(attempt, retries = self.retries, error = %e, "run: clone fallito");
-                    // Pulisci artefatti parziali prima del retry.
+                    // clean partial artifacts before retrying.
                     let _ = self.ops.remove_dir_all(&repo_dir);
                     if attempt < self.retries {
                         self.sleep_backoff(attempt);
@@ -195,7 +193,7 @@ impl Step for CloneOdooRepo {
             }
         }
 
-        // Fallback tarball se il clone è fallito dopo tutti i tentativi.
+        // tarball fallback once every clone attempt has failed.
         if !cloned {
             warn!(
                 retries = self.retries,
@@ -225,18 +223,18 @@ impl Step for CloneOdooRepo {
         }
 
         let repo_dir = Self::repo_dir(ctx);
-        // rm -rf del target: nostro perimetro, legittimo.
+        // our perimeter, so the recursive removal is legitimate.
         if let Err(e) = self.ops.remove_dir_all(&repo_dir) {
             warn!(error = %e, "undo: rm -rf sorgenti fallito, proseguo (best-effort)");
         }
-        // repos/modules creata da noi.
+        // the modules directory, created by us.
         if let Err(e) = self.ops.remove_dir_all(&ctx.install_dir.join(REPOS_SUBDIR)) {
             warn!(error = %e, "undo: rm -rf repos fallito, proseguo (best-effort)");
         }
 
-        // Contenitore <install_dir>: rimuovilo SOLO se vuoto (gli undo di venv e
-        // config sono già girati prima, in ordine inverso). Se contiene altro
-        // — anche materiale preesistente — lo lasciamo intatto.
+        // the container goes ONLY if empty: the venv and config undos have
+        // already run. anything else left inside, pre-existing material
+        // included, stays.
         match self.ops.dir_is_empty(&ctx.install_dir) {
             Ok(true) => {
                 if let Err(e) = self.ops.rmdir(&ctx.install_dir) {
@@ -257,9 +255,8 @@ impl Step for CloneOdooRepo {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// `had_invalid_dir` non è reidratato di proposito: governa il `run` (una
-    /// dir preesistente non valida va rimossa prima di clonare), non l'undo, e
-    /// non viene serializzato.
+    /// `had_invalid_dir` is deliberately not rehydrated: it governs the `run`,
+    /// not the undo, and is never serialised.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;

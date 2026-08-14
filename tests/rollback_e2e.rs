@@ -1,10 +1,9 @@
-//! Test di rollback **end-to-end** (Fase 12, G7): la prova della promessa
-//! "chirurgico" a livello di sistema.
+//! **end-to-end** rollback tests (G7): the surgical promise proven at system
+//! level.
 //!
-//! Si parte da uno stato iniziale del [`SystemModel`], si esegue la sequenza
-//! reale di step, si inietta un fallimento, e si verifica che dopo il rollback
-//! lo stato sia **identico** all'iniziale — e che le risorse preesistenti del
-//! cliente sopravvivano intatte.
+//! start from an initial [`SystemModel`] state, run the real step sequence,
+//! inject a failure, and check the state afterwards is **identical** — and that
+//! the customer's pre-existing resources survive intact.
 
 mod common;
 
@@ -51,8 +50,8 @@ fn paths(items: &[&str]) -> HashSet<PathBuf> {
     items.iter().map(PathBuf::from).collect()
 }
 
-/// Stato iniziale "macchina fresca": /opt/odoo e la home utente esistono, il
-/// .bashrc dell'utente ha il suo contenuto, nient'altro di nostro.
+/// a "fresh machine" initial state: the home directories exist, the user's
+/// `.bashrc` has its own contents, and nothing of ours.
 fn fresh_state() -> ModelState {
     let mut contents = HashMap::new();
     contents.insert(PathBuf::from(BASHRC), BASHRC_ORIG.to_string());
@@ -86,9 +85,10 @@ fn ctx(state_path: PathBuf, aggressive: bool) -> Context {
     }
 }
 
-/// La sequenza reale (mockabile) di step, condividendo lo stesso modello.
-/// PrepareOptRoot è escluso (usa `std::fs` diretto; il suo ciclo su /opt/odoo è
-/// coperto dai test di Fase 2); qui /opt/odoo è parte dello stato iniziale.
+/// the real step sequence, sharing one model.
+///
+/// the first step is excluded — it uses the filesystem directly and has its own
+/// tests — so the home is part of the initial state here.
 fn chain(model: &SystemModel) -> Vec<Box<dyn Step>> {
     vec![
         Box::new(CreateOdooUser::with_ops(model.boxed())),
@@ -114,7 +114,7 @@ fn full_chain_failure_returns_to_virgin_state() {
     let model = SystemModel::new(fresh_state());
     let initial = model.snapshot();
 
-    // Sequenza completa + uno step che fallisce alla fine → rollback di tutto.
+    // the whole sequence plus a failing step at the end: everything rolls back.
     let mut steps = chain(&model);
     steps.push(Box::new(NoopStep::new("boom").fail_on_run()));
 
@@ -130,7 +130,7 @@ fn full_chain_failure_returns_to_virgin_state() {
         initial,
         "dopo il rollback il sistema è tornato al vergine"
     );
-    // Il .bashrc dell'utente è byte-per-byte come prima.
+    // the user's `.bashrc` is byte for byte as before.
     assert_eq!(
         model
             .snapshot()
@@ -147,8 +147,8 @@ fn mid_chain_failure_returns_to_virgin_state() {
     let model = SystemModel::new(fresh_state());
     let initial = model.snapshot();
 
-    // Fallimento "a CloneOdooRepo": i primi 5 step (utente, deps, postgres,
-    // ruolo, DB) completano, poi si inietta il fallimento.
+    // a failure partway: the first five steps complete, then the failure is
+    // injected.
     let mut steps: Vec<Box<dyn Step>> = chain(&model).into_iter().take(5).collect();
     steps.push(Box::new(NoopStep::new("boom").fail_on_run()));
 
@@ -165,16 +165,16 @@ fn mid_chain_failure_returns_to_virgin_state() {
 
 #[test]
 fn preexisting_resources_survive_rollback() {
-    // Stato iniziale con RISORSE DEL CLIENTE: PostgreSQL installato+attivo, un DB
-    // 'odoo' che esiste già (dati del cliente!). L'init hard-stoppa (DB non
-    // nostro), la catena fallisce, e il rollback NON tocca ciò che era già lì.
+    // an initial state with THE CUSTOMER'S RESOURCES: PostgreSQL installed and
+    // running, and a database of that name already there. the init hard-stops,
+    // the chain fails, and the rollback touches none of it.
     let dir = tempfile::tempdir().expect("tempdir");
     let mut init = fresh_state();
     init.packages.insert("postgresql".to_string());
     init.packages.insert("postgresql-contrib".to_string());
     init.svc_enabled.insert("postgresql".to_string());
     init.svc_active.insert("postgresql".to_string());
-    init.pg_dbs.insert("odoo".to_string()); // DB preesistente del cliente
+    init.pg_dbs.insert("odoo".to_string()); // the customer's pre-existing database
 
     let model = SystemModel::new(init);
     let initial = model.snapshot();
@@ -189,12 +189,12 @@ fn preexisting_resources_survive_rollback() {
     );
 
     let final_state = model.snapshot();
-    // Tutto tornato com'era.
+    // everything is back as it was.
     assert_eq!(
         final_state, initial,
         "le risorse preesistenti restano, le nostre spariscono"
     );
-    // Verifiche esplicite delle protezioni critiche a livello di catena:
+    // explicit checks of the critical protections, at chain level:
     assert!(
         final_state.pg_dbs.contains("odoo"),
         "il DB del cliente NON deve essere droppato"
@@ -213,25 +213,23 @@ fn preexisting_resources_survive_rollback() {
     );
 }
 
-// --- Nginx nella catena completa (R3, audit A4.2) ---------------------------
+// --- nginx in the full chain (A4.2) -----------------------------------------
 //
-// I 5 step Nginx avevano solo unit test isolati. Qui girano nella catena reale,
-// nella posizione reale, e il loro rollback si intreccia con quello degli altri
-// step nell'ordine inverso. È dove vivono le mutazioni su config di **terzi**:
-// il default site del cliente e le regole del suo firewall.
+// the nginx steps had isolated unit tests only. here they run in the real
+// chain, in their real position, and their rollback interleaves with the
+// others'. this is where the mutations on **third-party** configuration live:
+// the customer's default site and firewall rules.
 
 const VHOST: &str = "/etc/nginx/sites-available/odoo18";
 const SITE_LINK: &str = "/etc/nginx/sites-enabled/odoo18";
 const DEFAULT_SITE: &str = "/etc/nginx/sites-enabled/default";
 
-/// Step che **fotografa** il modello a metà catena e poi fallisce, innescando
-/// il rollback.
+/// a step that **photographs** the model mid-chain and then fails, triggering
+/// the rollback.
 ///
-/// Serve a rendere le asserzioni oneste: verificare solo lo stato *finale* non
-/// distingue "mutato e poi ripristinato" da "mai toccato". Un default site che
-/// c'è ancora alla fine potrebbe non essere mai stato rimosso; una regola ufw
-/// assente alla fine potrebbe non essere mai stata aperta. La foto intermedia
-/// prova il primo tempo, lo stato finale prova il secondo.
+/// this keeps the assertions honest: checking only the *final* state cannot
+/// tell "mutated then restored" from "never touched". the intermediate photo
+/// proves the first half, the final state proves the second.
 struct SpyThenFail {
     model: SystemModel,
     seen: std::sync::Arc<std::sync::Mutex<Option<ModelState>>>,
@@ -274,7 +272,7 @@ impl Step for SpyThenFail {
     }
 }
 
-/// Legge la foto scattata da [`SpyThenFail`].
+/// reads the photograph taken by [`SpyThenFail`].
 fn photo(slot: &std::sync::Arc<std::sync::Mutex<Option<ModelState>>>) -> ModelState {
     slot.lock()
         .ok()
@@ -282,7 +280,7 @@ fn photo(slot: &std::sync::Arc<std::sync::Mutex<Option<ModelState>>>) -> ModelSt
         .expect("lo step spia deve aver girato")
 }
 
-/// Come [`ctx`], ma con la fase Nginx attiva.
+/// as [`ctx`], with the nginx phase enabled.
 fn ctx_nginx(state_path: PathBuf, aggressive: bool, ssl: bool) -> Context {
     Context {
         with_nginx: true,
@@ -292,8 +290,8 @@ fn ctx_nginx(state_path: PathBuf, aggressive: bool, ssl: bool) -> Context {
     }
 }
 
-/// Stato iniziale con ufw installato **e attivo**: senza, `NginxFirewall` è un
-/// no-op dichiarato e il delta non verrebbe mai esercitato.
+/// an initial state with the firewall installed **and active**: without it the
+/// step is a declared no-op and the delta would never be exercised.
 fn fresh_state_with_ufw() -> ModelState {
     ModelState {
         ufw_available: true,
@@ -302,8 +300,8 @@ fn fresh_state_with_ufw() -> ModelState {
     }
 }
 
-/// La catena reale **inclusi** i 5 step Nginx, nella posizione di `main.rs`:
-/// dopo `setup-systemd`, prima del control-script.
+/// the real chain **including** the nginx steps, in their production position:
+/// after the service, before the control script.
 fn chain_with_nginx(model: &SystemModel) -> Vec<Box<dyn Step>> {
     let mut steps = chain(model);
     let at = steps
@@ -336,7 +334,7 @@ fn full_chain_with_nginx_failure_returns_to_virgin_state() {
     let mut installer = Installer::new();
     assert!(installer.execute(&mut steps, &ctx).is_err());
 
-    // Primo tempo: la fase Nginx aveva davvero mutato il sistema.
+    // first half: the nginx phase really did mutate the system.
     let mid = photo(&seen);
     assert!(mid.packages.contains("nginx"), "nginx installato");
     assert!(mid.paths.contains(&PathBuf::from(VHOST)), "vhost scritto");
@@ -347,14 +345,14 @@ fn full_chain_with_nginx_failure_returns_to_virgin_state() {
     assert!(mid.ufw_rules.contains("80/tcp"), "porta 80 aperta");
     assert!(mid.svc_active.contains("nginx"), "nginx avviato");
 
-    // Secondo tempo: il rollback ha annullato tutto.
+    // second half: the rollback undid it all.
     let final_state = model.snapshot();
     assert_eq!(
         final_state, initial,
         "col rollback anche la fase Nginx torna al vergine"
     );
-    // Verifiche esplicite sui singoli artefatti Nginx (un `assert_eq` che
-    // fallisce non direbbe *quale* è rimasto).
+    // explicit checks on each nginx artifact: a failing equality would not say
+    // *which* one remained.
     assert!(
         !final_state.packages.contains("nginx"),
         "nginx installato da noi va purgato con --aggressive-rollback"
@@ -373,18 +371,18 @@ fn full_chain_with_nginx_failure_returns_to_virgin_state() {
 
 #[test]
 fn preexisting_default_site_is_restored_by_the_full_chain_rollback() {
-    // La mutazione più insidiosa della fase: per liberare la 80 rimuoviamo il
-    // default site, che è **config del cliente**. Provato finora solo in
-    // isolamento; qui il ripristino avviene in fondo a un rollback completo.
+    // the phase's most treacherous mutation: freeing port 80 means moving the
+    // customer's default site aside. tested in isolation until now; here the
+    // restoration happens at the end of a complete rollback.
     let dir = tempfile::tempdir().expect("tempdir");
     let mut init = fresh_state_with_ufw();
-    // Cliente con nginx già installato, attivo, e il suo default site.
+    // a customer with nginx installed, running, and their default site.
     init.packages.insert("nginx".to_string());
     init.svc_enabled.insert("nginx".to_string());
     init.svc_active.insert("nginx".to_string());
     init.symlinks.insert(PathBuf::from(DEFAULT_SITE));
-    // Nginx gira e sta servendo il suo default site: la config **caricata**
-    // coincide con quella su disco.
+    // nginx is running and serving that default site: the **loaded** config
+    // matches the one on disk.
     init.nginx_loaded_sites = Some([PathBuf::from(DEFAULT_SITE)].into_iter().collect());
 
     let model = SystemModel::new(init);
@@ -394,14 +392,14 @@ fn preexisting_default_site_is_restored_by_the_full_chain_rollback() {
     let (spy, seen) = SpyThenFail::new(&model);
     steps.push(Box::new(spy));
 
-    // `aggressive` = true di proposito: nemmeno il rollback più aggressivo deve
-    // toccare un nginx che era già del cliente.
+    // aggressive on purpose: not even the most aggressive rollback may touch an
+    // nginx that was already the customer's.
     let ctx = ctx_nginx(dir.path().join("state.json"), true, false);
     let mut installer = Installer::new();
     assert!(installer.execute(&mut steps, &ctx).is_err());
 
-    // Primo tempo: il default site è stato davvero rimosso per liberare la 80,
-    // e il nostro sito abilitato al suo posto.
+    // first half: the default site really was removed to free the port, and
+    // ours enabled in its place.
     let mid = photo(&seen);
     assert!(
         !mid.symlinks.contains(&PathBuf::from(DEFAULT_SITE)),
@@ -412,7 +410,7 @@ fn preexisting_default_site_is_restored_by_the_full_chain_rollback() {
         "il nostro sito è abilitato"
     );
 
-    // Secondo tempo: il rollback ha ricucito la config del cliente.
+    // second half: the rollback stitched the customer's config back.
     let final_state = model.snapshot();
     assert!(
         final_state.symlinks.contains(&PathBuf::from(DEFAULT_SITE)),
@@ -426,10 +424,10 @@ fn preexisting_default_site_is_restored_by_the_full_chain_rollback() {
         final_state.svc_active.contains("nginx") && final_state.svc_enabled.contains("nginx"),
         "un nginx già attivo/abilitato resta tale (D4)"
     );
-    // Non basta rimettere a posto i **file**: nginx continua a servire la config
-    // che ha in memoria. Se il rollback lo lascia con la nostra config caricata,
-    // il sito del cliente resta giù finché qualcuno non ricarica a mano — un
-    // rollback "completo" sulla carta e rotto in produzione.
+    // putting the **files** back is not enough: nginx keeps serving what it has
+    // in memory. left with our config loaded, the customer's site stays down
+    // until someone reloads by hand — a rollback complete on paper and broken
+    // in production.
     assert_eq!(
         final_state.nginx_loaded_sites,
         Some([PathBuf::from(DEFAULT_SITE)].into_iter().collect()),
@@ -440,8 +438,8 @@ fn preexisting_default_site_is_restored_by_the_full_chain_rollback() {
 
 #[test]
 fn only_our_ufw_delta_is_removed_by_the_full_chain_rollback() {
-    // Il cliente aveva già aperto la 80; noi apriamo la 443. Il rollback deve
-    // rimuovere **solo** la 443: la 80 non è nel nostro delta.
+    // the customer had already opened one port; we open another. the rollback
+    // must remove **only** ours.
     let dir = tempfile::tempdir().expect("tempdir");
     let mut init = fresh_state_with_ufw();
     init.ufw_rules.insert("80/tcp".to_string());
@@ -457,14 +455,14 @@ fn only_our_ufw_delta_is_removed_by_the_full_chain_rollback() {
     let mut installer = Installer::new();
     assert!(installer.execute(&mut steps, &ctx).is_err());
 
-    // Primo tempo: la 443 è stata davvero aperta da noi (la 80 c'era già).
+    // first half: the rule really was opened by us.
     let mid = photo(&seen);
     assert!(
         mid.ufw_rules.contains("443/tcp"),
         "la regola del delta viene aperta durante l'installazione"
     );
 
-    // Secondo tempo: il rollback rimuove solo ciò che ha aperto lui.
+    // second half: the rollback removes only what it opened.
     let final_state = model.snapshot();
     assert!(
         final_state.ufw_rules.contains("80/tcp"),
@@ -479,8 +477,8 @@ fn only_our_ufw_delta_is_removed_by_the_full_chain_rollback() {
 
 #[test]
 fn full_chain_with_nginx_succeeds_and_leaves_the_expected_artifacts() {
-    // Il lato **run** della fase Nginx nella catena reale: finora nessun test
-    // e2e arrivava in fondo senza fallimenti iniettati.
+    // the **run** side of the nginx phase in the real chain: until now no
+    // end-to-end test reached the end without an injected failure.
     let dir = tempfile::tempdir().expect("tempdir");
     let mut init = fresh_state_with_ufw();
     init.symlinks.insert(PathBuf::from(DEFAULT_SITE));
@@ -511,8 +509,8 @@ fn full_chain_with_nginx_succeeds_and_leaves_the_expected_artifacts() {
 
 #[test]
 fn nginx_steps_are_inert_in_the_full_chain_without_with_nginx() {
-    // Gating nella catena completa: gli stessi 5 step, con `with_nginx = false`,
-    // non devono lasciare **nessuna** traccia dopo un'installazione riuscita.
+    // gating in the full chain: the same steps, disabled, must leave **no**
+    // trace after a successful installation.
     let dir = tempfile::tempdir().expect("tempdir");
     let model = SystemModel::new(fresh_state_with_ufw());
 
@@ -534,20 +532,19 @@ fn nginx_steps_are_inert_in_the_full_chain_without_with_nginx() {
     assert!(!s.svc_enabled.contains("nginx") && !s.svc_active.contains("nginx"));
 }
 
-// --- Regressione dal campo: dpkg rotto (A-RT-1 / A-RT-2) --------------------
+// --- a field regression: a broken package database (A-RT-1, A-RT-2) ---------
 //
-// Scenario reale osservato su Multipass (Ubuntu 22.04 pulita): il `.deb` di
-// wkhtmltopdf ha dipendenze di sistema assenti sulla VM, `dpkg -i` fallisce
-// lasciando dpkg inconsistente, la catena si ferma — e il rollback non riesce a
-// purgare i 24 pacchetti del delta perché apt rifiuta di operare su un dpkg
-// rotto. Il sistema resta sporco: la promessa chirurgica violata proprio nello
-// scenario in cui serve di più.
+// observed on a clean VM: the wkhtmltopdf package has system dependencies the
+// machine lacks, the direct install fails leaving the database inconsistent,
+// the chain stops — and the rollback cannot purge the delta because the manager
+// refuses to operate. the system stays dirty: the surgical promise broken in
+// the very scenario it matters most.
 
-/// Le dipendenze di sistema del `.deb` di wkhtmltopdf su una VM minimale.
+/// the wkhtmltopdf package's system dependencies on a minimal VM.
 const WK_SYSTEM_DEPS: &[&str] = &["fontconfig", "libxrender1", "xfonts-75dpi", "xfonts-base"];
 
-/// Step di test che rompe `dpkg` e poi fallisce: modella "uno step a valle ha
-/// lasciato il sistema in stato inconsistente prima che partisse il rollback".
+/// a test step that breaks the package database and then fails: models "a
+/// downstream step left the system inconsistent before the rollback ran".
 struct BreakDpkgThenFail {
     model: SystemModel,
 }
@@ -579,8 +576,8 @@ fn rollback_cleans_the_apt_delta_even_with_a_broken_dpkg() {
     let model = SystemModel::new(fresh_state());
     let initial = model.snapshot();
 
-    // Catena reale: i pacchetti di sistema vengono installati, poi uno step a
-    // valle muore lasciando dpkg rotto.
+    // the real chain: the system packages are installed, then a downstream step
+    // dies leaving the database broken.
     let mut steps = chain(&model);
     steps.push(Box::new(BreakDpkgThenFail {
         model: model.handle(),
@@ -591,8 +588,8 @@ fn rollback_cleans_the_apt_delta_even_with_a_broken_dpkg() {
     assert!(installer.execute(&mut steps, &ctx).is_err());
 
     let final_state = model.snapshot();
-    // Il cuore della regressione: prima del fix questi 24+ pacchetti restavano
-    // installati perché `apt-get purge` falliva su un dpkg rotto.
+    // the heart of the regression: before the fix these packages stayed
+    // installed, because the purge failed on a broken database.
     for pkg in ["build-essential", "python3-dev", "libpq-dev"] {
         assert!(
             !final_state.packages.contains(pkg),
@@ -610,23 +607,23 @@ fn rollback_cleans_the_apt_delta_even_with_a_broken_dpkg() {
     );
 }
 
-// --- wkhtmltopdf nella catena completa (R3, audit A4.2) ---------------------
+// --- wkhtmltopdf in the full chain (A4.2) -----------------------------------
 
 #[test]
 fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
-    // R0 ha coperto download → verifica → install a livello di step, ma **non**
-    // l'undo: qui il ramo felice gira nella catena e il rollback deve riportare
-    // il sistema a "wkhtmltopdf assente".
+    // the step tests cover download → verify → install but **not** the undo:
+    // here the happy path runs in the chain and the rollback must return the
+    // system to "not installed".
     let dir = tempfile::tempdir().expect("tempdir");
-    // VM minimale come quella di prova: le dipendenze di sistema del `.deb` non
-    // ci sono e vanno risolte dall'installazione (A-RT-1).
+    // a minimal VM like the test one: the package's system dependencies are
+    // missing and must be resolved by the installation (A-RT-1).
     let mut init = fresh_state();
     init.pending_deps = WK_SYSTEM_DEPS.iter().map(|s| s.to_string()).collect();
     let model = SystemModel::new(init);
     let initial = model.snapshot();
     assert!(initial.wk_version.is_none(), "si parte senza wkhtmltopdf");
 
-    // `.deb` finto il cui hash è, per costruzione, quello atteso dalla tabella.
+    // a fake package whose hash is, by construction, the expected one.
     let bytes = b"contenuto .deb di prova".to_vec();
     let probe = dir.path().join("probe.bin");
     std::fs::write(&probe, &bytes).expect("probe");
@@ -641,7 +638,7 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
         dir.path().to_path_buf(),
     );
 
-    // Posizione reale: subito dopo le dipendenze apt.
+    // the real position: right after the system dependencies.
     let mut steps = chain(&model);
     let at = steps
         .iter()
@@ -663,16 +660,16 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
     let mut installer = Installer::new();
     assert!(installer.execute(&mut steps, &c).is_err());
 
-    // Primo tempo: il ramo felice è arrivato fino a `dpkg -i` (se il checksum
-    // non fosse combaciato lo step avrebbe fallito prima).
+    // first half: the happy path reached the install. a checksum mismatch would
+    // have failed the step earlier.
     let mid = photo(&seen);
     assert!(
         mid.packages.contains("wkhtmltox"),
         "download → checksum verificato → installato"
     );
     assert_eq!(mid.wk_version.as_deref(), Some("0.12.6.1"));
-    // A-RT-1: le dipendenze di sistema del `.deb` sono state risolte, non
-    // ignorate. Con `dpkg -i` lo step sarebbe fallito qui.
+    // A-RT-1: the package's dependencies were resolved, not ignored. the direct
+    // install would have failed here.
     for dep in WK_SYSTEM_DEPS {
         assert!(
             mid.packages.contains(*dep),
@@ -680,8 +677,8 @@ fn wkhtmltopdf_is_installed_in_the_chain_and_purged_by_the_rollback() {
         );
     }
 
-    // Secondo tempo: il rollback purga wkhtmltox — ma **non** le sue dipendenze
-    // di sistema, che restano come git/curl del bootstrap (D3).
+    // second half: the rollback purges the package but **not** its system
+    // dependencies, which stay like the bootstrap utilities (D3).
     let final_state = model.snapshot();
     assert!(
         !final_state.packages.contains("wkhtmltox"),

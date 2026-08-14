@@ -1,12 +1,12 @@
-//! `SystemModel`: modello **stateful e coerente** del sistema, per i test di
-//! rollback end-to-end (Fase 12).
+//! `SystemModel`: a **stateful, coherent** model of the system, for the
+//! end-to-end rollback tests.
 //!
-//! A differenza del mock che registra le operazioni, qui ogni operazione mutante
-//! aggiorna uno stato condiviso e ogni undo lo ripristina. Così "il sistema è
-//! tornato al vergine" è verificabile: `stato_finale == stato_iniziale`.
+//! unlike the mock that records operations, here every mutation updates shared
+//! state and every undo restores it, so "the system is back to pristine" is
+//! literally checkable.
 //!
-//! Tutti gli step di una sequenza condividono lo **stesso** modello (handle
-//! `Arc`), così le mutazioni di uno step sono viste dagli undo di un altro.
+//! all the steps of a sequence share the **same** model, so one step's
+//! mutations are visible to another's undo.
 
 #![allow(dead_code)]
 
@@ -19,7 +19,7 @@ use invok::error::StepError;
 use invok::packaging::{Availability, PackageCatalog, PackageManager};
 use invok::system_ops::{OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
 
-/// Stato del sistema modellato. `PartialEq` per confrontare inizio/fine.
+/// the modelled system state; comparable to check start against end.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelState {
     pub packages: HashSet<String>,
@@ -33,51 +33,45 @@ pub struct ModelState {
     pub paths: HashSet<PathBuf>,
     pub symlinks: HashSet<PathBuf>,
     pub ufw_rules: HashSet<String>,
-    /// Config Nginx **caricata in memoria** dal processo in esecuzione: i siti
-    /// abilitati al momento dell'ultimo start/reload. `None` = nginx non attivo.
+    /// the nginx config **loaded in memory** by the running process: the sites
+    /// enabled at the last start or reload. `None` when nginx is not running.
     ///
-    /// Modella la differenza fra *config su disco* e *config servita*: un
-    /// `nginx` che gira continua a servire ciò che ha caricato, anche se i file
-    /// sono cambiati sotto di lui. Senza questa distinzione un rollback può
-    /// sembrare completo (i file sono a posto) mentre il servizio del cliente
-    /// sta ancora servendo la nostra config.
+    /// models the difference between the config *on disk* and the config
+    /// *being served*: a running nginx keeps serving what it loaded. without
+    /// that distinction a rollback can look complete while the customer's
+    /// service is still serving ours.
     pub nginx_loaded_sites: Option<HashSet<PathBuf>>,
-    /// `dpkg` in stato inconsistente: apt rifiuta di operare finché un
-    /// `apt-get install -f` o un `dpkg --configure -a` non lo sistema.
+    /// the package database left inconsistent: the manager refuses to operate
+    /// until a repair fixes it.
     pub dpkg_broken: bool,
-    /// Dipendenze di sistema che un `.deb` locale richiede e che non sono
-    /// presenti (es. `fontconfig`, `xfonts-base` su una VM minimale): le
-    /// installa chi risolve le dipendenze, cioè apt.
+    /// system dependencies a local package needs and that are missing, as on a
+    /// minimal VM: installed by whoever resolves dependencies.
     pub pending_deps: HashSet<String>,
     pub file_contents: HashMap<PathBuf, String>,
-    // Ambiente (non muta): non entra nel confronto oltre a ciò che sopra copre.
+    // environment, which does not mutate and does not enter the comparison.
     pub ufw_available: bool,
     pub ufw_active: bool,
     pub wk_version: Option<String>,
     pub sudo_home: Option<String>,
-    /// Nomi di pacchetto che su questa "release" non esistono: apt non ha un
-    /// candidato installabile (A5.1). Vuoto = tutto installabile.
+    /// package names that do not exist on this "release" (A5.1); empty means
+    /// everything is installable.
     pub packages_without_candidate: HashSet<String>,
-    /// Nomi **virtuali**: nessun candidato reale, ma apt li risolve via
-    /// `Provides` (A5.1-bis).
+    /// **virtual** names: no real candidate, but resolvable (A5.1-bis).
     pub virtual_packages: HashSet<String>,
-    /// L'indice apt parte **stantìo** (macchina su cui `apt-get update` non è
-    /// mai stato eseguito). Default `false` = macchina normale.
+    /// the index starts **stale**, as on a machine never refreshed.
     ///
-    /// È solo la *condizione iniziale*: lo stato dell'indice vive fuori da
-    /// `ModelState` (vedi [`SystemModel`]) proprio perché `apt_update` lo cambia
-    /// e il confronto inizio/fine non deve accorgersene — un indice aggiornato
-    /// non è un artefatto da annullare, è una cache.
+    /// only the *initial* condition: the index's state lives outside
+    /// `ModelState`, because refreshing it must not show up in the start/end
+    /// comparison — a fresh index is a cache, not an artifact to undo.
     pub apt_index_stale: bool,
 }
 
-/// Handle condiviso al modello.
+/// a shared handle to the model.
 #[derive(Clone)]
 pub struct SystemModel {
     state: Arc<Mutex<ModelState>>,
-    /// Indice apt: condiviso fra gli handle (l'update di uno step si vede dagli
-    /// altri) ma **fuori** da `ModelState`, quindi invisibile al confronto
-    /// inizio/fine. Aggiornare l'indice non è un artefatto da annullare.
+    /// the package index: shared between handles, so one step's refresh is
+    /// visible to the others, but **outside** the compared state.
     apt_index_populated: Arc<Mutex<bool>>,
     packages: ModelPackages,
     distro: ModelDistro,
@@ -88,7 +82,7 @@ impl SystemModel {
         let apt_index_populated = Arc::new(Mutex::new(!state.apt_index_stale));
         Self::from_parts(Arc::new(Mutex::new(state)), apt_index_populated)
     }
-    /// Un altro handle allo stesso stato (per un altro step).
+    /// another handle onto the same state, for another step.
     pub fn handle(&self) -> SystemModel {
         Self::from_parts(
             Arc::clone(&self.state),
@@ -110,12 +104,12 @@ impl SystemModel {
             apt_index_populated,
         }
     }
-    /// Snapshot dello stato corrente (per il confronto inizio/fine).
+    /// a snapshot of the current state, for the start/end comparison.
     pub fn snapshot(&self) -> ModelState {
         self.state.lock().expect("lock").clone()
     }
-    /// Modifica lo stato dall'esterno: serve agli step di test che devono
-    /// simulare un danno collaterale (es. "questo step ha lasciato dpkg rotto").
+    /// mutates the state from outside, for test steps that simulate collateral
+    /// damage.
     pub fn mutate(&self, f: impl FnOnce(&mut ModelState)) {
         f(&mut self.state.lock().expect("lock"));
     }
@@ -128,7 +122,7 @@ fn under(entry: &Path, dir: &Path) -> bool {
     entry != dir && entry.starts_with(dir)
 }
 
-/// L'errore che apt restituisce quando `dpkg` è in stato inconsistente.
+/// the error the manager returns on an inconsistent package database.
 fn unmet_dependencies() -> StepError {
     StepError::CommandFailed {
         command: "apt-get".to_string(),
@@ -139,10 +133,10 @@ fn unmet_dependencies() -> StepError {
     }
 }
 
-/// Directory dei siti Nginx abilitati (symlink).
+/// the enabled-sites directory.
 pub const SITES_ENABLED: &str = "/etc/nginx/sites-enabled";
 
-/// I siti attualmente abilitati **su disco**.
+/// the sites currently enabled **on disk**.
 fn enabled_sites(state: &ModelState) -> HashSet<PathBuf> {
     let dir = Path::new(SITES_ENABLED);
     state
@@ -153,9 +147,9 @@ fn enabled_sites(state: &ModelState) -> HashSet<PathBuf> {
         .collect()
 }
 
-/// Il gestore di pacchetti del modello: condivide lo stesso stato del
-/// [`SystemModel`] che lo possiede, così `apt-get install` di uno step si vede
-/// dall'undo di un altro — che è tutto il punto di questo modello.
+/// the model's package manager: shares the state of the [`SystemModel`] that
+/// owns it, so one step's install is visible to another's undo — the whole
+/// point of this model.
 #[derive(Clone)]
 pub struct ModelPackages {
     state: Arc<Mutex<ModelState>>,
@@ -195,8 +189,8 @@ impl PackageManager for ModelPackages {
     }
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
-        // A-RT-2: su un dpkg rotto apt si rifiuta di operare. È ciò che sulla VM
-        // di prova lasciava installati i 24 pacchetti del delta.
+        // A-RT-2: on a broken package database the manager refuses to operate,
+        // which is what left the whole delta installed on the test VM.
         if s.dpkg_broken {
             return Err(unmet_dependencies());
         }
@@ -213,7 +207,7 @@ impl PackageManager for ModelPackages {
     }
     fn try_repair(&self) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
-        // Installa le dipendenze mancanti e configura ciò che era a metà.
+        // installs the missing dependencies and configures what was halfway.
         let deps = std::mem::take(&mut s.pending_deps);
         s.packages.extend(deps);
         s.dpkg_broken = false;
@@ -228,8 +222,8 @@ impl PackageManager for ModelPackages {
         if s.dpkg_broken {
             return Err(unmet_dependencies());
         }
-        // apt risolve le dipendenze di sistema del .deb in un colpo solo: il
-        // pacchetto è configurato e dpkg resta consistente.
+        // the manager resolves the local package's dependencies in one go, so
+        // it ends up configured and the database stays consistent.
         s.packages.insert("wkhtmltox".to_string());
         let deps = std::mem::take(&mut s.pending_deps);
         s.packages.extend(deps);
@@ -249,7 +243,7 @@ impl PackageManager for ModelPackages {
     }
 }
 
-/// Il firewall del modello.
+/// the model's firewall.
 #[derive(Clone)]
 pub struct ModelFirewall {
     state: Arc<Mutex<ModelState>>,
@@ -283,7 +277,7 @@ impl Firewall for ModelFirewall {
     }
 }
 
-/// Le convenzioni di distribuzione del modello.
+/// the model's distribution conventions.
 #[derive(Clone)]
 pub struct ModelDistro {
     firewall: ModelFirewall,
@@ -294,9 +288,8 @@ impl Distro for ModelDistro {
         &self.firewall
     }
 
-    /// Il modello rappresenta una macchina Debian: il cluster lo crea il
-    /// pacchetto, non noi.
-    /// Il modello rappresenta una macchina Debian: niente SELinux.
+    /// the model is a Debian machine: the package creates the cluster.
+    /// the model is a Debian machine: no SELinux.
     fn selinux(&self) -> Option<&dyn invok::distro::Selinux> {
         None
     }
@@ -315,7 +308,7 @@ impl Distro for ModelDistro {
 }
 
 impl SystemOps for SystemModel {
-    // --- query ---------------------------------------------------------------
+    // --- queries --------------------------------------------------------------
     fn user_exists(&self, user: &str) -> bool {
         self.state.lock().expect("l").users.contains(user)
     }
@@ -372,8 +365,8 @@ impl SystemOps for SystemModel {
     fn path_kind(&self, path: &Path) -> PathKind {
         let st = self.state.lock().expect("l");
         if st.symlinks.contains(path) {
-            // Il modello non traccia il target dei symlink: per il default site
-            // vale quello standard, che è ciò che una macchina reale ha.
+            // the model does not track symlink targets, so the default site
+            // gets the standard one, as a real machine has.
             return PathKind::Symlink {
                 target: std::path::PathBuf::from("/etc/nginx/sites-available/default"),
             };
@@ -414,8 +407,9 @@ impl SystemOps for SystemModel {
     fn python_venv_available(&self, _python: &str) -> bool {
         true
     }
-    /// Il modello simula il *sistema*, non l'interprete: un Python coperto dai
-    /// pin di Odoo, così l'e2e non incrocia mai la diagnosi di A-MD-7.
+    /// the model simulates the *system*, not the interpreter: a Python covered
+    /// by Odoo's pins, so the end-to-end tests never cross A-MD-7's
+    /// diagnosis.
     fn python_version(&self, _python: &str) -> Option<(u32, u32)> {
         Some((3, 12))
     }
@@ -432,7 +426,7 @@ impl SystemOps for SystemModel {
         Ok(self.state.lock().expect("l").sudo_home.clone())
     }
 
-    // --- mutazioni (con undo simmetrico) -------------------------------------
+    // --- mutations, with symmetric undos --------------------------------------
     fn create_user(&self, spec: &UserSpec) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
         s.users.insert(spec.name.clone());
@@ -509,7 +503,7 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn create_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
-        // Modella `O_EXCL`: creare sopra un path esistente è un errore.
+        // models `O_EXCL`: creating over an existing path is an error.
         let mut s = self.state.lock().expect("l");
         if s.paths.contains(path) || s.symlinks.contains(path) {
             return Err(StepError::io(
@@ -592,8 +586,8 @@ impl SystemOps for SystemModel {
     }
     fn service_reload(&self, service: &str) -> Result<(), StepError> {
         let mut s = self.state.lock().expect("l");
-        // Un reload rilegge il disco: la config servita si riallinea ai file
-        // **presenti in quel momento**. Solo se il servizio è attivo.
+        // a reload re-reads the disk, so the served config realigns with the
+        // files present **at that moment** — only while the service runs.
         if service == "nginx" && s.svc_active.contains("nginx") {
             s.nginx_loaded_sites = Some(enabled_sites(&s));
         }

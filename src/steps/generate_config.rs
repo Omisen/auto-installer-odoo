@@ -1,15 +1,14 @@
-//! [`GenerateConfig`]: genera `odoo<N>.conf` dal template, in modo reversibile.
+//! [`GenerateConfig`]: renders `odoo<N>.conf` from the template, reversibly.
 //!
-//! Due novità rispetto agli step precedenti:
-//! - **Undo "ripristinante"**: nel caso `Preexisting` l'undo non rimuove il file,
-//!   ne **ripristina il backup** — il file originale del cliente torna al suo
-//!   posto (non sovrascritto, non cancellato).
-//! - **Master password mai world-readable**: il file nasce in un temp privato
-//!   (mode `0600`, owned root), poi viene spostato a destinazione e reso `0640`
-//!   `odoo:odoo`. In nessun istante la password è leggibile da altri utenti.
+//! two novelties over the earlier steps:
+//! - a **restoring undo**: on `Preexisting` it does not remove the file but
+//!   **puts the backup back**, so the customer's original returns unchanged;
+//! - the **master password is never world-readable**: the file is born in a
+//!   private temporary and only then moved into place and made group-readable
+//!   by `odoo`.
 //!
-//! Il template è **embedded** nel binario (`include_str!`): nessuna dipendenza
-//! da file esterni a runtime.
+//! the template is **embedded** in the binary, so nothing external is needed at
+//! runtime.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -21,19 +20,19 @@ use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
 use crate::system_ops::SystemOps;
 
-/// Template `odoo.conf`, incorporato nel binario.
+/// the `odoo.conf` template, embedded in the binary.
 const CONFIG_TEMPLATE: &str = include_str!("../../templates/odoo.conf.tpl");
 const CONF_MODE: u32 = 0o640;
 
-/// Snapshot serializzabile.
+/// the serialisable snapshot.
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct GenerateConfigSnapshot {
     pub prestate: PreState,
-    /// Path del backup creato quando si sovrascrive un file preesistente.
+    /// path of the backup taken when overwriting a pre-existing file.
     pub backup_path: Option<String>,
 }
 
-/// Genera `odoo<N>.conf` (reversibile).
+/// renders `odoo<N>.conf`, reversibly.
 pub struct GenerateConfig {
     ops: Box<dyn SystemOps>,
     snap: GenerateConfigSnapshot,
@@ -52,15 +51,14 @@ impl GenerateConfig {
             .join(format!("odoo{}.conf", ctx.odoo_version_short))
     }
 
-    /// Path del file temporaneo privato, nella **stessa** directory della
-    /// destinazione (stesso filesystem → rename atomico).
+    /// the private temporary's path, in the **same** directory as the
+    /// destination so the final move is an atomic rename.
     ///
-    /// Il nome è imprevedibile e il file viene creato con `O_EXCL | O_NOFOLLOW`
-    /// ([`SystemOps::create_private_file`]): la install dir è posseduta
-    /// dall'utente `odoo` mentre `run` gira come **root**, quindi un path
-    /// prevedibile permetterebbe di pre-piazzarci un symlink e farci scrivere
-    /// attraverso — sia un file di sistema arbitrario, sia il contenuto reso,
-    /// che porta le password.
+    /// the name is unpredictable and the file is created fail-closed: the
+    /// install dir belongs to `odoo` while `run` is **root**, so a predictable
+    /// path would let a symlink be planted and written through — either onto an
+    /// arbitrary system file, or to capture the rendered contents, which carry
+    /// the passwords.
     fn temp_path(dest: &std::path::Path) -> std::path::PathBuf {
         crate::system_ops::private_temp_path(dest, "odoo.conf")
     }
@@ -90,7 +88,7 @@ impl Step for GenerateConfig {
 
         let dest = Self::dest(ctx);
 
-        // Backup se sovrascriviamo un file esistente (per un undo ripristinante).
+        // back up an existing file, so the undo can restore it.
         if self.snap.prestate == PreState::Preexisting {
             let backup = format!("{}.bak.{}", dest.display(), unix_timestamp());
             self.ops.copy_file(&dest, std::path::Path::new(&backup))?;
@@ -98,18 +96,18 @@ impl Step for GenerateConfig {
             warn!(backup = %backup, "run: file esistente, backup creato prima di sovrascrivere");
         }
 
-        // Rendering + validazione (puri; il plaintext della password vive solo
-        // dentro `content`, mai loggato).
+        // render and validate; the plaintext password lives only inside
+        // `content` and is never logged.
         let content = render_config(CONFIG_TEMPLATE, ctx);
         validate_rendered(&content)?;
 
-        // Scrittura privata → move → ownership. La password non è mai in un file
-        // world-readable in nessun momento.
+        // private write → move → ownership: the password is never in a
+        // world-readable file at any instant.
         let tmp = Self::temp_path(&dest);
         self.ops.create_private_file(&tmp, &content)?;
-        // Il temp ha un nome casuale: se il move fallisce nessuno lo
-        // riconoscerebbe più come nostro, quindi lo rimuoviamo subito (contiene
-        // le password: non va lasciato in giro).
+        // the temporary has a random name, so a failed move would leave
+        // something nobody could recognise as ours — and it holds the
+        // passwords.
         if let Err(e) = self.ops.move_file(&tmp, &dest) {
             let _ = self.ops.remove_file(&tmp);
             return Err(e);
@@ -133,7 +131,7 @@ impl Step for GenerateConfig {
         let dest = Self::dest(ctx);
         match self.snap.prestate {
             PreState::CreatedByUs => {
-                // L'abbiamo creato noi: rm -f.
+                // ours: remove it.
                 if let Err(e) = self.ops.remove_file(&dest) {
                     warn!(error = %e, "undo: rimozione odoo.conf fallita, proseguo (best-effort)");
                 } else {
@@ -141,7 +139,7 @@ impl Step for GenerateConfig {
                 }
             }
             PreState::Preexisting => {
-                // Ripristina il file originale del cliente dal backup.
+                // put the customer's original back.
                 match &self.snap.backup_path {
                     Some(backup) => {
                         let backup_path = std::path::Path::new(backup);
@@ -169,9 +167,9 @@ impl Step for GenerateConfig {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// Reidrata anche il `backup_path`: senza, un undo su `Preexisting` non
-    /// saprebbe da dove ripristinare il `.conf` del cliente e si limiterebbe a
-    /// un warning, lasciando al suo posto il file che abbiamo scritto noi.
+    /// rehydrates the `backup_path` too: without it an undo on `Preexisting`
+    /// would not know where to restore the customer's file from, and would
+    /// leave ours in place with a warning.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;
@@ -179,22 +177,21 @@ impl Step for GenerateConfig {
     }
 }
 
-/// Il `data_dir` di Odoo: dove finiscono il **filestore** (gli allegati dei
-/// record) e le sessioni.
+/// Odoo's `data_dir`: where the **filestore** and the sessions live.
 ///
-/// Sta qui perché è questo step a scriverlo nel `.conf`, ma non è più solo un
-/// valore del template: [`SetupDataDir`](crate::steps::setup_data_dir) crea
-/// quella directory in modo reversibile, e dovrà creare *esattamente* il path
-/// che Odoo poi userà. Due `format!` identici in due file sono la premessa di un
-/// rollback che pulisce la directory sbagliata, quindi la formula vive in un
-/// solo posto.
+/// here because this step writes it into the config, but no longer only a
+/// template value: [`SetupDataDir`](crate::steps::setup_data_dir) creates that
+/// directory reversibly and must create *exactly* the path Odoo will use. two
+/// identical `format!`s in two files are the premise of a rollback cleaning the
+/// wrong directory.
 pub fn data_dir(ctx: &Context) -> std::path::PathBuf {
     ctx.odoo_home.join(".local").join("share").join("Odoo")
 }
 
-/// Renderizza il template sostituendo i `${VAR}` con i valori del Context, poi
-/// normalizza le direttive rimaste vuote a `False` (comportamento del Bash,
-/// atteso da Odoo). La password in chiaro entra qui e **solo qui**.
+/// renders the template, then normalises directives left empty to `False`,
+/// which is what Odoo expects.
+///
+/// the plaintext password enters here and **only** here.
 pub fn render_config(template: &str, ctx: &Context) -> String {
     let install = ctx.install_dir.to_string_lossy();
     let addons =
@@ -208,7 +205,7 @@ pub fn render_config(template: &str, ctx: &Context) -> String {
         .unwrap_or_default();
     let proxy_mode = if ctx.with_nginx { "True" } else { "False" };
 
-    // Unico varco al plaintext delle password (admin + db).
+    // the single opening onto the plaintext passwords.
     let admin = ctx.admin_passwd.expose();
     let db_password = ctx.db_password.expose();
 
@@ -245,8 +242,8 @@ pub fn render_config(template: &str, ctx: &Context) -> String {
     normalize_empty_directives(&out)
 }
 
-/// Rende `False` ogni direttiva `key =` rimasta senza valore (Odoo rifiuta i
-/// valori vuoti). Non tocca commenti (`;`) né direttive con valore.
+/// turns every valueless `key =` directive into `key = False`, which Odoo
+/// requires. comments and directives with values are untouched.
 pub fn normalize_empty_directives(content: &str) -> String {
     let mut out: Vec<String> = Vec::new();
     for line in content.lines() {
@@ -268,8 +265,8 @@ pub fn normalize_empty_directives(content: &str) -> String {
     joined
 }
 
-/// Validazione del `.conf` prodotto: `[options]`, `addons_path` e `http_port`
-/// valorizzati, nessun placeholder `${...}` residuo.
+/// validates the rendered config: the section is present, the required
+/// directives have values, and no placeholder is left.
 pub fn validate_rendered(content: &str) -> Result<(), StepError> {
     if !content.lines().any(|l| l.trim() == "[options]") {
         return Err(StepError::Precondition(
@@ -294,7 +291,7 @@ pub fn validate_rendered(content: &str) -> Result<(), StepError> {
     Ok(())
 }
 
-/// `true` se esiste una riga `key = <valore non vuoto>`.
+/// `true` when a `key = <non-empty value>` line exists.
 fn has_valued_directive(content: &str, key: &str) -> bool {
     content.lines().any(|line| {
         let line = line.trim_start();

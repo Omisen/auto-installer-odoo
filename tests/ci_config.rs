@@ -1,13 +1,12 @@
-//! Coerenza della configurazione usata dalla CI di integrazione (R5).
+//! consistency of the configuration the integration CI uses.
 //!
-//! `configs/ci.env`, `scripts/ci/integration-test.sh` e il parser `.env` devono
-//! dire la stessa cosa. Se divergono, il sintomo arriva dopo **quaranta minuti**
-//! di job — o peggio, non arriva affatto: una chiave scritta male non è un
-//! errore, è un warning, e l'installer prosegue con i default. Il test di
-//! integrazione andrebbe a verificare un database `odoo` che nessuno ha creato,
-//! e passerebbe o fallirebbe per il motivo sbagliato.
+//! the `.env` file, the integration script and the `.env` parser must say the
+//! same thing. when they diverge the symptom arrives after **forty minutes** of
+//! job — or worse, never: a misspelled key is a warning, not an error, and the
+//! installer carries on with defaults. the integration test would then check a
+//! database nobody created, and pass or fail for the wrong reason.
 //!
-//! Questi test girano nella CI veloce (`test.yml`), su mock, in millisecondi.
+//! these run in the fast CI, on mocks, in milliseconds.
 
 use std::path::Path;
 
@@ -17,11 +16,11 @@ const CI_ENV: &str = "configs/ci.env";
 const CI_NGINX_ENV: &str = "configs/ci-nginx.env";
 const CI_SCRIPT: &str = "scripts/ci/integration-test.sh";
 
-/// Le chiavi che `config::parse_env_file` riconosce.
+/// the keys the `.env` parser recognises.
 ///
-/// Duplicate qui di proposito, come **guardia**: la fonte di verità resta il
-/// `match` in `config.rs`. Se qualcuno aggiunge una chiave a `ci.env` che il
-/// parser ignorerebbe in silenzio, questo elenco la fa emergere subito.
+/// duplicated here on purpose, as a **guard**: the source of truth stays in the
+/// parser. a key added to the CI config that the parser would silently ignore
+/// surfaces here at once.
 const KNOWN_KEYS: &[&str] = &[
     "ODOO_VERSION",
     "ODOO_USER",
@@ -35,15 +34,16 @@ const KNOWN_KEYS: &[&str] = &[
     "WITH_NGINX",
     "NGINX_SERVER_NAME",
     "NGINX_OPEN_HTTPS_PORT",
-    // Nome storico, ancora riconosciuto: vive nei `.env` dei clienti (A-V3-6).
+    // the historical name, still recognised: it lives in customers' files
+    // (A-V3-6).
     "NGINX_ENABLE_SSL",
 ];
 
 fn resolve_ci_env() -> ResolvedConfig {
     let raw = config::parse_env_file(Path::new(CI_ENV)).expect("configs/ci.env deve esistere");
     let empty = config::RawConfig::default();
-    // `interactive = false`: è come gira in CI, senza TTY. Il flag conta —
-    // in non-interattivo la password debole 'admin' è un hard-stop.
+    // non-interactive, the way CI runs it. the flag matters: there the weak
+    // default password is a hard stop.
     ResolvedConfig::resolve(&empty, &raw, &empty, false)
         .expect("configs/ci.env deve risolvere senza intervento interattivo")
 }
@@ -78,11 +78,11 @@ fn assert_keys_are_known(file: &str) {
     }
 }
 
-/// B-V3-7: la config con nginx differisce da quella base **solo** per nginx.
+/// B-V3-7: the nginx config differs from the base one **only** in nginx.
 ///
-/// Se divergessero anche su altro, un fallimento che compare solo nel job nginx
-/// non sarebbe più attribuibile a nginx — e il valore di avere due job
-/// identici-tranne-uno starebbe tutto lì.
+/// if they diverged elsewhere, a failure appearing only in the nginx job would
+/// no longer be attributable to nginx — and that attribution is the whole value
+/// of having two identical-but-one jobs.
 #[test]
 fn the_nginx_ci_config_differs_only_by_nginx() {
     let base = config::parse_env_file(Path::new(CI_ENV)).expect("ci.env");
@@ -108,9 +108,10 @@ fn the_nginx_ci_config_differs_only_by_nginx() {
     );
 }
 
-/// Il flag che apre la 443 resta **fuori** dalla config di CI, e non per caso:
-/// su un runner `ufw` è installato ma inattivo, quindi lo step uscirebbe subito
-/// senza aggiungere copertura — e il flag comunque non tocca il vhost (A-V3-6).
+/// the flag that opens 443 stays **out** of the CI config, and not by accident:
+/// on a runner the firewall is installed but inactive, so the step would exit
+/// at once without adding coverage — and the flag does not touch the vhost
+/// anyway (A-V3-6).
 #[test]
 fn the_nginx_ci_config_does_not_ask_for_the_https_port() {
     let con_nginx = config::parse_env_file(Path::new(CI_NGINX_ENV)).expect("ci-nginx.env");
@@ -121,10 +122,10 @@ fn the_nginx_ci_config_does_not_ask_for_the_https_port() {
 fn ci_env_resolves_to_what_the_integration_script_expects() {
     let cfg = resolve_ci_env();
 
-    // Il nome del database è il perno del test: NON deve essere il default.
-    // Se il rollback ricavasse i nomi dai default invece che dalla config
-    // persistita (regressione A-R4-1), cercherebbe 'odoo' e lascerebbe
-    // 'citest' sul sistema — e il test di pulizia lo vedrebbe.
+    // the database name is the test's pivot: it must NOT be the default. were
+    // the rollback to take names from defaults instead of the persisted config,
+    // it would look for the wrong one and leave ours behind — and the
+    // cleanliness check would see it.
     assert_eq!(cfg.db_name, "citest");
     assert_ne!(
         cfg.db_name, "odoo",
@@ -150,10 +151,10 @@ fn ci_env_resolves_to_what_the_integration_script_expects() {
 
 #[test]
 fn the_ci_admin_password_is_not_the_weak_default() {
-    // In non-interattivo `resolve` rifiuta la password 'admin'
-    // (InsecureAdminNonInteractive): con quel valore la CI non partirebbe
-    // nemmeno. `resolve_ci_env` lo prova già col suo `expect`; qui si dice
-    // perché, così chi tocca il file sa cosa sta toccando.
+    // non-interactively the resolution refuses the weak default password, so
+    // with that value the CI would not even start. the helper above already
+    // proves it; this says why, so whoever edits the file knows what they are
+    // touching.
     let cfg = resolve_ci_env();
     assert_ne!(
         cfg.admin_passwd.expose(),
@@ -165,10 +166,9 @@ fn the_ci_admin_password_is_not_the_weak_default() {
 
 #[test]
 fn the_integration_script_and_ci_env_agree_on_the_artifacts() {
-    // I default dello script devono combaciare coi valori del .env: lo script
-    // verifica *per nome* il database, l'utente e la porta, e un disallineamento
-    // renderebbe le asserzioni vacue (cercherebbero artefatti che nessuno ha
-    // creato) invece di farle fallire.
+    // the script's defaults must match the file's values: it checks database,
+    // user and port *by name*, and a mismatch would make the assertions vacuous
+    // — looking for artifacts nobody created — instead of failing.
     let script = std::fs::read_to_string(CI_SCRIPT).expect("scripts/ci/integration-test.sh");
     let cfg = resolve_ci_env();
 
@@ -197,9 +197,8 @@ fn the_integration_script_is_executable_and_syntactically_valid() {
         "lo script di integrazione deve avere il bit di esecuzione"
     );
 
-    // `bash -n` non esegue nulla: analizza soltanto la sintassi. Uno script
-    // rotto verrebbe scoperto altrimenti solo a metà di un job da 40 minuti,
-    // dopo aver già installato mezzo sistema.
+    // a syntax-only check runs nothing. a broken script would otherwise surface
+    // halfway through a forty-minute job, with half a system already installed.
     let status = std::process::Command::new("bash")
         .args(["-n", CI_SCRIPT])
         .status()
@@ -207,25 +206,25 @@ fn the_integration_script_is_executable_and_syntactically_valid() {
     assert!(status.success(), "sintassi non valida in {CI_SCRIPT}");
 }
 
-// --- A5.3: le costanti "ultima release provata" seguono la CI vera ----------
+// --- A5.3: the "newest tested release" constants follow the real CI ---------
 
 const WORKFLOW: &str = ".github/workflows/integration.yml";
 
-/// `NEWEST_TESTED_*` dicono all'utente su cosa
-/// l'installer viene provato davvero. Se divergessero dalla matrice della CI,
-/// l'avviso mentirebbe in una delle due direzioni: tacerebbe su una release non
-/// provata, o allarmerebbe su una che proviamo.
+/// the constants tell the user what the installer is really tested on.
+/// diverging from the CI matrix would make the warning lie in one of two
+/// directions: silent about an untested release, or alarming about one we do
+/// test.
 ///
-/// La fonte di verità resta il workflow; queste costanti la inseguono, e questo
-/// test lo rende obbligatorio invece che auspicabile.
+/// the workflow stays the source of truth; the constants chase it, and this
+/// test makes that mandatory rather than desirable.
 #[test]
 fn the_newest_tested_releases_match_the_ci_matrix() {
     use invok::checks::{NEWEST_TESTED_DEBIAN, NEWEST_TESTED_FEDORA, NEWEST_TESTED_UBUNTU};
 
     let wf = std::fs::read_to_string(WORKFLOW).expect("il workflow di integrazione deve esistere");
 
-    // Ubuntu: `os: [ubuntu-22.04, ubuntu-24.04]` più i `runs-on:` dei job
-    // singoli, che non passano dalla matrice.
+    // the matrix entries plus the individual jobs' runners, which do not go
+    // through it.
     let ubuntu_max = versions_in(&wf, "ubuntu-")
         .into_iter()
         .max()
@@ -236,7 +235,7 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
          l'avviso su release non testate direbbe il falso"
     );
 
-    // Debian: `image: ["debian:12", "debian:11"]`.
+    // the container images.
     let debian_max = versions_in(&wf, "debian:")
         .into_iter()
         .max()
@@ -246,15 +245,13 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
         "la CI gira su Debian {debian_max:?} ma la costante dice {NEWEST_TESTED_DEBIAN:?}"
     );
 
-    // Fedora, e qui la matrice dice DUE cose diverse.
+    // here the matrix says TWO different things: blocking entries, where a red
+    // stops everything, and a PROBE on a never-supported release, tolerated red
+    // because an expected red teaches people to ignore reds.
     //
-    // Ci sono voci bloccanti (un rosso ferma tutto) e una SONDA su una release
-    // mai supportata, tollerata in rosso perché un rosso che ci si aspetta di
-    // vedere insegna a ignorare i rossi. La costante deve seguire le sole voci
-    // bloccanti: `is_newer_than_tested` promette «release su cui l'installer
-    // viene provato», e una release il cui fallimento non ferma nessuno non è
-    // provata — è osservata. Contarla direbbe il falso proprio nel senso che
-    // rende l'avviso utile.
+    // the constant must follow the blocking entries only: the warning promises
+    // "releases the installer is tested on", and a release whose failure stops
+    // nobody is observed, not tested.
     let fedora_bloccanti = versions_in(&senza_sonde(&wf), "fedora:");
     let fedora_max = fedora_bloccanti
         .into_iter()
@@ -265,11 +262,10 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
         "la CI gira su Fedora {fedora_max:?} ma la costante dice {NEWEST_TESTED_FEDORA:?}"
     );
 
-    // E il marcatore non dev'essere un modo per zittire la guardia: una sonda
-    // ha senso solo su una release PIÙ RECENTE di quelle provate davvero.
-    // Marcare una voce bloccante come sonda la farebbe sparire dal confronto
-    // qui sopra senza che nulla lo dica — la stessa forma del difetto che
-    // questo test esiste per impedire, un livello più su.
+    // and the marker must not become a way to silence the guard: a probe only
+    // makes sense on a release NEWER than the tested ones. marking a blocking
+    // entry as a probe would remove it from the comparison above with nothing
+    // to say so — the same defect this test exists to prevent, one level up.
     for sonda in versions_in(&sole_sonde(&wf), "fedora:") {
         assert!(
             sonda > NEWEST_TESTED_FEDORA,
@@ -280,11 +276,10 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
     }
 }
 
-/// Il workflow senza le righe marcate come sonda non bloccante.
+/// the workflow without the lines marked as a non-blocking probe.
 ///
-/// Testuale e non strutturato, come tutto il resto di questa guardia: il test
-/// legge il file com'è, senza portarsi dietro un parser YAML per una domanda
-/// che si risolve guardando una riga.
+/// textual, like the rest of this guard: the file is read as it is, without a
+/// YAML parser for a question one line answers.
 fn senza_sonde(wf: &str) -> String {
     wf.lines()
         .filter(|riga| !riga.contains(MARCATORE_SONDA))
@@ -292,7 +287,7 @@ fn senza_sonde(wf: &str) -> String {
         .join("\n")
 }
 
-/// Solo le righe marcate come sonda.
+/// only the lines marked as a probe.
 fn sole_sonde(wf: &str) -> String {
     wf.lines()
         .filter(|riga| riga.contains(MARCATORE_SONDA))
@@ -300,11 +295,11 @@ fn sole_sonde(wf: &str) -> String {
         .join("\n")
 }
 
-/// Il commento che marca una voce di matrice come sonda tollerata in rosso.
-/// Deve combaciare con `.github/workflows/integration.yml`.
+/// the comment marking a matrix entry as a probe tolerated in red. must match
+/// the workflow.
 const MARCATORE_SONDA: &str = "sonda-non-bloccante";
 
-/// Tutte le versioni che seguono `prefisso` nel testo, come `(major, minor)`.
+/// every version following `prefix` in the text, as `(major, minor)`.
 fn versions_in(text: &str, prefisso: &str) -> Vec<(u32, u32)> {
     let mut out = Vec::new();
     for (_, resto) in text
@@ -326,20 +321,18 @@ fn versions_in(text: &str, prefisso: &str) -> Vec<(u32, u32)> {
     out
 }
 
-// --- M5: le due confezioni devono contenere la stessa cosa ------------------
+// --- M5: the two packages must contain the same thing -----------------------
 
-/// `.deb` e `.rpm` depositano **lo stesso binario nello stesso posto**.
+/// both packages place **the same binary in the same place**.
 ///
-/// I due strumenti (`cargo deb`, `cargo generate-rpm`) non si parlano e leggono
-/// blocchi di metadati diversi: la lista degli asset è scritta due volte, in due
-/// sintassi diverse, nello stesso file. Due liste che devono coincidere e
-/// nessuno che lo verifichi è il modo in cui si finisce per pubblicare un `.rpm`
-/// che non contiene il binario — e nessuno se ne accorge finché un utente non
-/// prova a installarlo.
+/// the two tools do not talk to each other and read different metadata blocks:
+/// the asset list is written twice, in two syntaxes, in the same file. two
+/// lists that must coincide with nobody checking is how one ends up publishing
+/// a package without the binary in it, unnoticed until a user tries to install
+/// it.
 ///
-/// Non si verifica il *contenuto* dei pacchetti (servirebbe generarli, e i due
-/// strumenti non sono installati qui): si verifica che le due dichiarazioni
-/// promettano la stessa cosa.
+/// the packages' *contents* are not checked — that would mean building them —
+/// only that the two declarations promise the same thing.
 #[test]
 fn the_deb_and_the_rpm_ship_the_same_binary() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
@@ -357,9 +350,9 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
     let rpm = blocco("[package.metadata.generate-rpm]");
 
     for (nome, testo, destinazione) in [
-        // cargo-deb: ["sorgente", "destinazione/", "mode"]
+        // one tool: ["source", "destination/", "mode"]
         ("deb", &deb, "usr/bin/"),
-        // cargo-generate-rpm: { source, dest, mode }
+        // the other: { source, dest, mode }
         ("rpm", &rpm, "/usr/bin/invok"),
     ] {
         assert!(
@@ -380,16 +373,14 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
         );
     }
 
-    // La promessa che vale per tutte e due: impacchettano il TOOL, non Odoo.
-    // Nessun servizio, nessuna dipendenza su postgres/nginx — quelle le crea
-    // l'installer a runtime, ed è ciò che rende il pacchetto innocuo da
-    // installare.
+    // the promise both make: they package the TOOL, not Odoo. no service, no
+    // dependency on the databases or the proxy — the installer creates those at
+    // runtime, which is what makes the package harmless to install.
     //
-    // Si guardano le **righe di dichiarazione**, non il testo intero: la
-    // descrizione nomina PostgreSQL e nginx a ragione (l'installer li
-    // configura), e un controllo che cercasse quelle parole ovunque
-    // fallirebbe su una frase corretta. Prima versione di questo test: proprio
-    // così.
+    // the **declaration lines** are inspected, not the whole text: the
+    // description names those programs rightly, and a check searching the words
+    // anywhere would fail on a correct sentence. this test's first version did
+    // exactly that.
     let dichiarazioni = |testo: &str, chiavi: &[&str]| -> String {
         testo
             .lines()
@@ -415,25 +406,23 @@ fn the_deb_and_the_rpm_ship_the_same_binary() {
     }
 }
 
-/// I comandi di installazione del README puntano alla versione **di questo
-/// pacchetto**, non a una passata.
+/// the README's install commands point at **this package's** version, not a
+/// past one.
 ///
-/// Il README non usa più variabili di shell (`VER=…`): i comandi sono stringhe
-/// intere, copiabili senza leggerle. È la forma giusta per chi installa — e
-/// moltiplica per **undici** i punti in cui una versione può restare indietro.
-/// Due fonti che devono coincidere e nessuno che lo verifichi è il modo in cui
-/// si finisce per far scaricare ai clienti la release precedente, in silenzio:
-/// il comando funziona, il file esiste, e nessuno se ne accorge.
+/// the commands are whole strings, copyable without reading — the right shape
+/// for whoever installs, and **eleven** places where a version can fall behind.
+/// two sources that must coincide with nobody checking is how customers end up
+/// downloading the previous release in silence: the command works, the file
+/// exists, and nothing signals it.
 ///
-/// Si verifica la corrispondenza con `Cargo.toml`, che è la versione che il
-/// workflow di release taggherà — quindi il README è aggiornato quando lo è il
-/// manifesto, e non «quando qualcuno si ricorda».
+/// the correspondence is with the manifest, the version the release workflow
+/// will tag, so the README is current when the manifest is and not "when
+/// somebody remembers".
 ///
-/// **Il numero della release non era però l'unico modo di sbagliare il nome del
-/// file** (A-V3-17): la v2.3.0 aveva la versione giusta ovunque e il `.deb`
-/// restava irraggiungibile, perché al nome mancava la revisione `-1` che
-/// `cargo-deb` aggiunge. Da qui i nomi composti da [`package_file_name`] invece
-/// che scritti a mano qui sotto.
+/// **the release number was not the only way to get the filename wrong**
+/// (A-V3-17): one release had the right version everywhere and an unreachable
+/// package, because the name lacked the revision the packaging tool adds. hence
+/// composed names instead of hand-written ones.
 #[test]
 fn the_readme_download_commands_point_at_this_version() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
@@ -444,7 +433,7 @@ fn the_readme_download_commands_point_at_this_version() {
         .expect("Cargo.toml deve dichiarare una versione");
     let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
 
-    // Ogni URL di download nomina QUESTA versione.
+    // every download URL names THIS version.
     let mut url = 0;
     for pezzo in readme.split("releases/download/v").skip(1) {
         url += 1;
@@ -460,8 +449,8 @@ fn the_readme_download_commands_point_at_this_version() {
          trovati {url}: se la sezione è cambiata, questa guardia va aggiornata insieme"
     );
 
-    // E i nomi dei file, che si compongono con la REVISIONE dichiarata nel
-    // manifesto — non con una scritta a mano qui (A-V3-17).
+    // and the filenames, composed with the REVISION declared in the manifest —
+    // not one written by hand here (A-V3-17).
     for atteso in [package_file_name("deb"), package_file_name("rpm")] {
         assert!(
             readme.contains(&atteso),
@@ -471,20 +460,18 @@ fn the_readme_download_commands_point_at_this_version() {
     }
 }
 
-/// La revisione del pacchetto è **dichiarata** in `Cargo.toml`, non ereditata.
+/// the package revision is **declared** in the manifest, not inherited.
 ///
-/// **A-V3-17.** Il `.deb` della v2.3.0 si chiama `invok_2.3.0-1_amd64.deb`
-/// e il README ne nominava uno senza `-1`: chi seguiva il comando di
-/// installazione otteneva un 404. Il `-1` c'era perché `cargo-deb` aggiunge una
-/// revisione di default — cioè il nome dell'artefatto, che il README promette
-/// per intero, veniva deciso **fuori dal repository**, da un default che può
-/// cambiare fra versioni dello strumento.
+/// **A-V3-17.** one release's package carried a revision suffix the README's
+/// name lacked, so following the install command gave a 404. the suffix was
+/// there because the packaging tool adds one by default — the artifact's name,
+/// which the README promises in full, was decided **outside the repository** by
+/// a default that can change between tool versions.
 ///
-/// Scriverla qui non è pignoleria: è ciò che rende la guardia qui sopra capace
-/// di dire di no. Finché il nome atteso era una stringa scritta a mano nel test,
-/// il test e il README ripetevano la stessa congettura e nessuno dei due leggeva
-/// lo strumento — un controllo che nello scenario per cui esiste non può fallire,
-/// la firma ricorrente di questo progetto.
+/// declaring it is what lets the guard above say no. while the expected name
+/// was a hand-written string, the test and the README repeated the same
+/// conjecture and neither read the tool: a check that cannot fail in the
+/// scenario it exists for.
 #[test]
 fn the_package_revision_is_declared_not_inherited() {
     for (sezione, chiave) in [
@@ -499,11 +486,11 @@ fn the_package_revision_is_declared_not_inherited() {
     }
 }
 
-/// Il valore di `chiave` dentro `sezione` di `Cargo.toml`, se c'è.
+/// the value of `key` inside `section` of the manifest, if present.
 ///
-/// Parsing per sezione e non per riga: `release` da solo comparirebbe anche in
-/// un `[profile.release]`, e leggere la chiave giusta nella sezione sbagliata è
-/// il modo in cui una guardia sembra funzionare mentre misura altro.
+/// parsed by section and not by line: a bare key name also appears in a profile
+/// block, and reading the right key in the wrong section is how a guard looks
+/// like it works while measuring something else.
 fn manifest_value(sezione: &str, chiave: &str) -> Option<String> {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
     let inizio = manifest.find(sezione)? + sezione.len();
@@ -521,14 +508,13 @@ fn manifest_value(sezione: &str, chiave: &str) -> Option<String> {
     })
 }
 
-/// Il nome del file che quella confezione produce, composto dal manifesto.
+/// the filename that packaging produces, composed from the manifest.
 ///
-/// La **forma** del nome resta scritta qui — è convenzione di `cargo-deb` e di
-/// `cargo-generate-rpm`, non un dato che il repository possieda — mentre versione
-/// e revisione si leggono. Il che lascia un residuo di congettura, ed è
-/// dichiarato: a verificarlo contro il file **davvero prodotto** è
-/// `release.yml`, che il pacchetto ce l'ha in mano prima di pubblicarlo. Questa
-/// è la guardia veloce; quella è l'ultima parola.
+/// the name's **shape** stays written here — it is the tools' convention, not a
+/// datum the repository owns — while version and revision are read. that leaves
+/// a residue of conjecture, and it is declared: checking against the file
+/// **actually produced** is the release workflow's job, which holds the package
+/// before publishing it. this is the fast guard; that one is the last word.
 fn package_file_name(confezione: &str) -> String {
     let versione = manifest_value("[package]", "version").expect("versione nel manifesto");
     match confezione {
@@ -545,13 +531,12 @@ fn package_file_name(confezione: &str) -> String {
     }
 }
 
-/// La versione che il binario dichiara è quella di `Cargo.toml`.
+/// the version the binary declares is the manifest's.
 ///
-/// `INSTALLER_VERSION` viene da `env!("CARGO_PKG_VERSION")`, quindi oggi non può
-/// divergere — e questo test esiste proprio per il giorno in cui qualcuno,
-/// volendo «renderla configurabile», la trasformasse in una costante scritta a
-/// mano. È la stessa guardia del README, applicata al terzo consumatore della
-/// versione: flag, log e manifesto devono dire tutti lo stesso numero (A-V3-16).
+/// it comes from the compile-time environment, so today it cannot diverge — the
+/// test exists for the day somebody turns it into a hand-written constant to
+/// "make it configurable". the README's guard applied to the version's third
+/// consumer: flag, log and manifest must all say the same number (A-V3-16).
 #[test]
 fn the_version_the_binary_reports_is_the_one_in_the_manifest() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
@@ -590,9 +575,9 @@ fn every_package_face_disclaims_affiliation_with_odoo() {
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
     let readme = std::fs::read_to_string("README.md").expect("leggo README.md");
 
-    // The metadata block, isolated: searching the whole manifest would pass even
-    // if the disclaimer lived only in a comment — and a comment ends up in no
-    // package.
+    // The metadata block, isolated: searching the whole manifest would pass
+    // even if the disclaimer lived only in a comment — and a comment ends up in
+    // no package.
     let blocco = |intestazione: &str| -> String {
         let inizio = manifest
             .find(intestazione)
@@ -619,9 +604,9 @@ fn every_package_face_disclaims_affiliation_with_odoo() {
             testo.contains("Odoo S.A."),
             "{dove}: the disclaimer must name the trademark holder"
         );
-        // Case-insensitive: the sentence opens a paragraph in one place and sits
-        // mid-sentence in another, and freezing the capital letter would fail on
-        // a correct text.
+        // Case-insensitive: the sentence opens a paragraph in one place and
+        // sits mid-sentence in another, and freezing the capital letter would
+        // fail on a correct text.
         assert!(
             testo
                 .to_lowercase()
@@ -631,21 +616,19 @@ fn every_package_face_disclaims_affiliation_with_odoo() {
     }
 }
 
-// --- Le due confezioni installano lo STESSO alias -------------------------
+// --- both packages install the SAME alias -----------------------------------
 
-/// `.deb` e `.rpm` creano lo stesso alias `vok`, con le stesse due cautele.
+/// both packages create the same short alias, with the same two cautions.
 ///
-/// Gli script sono quattro file distinti perché le **guardie** devono divergere:
-/// `postinst` riceve `configure`, `%post` non riceve niente di utile; `postrm`
-/// riceve `remove`/`upgrade`, `%postun` riceve il numero di installazioni
-/// rimaste (`0` = rimozione vera). Quella parte è convenzione del gestore di
-/// pacchetti e non si può unificare.
+/// the maintainer scripts are four separate files because the **guards** must
+/// diverge: each packaging convention passes different arguments, and that part
+/// cannot be unified.
 ///
-/// Ciò che invece **non** deve divergere è l'AZIONE, ed è quella che si verifica
-/// qui: stesso link, stesso bersaglio, e le due cautele — non sovrascrivere un
-/// file di qualcun altro, non rimuovere un link ripuntato altrove. Senza questo
-/// test si avrebbero due copie della stessa logica in due formati diversi, che è
-/// il modo in cui in questo progetto una delle due resta indietro.
+/// what must **not** diverge is the ACTION, and that is what is checked here:
+/// same link, same target, and the two cautions — do not overwrite somebody
+/// else's file, do not remove a link repointed elsewhere. without this test
+/// there would be two copies of one logic in two formats, which is how one of
+/// them falls behind.
 #[test]
 fn the_deb_and_the_rpm_install_the_same_alias() {
     let leggi = |p: &str| std::fs::read_to_string(p).unwrap_or_else(|_| panic!("manca {p}"));
@@ -659,8 +642,8 @@ fn the_deb_and_the_rpm_install_the_same_alias() {
             script.contains("ln -sfn invok /usr/bin/vok"),
             "{confezione}: l'alias deve essere un symlink RELATIVO a `invok`"
         );
-        // La cautela: un `/usr/bin/vok` che non è un symlink appartiene a
-        // qualcun altro e non si sovrascrive.
+        // the caution: a target that is not a symlink belongs to somebody else
+        // and is not overwritten.
         assert!(
             script.contains("[ ! -L /usr/bin/vok ]"),
             "{confezione}: non deve sovrascrivere un /usr/bin/vok che non sia un collegamento"
@@ -672,14 +655,14 @@ fn the_deb_and_the_rpm_install_the_same_alias() {
         ("rpm", leggi("rpm/postun.sh")),
     ];
     for (confezione, script) in &rimuovono {
-        // Si rimuove solo il NOSTRO link: se punta altrove, non è nostro.
+        // only OUR link is removed: pointing elsewhere means it is not ours.
         assert!(
             script.contains(r#"[ "$(readlink /usr/bin/vok)" = "invok" ]"#),
             "{confezione}: deve rimuovere solo un link che punta ancora a invok"
         );
     }
-    // E solo alla rimozione vera, mai durante un aggiornamento — scritto nelle
-    // due convenzioni diverse, che è esattamente perché i file sono due.
+    // and only on a real removal, never during an upgrade — written in the two
+    // different conventions, which is exactly why there are two files.
     assert!(
         rimuovono[0].1.contains("remove | purge") || rimuovono[0].1.contains("remove|purge"),
         "deb: la rimozione dell'alias non deve avvenire su `upgrade`"
@@ -689,11 +672,10 @@ fn the_deb_and_the_rpm_install_the_same_alias() {
         "rpm: la rimozione dell'alias deve avvenire solo con $1 = 0 (disinstallazione vera)"
     );
 
-    // I due percorsi dichiarati in Cargo.toml devono ESISTERE: `cargo-generate-rpm`
-    // accetta indifferentemente uno script inline o un percorso, e distingue in
-    // base all'esistenza del file. Un percorso sbagliato non dà errore — finisce
-    // nel pacchetto come comando letterale, e si scopre sulla macchina di un
-    // cliente. È un controllo che qui può dire di no, e là no.
+    // the declared paths must EXIST: the tool accepts either an inline script
+    // or a path and tells them apart by whether the file is there. a wrong path
+    // is no error — it lands in the package as a literal command, and shows up
+    // on a customer's machine.
     let manifest = std::fs::read_to_string("Cargo.toml").expect("leggo Cargo.toml");
     for campo in ["post_install_script", "post_uninstall_script"] {
         let percorso = manifest
@@ -709,22 +691,19 @@ fn the_deb_and_the_rpm_install_the_same_alias() {
     }
 }
 
-// --- crates.io: la quarta confezione, e l'unica irreversibile --------------
+// --- crates.io: the fourth package, and the only irreversible one -----------
 
-/// I metadati che crates.io pretende sono presenti e nella norma.
+/// the metadata the registry demands is present and within its limits.
 ///
-/// Questi vincoli — al massimo 5 keyword, ognuna ≤ 20 caratteri e con il primo
-/// carattere alfanumerico, categorie da una lista chiusa — li fa rispettare il
-/// **registro**, non `cargo build`. Una violazione quindi non si vede né
-/// compilando né testando: si vede quando `cargo publish` la rifiuta, cioè dopo
-/// che il tag è stato spinto e la release pubblicata. Il momento peggiore, per
-/// il canale che è l'unico a non avere un annulla.
+/// those limits are enforced by the **registry**, not by the compiler, so a
+/// violation shows neither when building nor when testing: it shows when the
+/// publish is refused, after the tag is pushed and the release published. the
+/// worst moment, for the one channel with no undo.
 ///
-/// La lista delle categorie NON si verifica qui: è chiusa e vive su crates.io,
-/// e ricopiarla vorrebbe dire tenere allineata una quarta copia di un dato che
-/// non possediamo. A dire di no su quella è `cargo publish --dry-run` in
-/// `release.yml`, che interroga il registro vero. Qui si verifica ciò che il
-/// repository sa di sé.
+/// the category list is NOT checked here: it is closed and lives on the
+/// registry, and copying it would mean keeping a fourth copy of data we do not
+/// own aligned. the dry-run publish in the release workflow says no on that, by
+/// asking the real registry. here only what the repository knows about itself.
 #[test]
 fn the_crate_metadata_is_publishable() {
     let leggi = |chiave: &str| {
@@ -732,9 +711,9 @@ fn the_crate_metadata_is_publishable() {
             .unwrap_or_else(|| panic!("[package] deve dichiarare `{chiave}` per pubblicare"))
     };
 
-    // `readme` deve puntare a un file che esiste: se non esiste, la scheda su
-    // crates.io resta la sola `description` di una riga e nessuno se ne accorge
-    // guardando il repository.
+    // the readme key must point at a file that exists: otherwise the registry
+    // page is the one-line description alone, and nothing about the repository
+    // says so.
     let readme = leggi("readme");
     assert!(
         std::path::Path::new(&readme).is_file(),
@@ -776,10 +755,10 @@ fn the_crate_metadata_is_publishable() {
         "[package] categories non dichiara nessuna categoria: {categorie}"
     );
 
-    // Il comando che il README fa incollare nomina il crate DAVVERO pubblicato.
-    // È la stessa guardia dei nomi di file .deb/.rpm (A-V3-17) applicata alla
-    // quarta confezione: due fonti che devono coincidere, e un sintomo — un
-    // `cargo install` che non trova nulla — che non arriva mai a noi.
+    // the command the README has people paste names the crate REALLY published.
+    // the filename guard (A-V3-17) applied to the fourth package: two sources
+    // that must coincide, and a symptom — an install that finds nothing — that
+    // never reaches us.
     let nome = leggi("name");
     let readme_testo = std::fs::read_to_string("README.md").expect("leggo README.md");
     assert!(
@@ -788,21 +767,17 @@ fn the_crate_metadata_is_publishable() {
     );
 }
 
-/// Ogni job di `release.yml` dichiara a quale dei due eventi appartiene.
+/// every release job declares which of the two events it belongs to.
 ///
-/// Il workflow è agganciato a **due** eventi con due significati diversi: il
-/// push del tag costruisce gli artefatti (reversibile: si cancella la bozza e si
-/// ritagga), la pubblicazione della release manda il crate su crates.io
-/// (irreversibile: si può solo `yank`). Senza un `if` esplicito, GitHub esegue
-/// **ogni** job a **ogni** evento — quindi alla pubblicazione ripartirebbero i
-/// build e `create-gh-release-action` proverebbe a creare una release che esiste
-/// già.
+/// the workflow hangs on **two** events with different meanings: the tag push
+/// builds the artifacts (reversible — delete the draft and retag), the release
+/// publication sends the crate to the registry (irreversible — only a yank).
+/// without an explicit condition, GitHub runs **every** job on **every** event.
 ///
-/// Il test guarda i job uno per uno invece di cercare la stringa da qualche
-/// parte nel file: è precisamente il difetto che l'audit chiama «un controllo
-/// che trova la stringa giusta nel posto sbagliato», e qui basterebbe che il
-/// prossimo job aggiunto ne fosse sprovvisto perché il sintomo arrivi solo il
-/// giorno della release.
+/// the test looks at the jobs one by one instead of searching the file for the
+/// string: precisely the defect the audit calls "a check that finds the right
+/// string in the wrong place". the next job added without one would otherwise
+/// surface only on release day.
 #[test]
 fn every_release_job_declares_which_event_it_belongs_to() {
     const WORKFLOW: &str = ".github/workflows/release.yml";
@@ -813,9 +788,8 @@ fn every_release_job_declares_which_event_it_belongs_to() {
         .map(|(_, dopo)| dopo)
         .unwrap_or_else(|| panic!("{WORKFLOW}: manca la sezione `jobs:`"));
 
-    // Un job è una chiave a DUE spazi d'indentazione; le sue chiavi (`if`,
-    // `needs`, `runs-on`…) stanno a quattro. Tutto ciò che sta più a fondo
-    // appartiene agli step e non ci riguarda.
+    // a job is a key at two spaces of indentation; its own keys sit at four.
+    // anything deeper belongs to the steps and is none of our business.
     let mut job: Option<String> = None;
     let mut visti: Vec<(String, Option<String>)> = Vec::new();
     for riga in corpo.lines() {
@@ -836,12 +810,10 @@ fn every_release_job_declares_which_event_it_belongs_to() {
         }
     }
 
-    // Il ciclo qui sotto non può fallire su una lista VUOTA: se il parsing
-    // smettesse di riconoscere i job — cambia l'indentazione, cambia il formato —
-    // scorrerebbe zero elementi e il test resterebbe verde mentre non guarda
-    // niente. Si pretendono quindi i job per NOME, non solo un conteggio: un
-    // numero si aggiorna distrattamente quando se ne toglie uno (è successo
-    // rimuovendo `create-release`), un nome mancante dice quale.
+    // the loop below cannot fail on an EMPTY list: were the parsing to stop
+    // recognising jobs, it would iterate nothing and stay green while looking
+    // at nothing. so the jobs are demanded by NAME, not by count: a number gets
+    // updated absent-mindedly when one is removed, a missing name says which.
     let nomi: Vec<&str> = visti.iter().map(|(n, _)| n.as_str()).collect();
     for atteso in ["upload-assets", "deb", "rpm", "crates-io"] {
         assert!(

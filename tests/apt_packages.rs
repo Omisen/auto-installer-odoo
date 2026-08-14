@@ -1,4 +1,5 @@
-//! Test del pattern delta (Fase 4): l'undo purga solo il delta, mai i preesistenti.
+//! the delta pattern: the undo purges only the delta, never the pre-existing
+//! packages.
 
 mod common;
 
@@ -37,7 +38,8 @@ fn strings(items: &[&str]) -> Vec<String> {
 
 #[test]
 fn undo_purges_only_the_delta() {
-    // 'a' già installato → delta = [b, c]. L'undo deve purgare solo [b, c].
+    // one package is already installed, so the delta holds the other two — and
+    // the undo may touch only those.
     let cfg = MockConfig {
         installed_packages: installed(&["a"]),
         ..Default::default()
@@ -60,13 +62,13 @@ fn undo_purges_only_the_delta() {
     step.undo(&c).expect("undo");
 
     let ops = ops_of(&log);
-    // Purge del solo delta, mai 'a'.
+    // the delta only.
     assert!(
         ops.contains(&Op::PkgRemove(strings(&["b", "c"]))),
         "atteso purge di [b,c], trovato: {ops:?}"
     );
-    // A3.3/A3.2: nessun `apt-get autoremove` globale nel rollback — rimuoverebbe
-    // orfani estranei a Odoo, fuori dal nostro delta.
+    // no global autoremove in the rollback: it would take orphans unrelated to
+    // Odoo, outside our delta.
     assert!(
         !ops.contains(&Op::PkgRemoveOrphans),
         "l'undo non deve lanciare un autoremove globale, trovato: {ops:?}"
@@ -78,11 +80,11 @@ fn undo_purges_only_the_delta() {
     );
 }
 
-// --- A-RT-2: il purge deve funzionare anche con dpkg rotto ------------------
+// --- A-RT-2: the purge must work with a broken dpkg too ---------------------
 //
-// Trovato in campo (Multipass, Ubuntu 22.04): il rollback arriva qui dopo che
-// uno step a valle ha lasciato dpkg in stato inconsistente, apt si rifiuta di
-// operare, il purge fallisce e i 24 pacchetti del delta restano installati.
+// found in the field: the rollback arrives here after a later step left dpkg
+// inconsistent, apt refuses to operate, the purge fails and the whole delta
+// stays installed.
 
 #[test]
 fn undo_recovers_a_broken_dpkg_before_purging() {
@@ -117,12 +119,12 @@ fn undo_recovers_a_broken_dpkg_before_purging() {
         fix < purge,
         "fix-broken prima del purge, altrimenti apt rifiuta: {ops:?}"
     );
-    // E il purge, dopo il recovery, riesce davvero: il delta se ne va.
+    // and after the recovery the purge really succeeds.
     assert!(
         ops.contains(&Op::PkgRemove(strings(&["b", "c"]))),
         "il delta deve essere purgato dopo il recovery: {ops:?}"
     );
-    // La protezione resta: mai il preesistente.
+    // the protection holds: never the pre-existing one.
     assert!(
         !ops.iter()
             .any(|op| matches!(op, Op::PkgRemove(p) if p.contains(&"a".to_string()))),
@@ -132,8 +134,8 @@ fn undo_recovers_a_broken_dpkg_before_purging() {
 
 #[test]
 fn undo_retries_the_purge_after_dpkg_configure_all() {
-    // `apt-get install -f` non basta (fallisce a sua volta): si passa a
-    // `dpkg --configure -a` e si ritenta il purge.
+    // the first repair fails too, so the deeper one runs and the purge is
+    // retried.
     let cfg = MockConfig {
         dpkg_broken: true,
         fix_broken_fails: true,
@@ -166,8 +168,8 @@ fn undo_retries_the_purge_after_dpkg_configure_all() {
 
 #[test]
 fn undo_stays_best_effort_when_recovery_fails_completely() {
-    // Nessun recovery funziona: l'undo **non deve fallire** (invariante 3), i
-    // pacchetti restano e l'utente lo scopre dai log.
+    // no recovery works: the undo **must not fail** (invariant 3), the packages
+    // stay and the logs say so.
     let cfg = MockConfig {
         dpkg_broken: true,
         fix_broken_fails: true,
@@ -191,7 +193,7 @@ fn undo_stays_best_effort_when_recovery_fails_completely() {
 
 #[test]
 fn empty_delta_is_noop() {
-    // Tutti già installati → niente install, niente purge.
+    // all already installed: nothing to install, nothing to purge.
     let cfg = MockConfig {
         installed_packages: installed(&["a", "b", "c"]),
         ..Default::default()
@@ -219,11 +221,11 @@ fn empty_delta_is_noop() {
 
 #[test]
 fn bootstrap_does_not_purge_on_normal_undo() {
-    // Bootstrap: undo normale non purga git/curl/wget/gettext.
+    // a normal undo leaves the common bootstrap utilities.
     let cfg = MockConfig::default(); // niente già installato → delta = tutti
     let (mock, log) = MockSystemOps::new(cfg);
     let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
-    let c = ctx(false); // rollback NON aggressivo
+    let c = ctx(false); // a NON-aggressive rollback
 
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
@@ -256,7 +258,7 @@ fn bootstrap_purges_only_with_aggressive_rollback() {
         ops.iter().any(|op| matches!(op, Op::PkgRemove(_))),
         "con --aggressive-rollback il bootstrap deve purgare il delta"
     );
-    // Nemmeno in modalità aggressiva: l'autoremove globale è fuori dal delta.
+    // not even aggressively: a global autoremove is outside the delta.
     assert!(
         !ops.contains(&Op::PkgRemoveOrphans),
         "nessun autoremove globale nemmeno con --aggressive-rollback, trovato: {ops:?}"
@@ -265,7 +267,7 @@ fn bootstrap_purges_only_with_aggressive_rollback() {
 
 #[test]
 fn deps_delta_excludes_bootstrap_overlap() {
-    // 'git' già installato (dal bootstrap) → non finisce nel delta dei deps.
+    // a package installed by bootstrap does not enter the dependencies' delta.
     let cfg = MockConfig {
         installed_packages: installed(&["git"]),
         ..Default::default()
@@ -288,14 +290,14 @@ fn deps_delta_excludes_bootstrap_overlap() {
     );
 }
 
-// --- A5.1: nomi di pacchetto che cambiano tra release OS --------------------
+// --- A5.1: package names that change between OS releases --------------------
 //
-// Confermato in campo dal job `container` di R5: su Debian 12 `libjpeg8-dev` non
-// ha candidato e `libtiff5-dev` è diventato `libtiff-dev`, quindi
-// `install-system-dependencies` falliva sull'intero gruppo e l'installazione non
-// partiva. Qui il gruppo di alternative va provato in tutte le sue diramazioni.
+// confirmed in the field: on a newer release one name lost its candidate and
+// another was renamed, so the dependencies step failed on the whole group and
+// the installation never started. every branch of the alternatives group is
+// exercised here.
 
-/// Uno step con un solo gruppo di alternative, per isolare la risoluzione.
+/// a step with a single alternatives group, to isolate resolution.
 fn step_with_group(mock: MockSystemOps, group: &[&str]) -> AptPackagesStep {
     AptPackagesStep::with_specs(
         Box::new(mock),
@@ -307,7 +309,7 @@ fn step_with_group(mock: MockSystemOps, group: &[&str]) -> AptPackagesStep {
 
 #[test]
 fn the_preferred_name_wins_when_available() {
-    // Ubuntu 22.04: `libtiff5-dev` esiste → si usa quello, non il fallback.
+    // the first alternative exists, so it is used and not the fallback.
     let (mock, log) = MockSystemOps::new(MockConfig::default());
     let mut step = step_with_group(mock, &["libtiff5-dev", "libtiff-dev"]);
     let c = ctx(false);
@@ -325,8 +327,8 @@ fn the_preferred_name_wins_when_available() {
 
 #[test]
 fn the_fallback_is_used_when_the_preferred_name_does_not_exist() {
-    // Debian 12: `libtiff5-dev` non ha candidato → si installa `libtiff-dev`, e
-    // lo step NON fallisce (era il bug: l'installer non partiva affatto).
+    // no candidate for the first: the fallback is installed and the step does
+    // NOT fail — the bug was the installer not starting at all.
     let cfg = MockConfig {
         packages_without_candidate: installed(&["libtiff5-dev"]),
         ..Default::default()
@@ -346,7 +348,7 @@ fn the_fallback_is_used_when_the_preferred_name_does_not_exist() {
         ops_of(&log)
     );
 
-    // E il rollback purga il nome davvero installato.
+    // and the rollback purges the name that was really installed.
     step.undo(&c).expect("undo");
     assert!(
         ops_of(&log).contains(&Op::PkgRemove(strings(&["libtiff-dev"]))),
@@ -357,9 +359,9 @@ fn the_fallback_is_used_when_the_preferred_name_does_not_exist() {
 
 #[test]
 fn an_already_installed_alternative_wins_over_the_preferred_one() {
-    // Il cliente ha `libtiff-dev`. Installare anche `libtiff5-dev` sarebbe
-    // corretto ma inutile — e finirebbe nel delta, cioè in qualcosa che il
-    // rollback poi purga da un sistema che non ce l'aveva chiesto.
+    // the customer has one alternative. installing the other would be correct
+    // but useless, and it would enter the delta — something the rollback then
+    // purges from a system that never asked for it.
     let cfg = MockConfig {
         installed_packages: installed(&["libtiff-dev"]),
         ..Default::default()
@@ -388,9 +390,9 @@ fn an_already_installed_alternative_wins_over_the_preferred_one() {
 
 #[test]
 fn a_group_with_no_installable_alternative_fails_before_mutating() {
-    // Nessun nome disponibile: lo step si ferma nello *snapshot*, prima di
-    // toccare apt. Degradare in silenzio sposterebbe l'errore dentro un
-    // `pip install` che non compila, molto più difficile da diagnosticare.
+    // no name available: the step stops in the *snapshot*, before touching the
+    // manager. degrading silently would move the error into a build that does
+    // not compile, far harder to diagnose.
     let cfg = MockConfig {
         packages_without_candidate: installed(&["sparito-dev", "sparito2-dev"]),
         ..Default::default()
@@ -427,12 +429,11 @@ fn a_group_with_no_installable_alternative_fails_before_mutating() {
 
 #[test]
 fn an_unusable_apt_index_is_diagnosed_as_such_not_as_a_missing_package() {
-    // A5.1-bis, il cuore della diagnosi. Due condizioni si presentano identiche —
-    // "nessun nome ha un candidato" — ma hanno cause opposte: il pacchetto non
-    // esiste, oppure non possiamo *vedere* se esiste. Con l'indice inservibile la
-    // seconda è l'unica conclusione lecita, e il messaggio deve dirlo: in campo
-    // quello sbagliato ha mandato a cercare la rinomina di `libfreetype6-dev`,
-    // che era al suo posto.
+    // A5.1-bis, the heart of the diagnosis. two conditions look identical — "no
+    // name has a candidate" — with opposite causes: the package does not exist,
+    // or we cannot *see* whether it does. with an unusable index the second is
+    // the only lawful conclusion, and the message must say so: the wrong one
+    // sent someone hunting a rename that had not happened.
     let cfg = MockConfig {
         apt_index_populated: false, // apt-get update mai eseguito
         ..Default::default()
@@ -459,30 +460,26 @@ fn an_unusable_apt_index_is_diagnosed_as_such_not_as_a_missing_package() {
     );
 }
 
-// --- A5.1-bis: il falso positivo trovato in CI ------------------------------
+// --- A5.1-bis: the false positive found in CI -------------------------------
 //
-// Ubuntu 24.04, job `native`: `snapshot fallito ... nessun pacchetto installabile
-// per il gruppo [libfreetype6-dev]`. Due cause concorrenti, entrambe reali:
-//   1. l'indice apt del runner non era aggiornato (nessuno aveva fatto update);
-//   2. su noble `libfreetype6-dev` è un nome puramente VIRTUALE — anche con
-//      l'indice fresco, `apt-cache policy` risponde `Candidate: (none)`, mentre
-//      `apt-get install` lo installa senza battere ciglio.
-// Il fix copre entrambe: `apt-get update` nel run di bootstrap, e un rilevamento
-// che chiede anche "sapresti installarlo?" prima di dichiararlo assente.
+// two concurrent causes, both real: the runner's package index was never
+// refreshed, and on that release one name is purely VIRTUAL — even with a fresh
+// index the policy query answers no candidate, while the install command takes
+// it without blinking. the fix covers both: a refresh in bootstrap's run, and a
+// detection that also asks "could you install it?" before calling it absent.
 
 #[test]
 fn bootstrap_updates_the_index_so_the_next_step_sees_the_candidates() {
-    // La regressione del bug, nella sua forma esatta. Sul runner le utility
-    // bootstrap erano GIÀ installate → delta vuoto: se l'update stesse dopo
-    // l'uscita anticipata di `run`, l'indice resterebbe stantìo e lo step dei
-    // deps boccerebbe pacchetti che esistono. Serve il modello condiviso: due
-    // step, un solo sistema.
+    // the bug's regression, in its exact shape. on the runner the bootstrap
+    // utilities were ALREADY installed, so the delta is empty: with the refresh
+    // after the early return the index would stay stale and the dependencies
+    // step would reject packages that exist.
     let model = SystemModel::new(ModelState {
-        // Il runner GitHub ha già git/curl/wget/gettext-base.
+        // the runner already carries the bootstrap utilities.
         packages: strings(&["git", "curl", "wget", "gettext-base"])
             .into_iter()
             .collect(),
-        apt_index_stale: true, // e nessuno ha mai fatto apt-get update
+        apt_index_stale: true, // and nobody ever refreshed the index
         ..Default::default()
     });
     let c = ctx(false);
@@ -499,7 +496,8 @@ fn bootstrap_updates_the_index_so_the_next_step_sees_the_candidates() {
         .run(&c)
         .expect("il run del bootstrap aggiorna l'indice anche con delta vuoto");
 
-    // Da qui in poi l'indice è fresco: lo step dei deps deve risolvere tutto.
+    // from here the index is fresh and the dependencies step resolves
+    // everything.
     let mut deps = AptPackagesStep::odoo_dependencies_with_ops(model.boxed());
     deps.snapshot(&c)
         .expect("dopo l'update i candidati ci sono: nessun falso positivo");
@@ -513,9 +511,8 @@ fn bootstrap_updates_the_index_so_the_next_step_sees_the_candidates() {
 
 #[test]
 fn without_the_update_the_dependencies_step_refuses_instead_of_guessing() {
-    // Controprova del test sopra: è davvero l'update di bootstrap a salvare la
-    // situazione. Senza, lo step dei deps si ferma — e si ferma con la diagnosi
-    // sull'indice, non accusando i pacchetti.
+    // the converse: without bootstrap's refresh the dependencies step stops —
+    // and stops with the index diagnosis, not by accusing the packages.
     let model = SystemModel::new(ModelState {
         apt_index_stale: true,
         ..Default::default()
@@ -534,8 +531,8 @@ fn without_the_update_the_dependencies_step_refuses_instead_of_guessing() {
 
 #[test]
 fn the_index_update_lives_in_run_never_in_snapshot() {
-    // Vincolo C4, il più importante di questo hotfix: `apt-get update` è una
-    // mutazione (scrive in /var/lib/apt/lists) e lo snapshot non muta MAI.
+    // constraint C4: refreshing the index is a mutation, and a snapshot never
+    // mutates.
     let (mock, log) = MockSystemOps::new(MockConfig::default());
     let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock));
     let c = ctx(false);
@@ -565,8 +562,8 @@ fn the_index_update_lives_in_run_never_in_snapshot() {
 
 #[test]
 fn only_bootstrap_updates_the_index() {
-    // L'update serve una volta, dal primo step apt. Ripeterlo a ogni step
-    // sarebbe solo tempo perso su un'operazione di rete.
+    // once is enough, from the first step. repeating it per step would be time
+    // spent on the network for nothing.
     let (mock, log) = MockSystemOps::new(MockConfig::default());
     let mut deps = AptPackagesStep::odoo_dependencies_with_ops(Box::new(mock));
     let c = ctx(false);
@@ -600,9 +597,9 @@ fn dry_run_does_not_touch_the_apt_index() {
 
 #[test]
 fn a_third_party_repo_that_fails_does_not_block_the_install() {
-    // `apt-get update` esce non-zero anche per UN SOLO repository irraggiungibile,
-    // mentre gli indici ufficiali sono arrivati benissimo. Bloccare lì
-    // renderebbe l'installer ostaggio di un PPA rotto che non ci riguarda.
+    // the refresh exits non-zero for a SINGLE unreachable repository while the
+    // official indexes arrived fine. stopping there would hold the installer
+    // hostage to somebody's broken third-party source.
     let cfg = MockConfig {
         apt_update_fails: true,
         apt_index_populated: true, // ma l'indice è comunque utilizzabile
@@ -624,8 +621,8 @@ fn a_third_party_repo_that_fails_does_not_block_the_install() {
 
 #[test]
 fn an_update_that_leaves_no_index_at_all_is_a_hard_error() {
-    // L'altra faccia: se dopo l'update non c'è NESSUN indice (rete assente),
-    // proseguire significherebbe far decidere gli step a valle alla cieca.
+    // the other face: with NO index at all, proceeding would leave the later
+    // steps deciding blind.
     let cfg = MockConfig {
         apt_update_fails: true,
         apt_index_populated: false,
@@ -653,10 +650,10 @@ fn an_update_that_leaves_no_index_at_all_is_a_hard_error() {
 
 #[test]
 fn a_real_name_beats_a_virtual_one_because_only_the_real_one_is_purgeable() {
-    // Su noble `libfreetype6-dev` è virtuale: `apt-get install` lo accetta, ma
-    // dpkg non lo conosce e `apt-get purge libfreetype6-dev` esce 0 rimuovendo
-    // ZERO pacchetti. Un delta con quel nome mentirebbe: il rollback direbbe di
-    // aver purgato e `libfreetype-dev` resterebbe installato.
+    // a virtual name is accepted by the install command, but dpkg does not know
+    // it and the purge exits zero having removed nothing. a delta carrying that
+    // name would lie: the rollback would claim a purge and the real package
+    // would stay.
     let cfg = MockConfig {
         virtual_packages: installed(&["libfreetype6-dev"]),
         ..Default::default()
@@ -683,9 +680,9 @@ fn a_real_name_beats_a_virtual_one_because_only_the_real_one_is_purgeable() {
 
 #[test]
 fn a_virtual_only_group_is_installed_rather_than_refused() {
-    // Nessun nome reale nel gruppo, ma apt sa installarlo: rifiutare sarebbe il
-    // falso positivo di campo. Si procede (con un warning nei log), perché
-    // un'installazione bloccata è un danno certo e il residuo un rischio.
+    // no real name in the group but the manager can install it: refusing would
+    // be the field's false positive. proceed with a warning — a blocked
+    // installation is certain damage, a leftover only a risk.
     let cfg = MockConfig {
         virtual_packages: installed(&["libfreetype6-dev"]),
         ..Default::default()
@@ -708,8 +705,8 @@ fn a_virtual_only_group_is_installed_rather_than_refused() {
 
 #[test]
 fn the_canonical_list_declares_the_real_name_for_the_virtual_one() {
-    // Guardia sulla lista: `libfreetype6-dev` da solo, su noble, porterebbe un
-    // nome non purgabile nel delta. Serve il nome reale come alternativa.
+    // a guard on the list: that name alone would put an unpurgeable entry in
+    // the delta, so the real one must be among the alternatives.
     let catalog = AptBackend.catalog();
     let group = catalog
         .odoo_specs()
@@ -723,20 +720,19 @@ fn the_canonical_list_declares_the_real_name_for_the_virtual_one() {
     );
 }
 
-// --- A-R6-1: il refactor della lista non deve perdere pacchetti -------------
+// --- A-R6-1: the list's refactor must not lose packages ---------------------
 //
-// Il refactor R6 (nomi secchi → gruppi di alternative) ha riscritto a mano una
-// lista di 30 pacchetti. Un refactor così è esattamente il posto dove un
-// pacchetto si perde in silenzio: i 215 test su mock non creano un venv reale né
-// compilano nulla, quindi la mancanza si manifesterebbe solo in campo, a
-// installazione avviata. Queste guardie stanno a livello di **lista**, dove il
-// refactor avviene, e non hanno bisogno di un sistema vero per fallire.
+// R6 rewrote thirty package names by hand, exactly the place where one goes
+// missing silently: the mock suite creates no real virtualenv and compiles
+// nothing, so the gap would surface in the field with the installation already
+// running. these guards sit at the **list** level, where the refactor happens,
+// and need no real system to fail.
 
-/// L'insieme obbligatorio **prima** di R6 (`git show c120089`), verbatim.
+/// the mandatory set **before** R6, verbatim.
 ///
-/// Congelato di proposito: è il riferimento contro cui misurare ogni futura
-/// riscrittura della lista. Se un pacchetto sparisce, il test qui sotto dice
-/// *quale*, senza aspettare la CI reale.
+/// deliberately frozen: the reference every future rewrite is measured against.
+/// if a package disappears the test below says *which*, without waiting for the
+/// real CI.
 const PRE_R6_REQUIRED: &[&str] = &[
     "git",
     "curl",
@@ -770,20 +766,19 @@ const PRE_R6_REQUIRED: &[&str] = &[
     "libc-ares-dev",
 ];
 
-/// I pacchetti pre-R6 **volutamente** non più obbligatori, con la ragione.
-/// Ogni voce qui è una decisione documentata in R6, non una perdita.
+/// the pre-R6 packages **deliberately** no longer mandatory, with the reason.
+/// each entry is a documented decision, not a loss.
 const INTENTIONALLY_DEMOTED: &[&str] = &[
-    // Rimosso da alcune release Debian; serve solo a compilare asset .less, che
-    // Odoo moderno non usa. Vive in ODOO_OPTIONAL_DEPENDENCIES.
+    // dropped by some releases; it only compiles .less assets, which modern
+    // Odoo does not use. it lives among the optional dependencies.
     "node-less",
 ];
 
-/// Tutti i nomi che compaiono nei gruppi **obbligatori** del catalogo Debian
-/// (bootstrap + dipendenze Odoo).
+/// every name appearing in the catalogue's **mandatory** groups.
 ///
-/// Legge il catalogo del backend invece di una costante: da M1 la lista è ciò
-/// che il gestore risponde, e un test che guardasse ancora una costante
-/// verificherebbe qualcosa che nessuno consuma più.
+/// it reads the backend's catalogue rather than a constant: since M1 the list
+/// is what the manager answers, and a test still looking at a constant would
+/// check something nobody consumes.
 fn required_names() -> HashSet<String> {
     let catalog = AptBackend.catalog();
     catalog
@@ -795,7 +790,7 @@ fn required_names() -> HashSet<String> {
         .collect()
 }
 
-/// I nomi dei gruppi **opzionali** del catalogo Debian.
+/// the names in the catalogue's **optional** groups.
 fn optional_names() -> Vec<String> {
     AptBackend
         .catalog()
@@ -808,9 +803,9 @@ fn optional_names() -> Vec<String> {
 
 #[test]
 fn the_refactor_did_not_lose_a_single_package() {
-    // La guardia che chiude la classe di bug, non l'istanza: ogni pacchetto che
-    // era obbligatorio prima di R6 deve essere ancora raggiungibile in un gruppo
-    // obbligatorio, oppure comparire fra i declassamenti espliciti.
+    // the guard closes the class, not the instance: every package that was
+    // mandatory before R6 must still be reachable in a mandatory group, or
+    // appear among the explicit demotions.
     let required = required_names();
     let optional: HashSet<String> = optional_names().into_iter().collect();
 
@@ -844,11 +839,10 @@ fn the_refactor_did_not_lose_a_single_package() {
 
 #[test]
 fn the_python3_core_set_is_complete() {
-    // pip/dev/venv/wheel/setuptools sono un insieme coeso: perderne uno rompe il
-    // venv o la compilazione delle wheel, e il sintomo compare step più avanti
-    // (create-virtualenv, o pip che non compila) dove è difficile ricondurlo alla
-    // lista dei pacchetti. `python3-venv` in particolare è quello senza cui
-    // `python3 -m venv` lascia una sandbox senza `bin/python` (A-R6-1).
+    // the Python build set is cohesive: losing one breaks the virtualenv or the
+    // wheel builds, and the symptom appears steps later where it is hard to
+    // trace back to the package list. one of them is what stands between a
+    // working sandbox and one with no interpreter in it (A-R6-1).
     let required = required_names();
     for pkg in [
         "python3-pip",
@@ -870,8 +864,8 @@ fn the_python3_core_set_is_complete() {
 
 #[test]
 fn python3_venv_is_never_optional() {
-    // Vincolo esplicito: senza venv non c'è Odoo. Deve essere impossibile
-    // declassarlo per sbaglio nella lista degli opzionali.
+    // explicit: without the virtualenv there is no Odoo, so demoting it by
+    // accident must be impossible.
     let optional = optional_names();
     assert!(
         !optional.iter().any(|p| p.contains("venv")),
@@ -881,10 +875,10 @@ fn python3_venv_is_never_optional() {
 
 #[test]
 fn python3_venv_reaches_apt_whether_or_not_it_is_already_installed() {
-    // Il test di lista dice "c'è nella lista". Questo dice "arriva ad apt", che è
-    // la proprietà che conta — e copre l'osservazione che ha fatto sospettare la
-    // perdita: sul runner `python3-venv` NON era nel delta perché era GIÀ
-    // installato, non perché mancasse. Entrambi i rami vanno verificati.
+    // the list test says "it is in the list"; this says "it reaches the
+    // manager", the property that counts — and covers the observation that
+    // raised the suspicion: the package was absent from the delta because it
+    // was ALREADY installed, not because it was missing.
     for already_present in [false, true] {
         let cfg = MockConfig {
             installed_packages: if already_present {
@@ -927,8 +921,8 @@ fn python3_venv_reaches_apt_whether_or_not_it_is_already_installed() {
 
 #[test]
 fn apt_cache_stats_output_is_parsed_as_apt_prints_it() {
-    // Output reale di `apt-cache stats` (Ubuntu 24.04) e il caso che conta: un
-    // indice vuoto, che è ciò che distingue "non lo so" da "non esiste".
+    // real output of the stats command plus the case that matters: an empty
+    // index, which is what separates "I do not know" from "it does not exist".
     let populated =
         "Total package names: 163333 (4573 k)\nTotal package structures: 148622 (6539 k)\n";
     assert_eq!(total_package_names(populated), Some(163333));
@@ -945,9 +939,8 @@ fn apt_cache_stats_output_is_parsed_as_apt_prints_it() {
 
 #[test]
 fn an_optional_group_without_candidates_does_not_stop_the_install() {
-    // `node-less` è stato rimosso da alcune release Debian ed è un "nice to
-    // have" (Odoo compila SCSS in-process). Un opzionale mancante è un warning,
-    // non un'installazione impossibile — ma tutto il resto viene installato.
+    // the optional one is a nice-to-have: a missing optional is a warning, not
+    // an impossible installation, and everything else is still installed.
     let cfg = MockConfig {
         packages_without_candidate: installed(&["node-less"]),
         ..Default::default()
@@ -978,9 +971,8 @@ fn an_optional_group_without_candidates_does_not_stop_the_install() {
 
 #[test]
 fn the_canonical_list_declares_the_renames_seen_in_the_field() {
-    // Guardia sulla lista di produzione: i due nomi che hanno rotto Debian 12 in
-    // R5 devono avere un'alternativa. Senza questo test, una futura pulizia
-    // della lista potrebbe riportarli a nomi secchi e riaprire A5.1 in silenzio.
+    // a guard on the production list: the two names that broke a release must
+    // keep an alternative, or a future cleanup would reopen A5.1 silently.
     let specs = AptBackend.catalog().odoo_specs();
     for broken in ["libtiff5-dev", "libjpeg8-dev"] {
         let group = specs
@@ -998,9 +990,9 @@ fn the_canonical_list_declares_the_renames_seen_in_the_field() {
 
 #[test]
 fn apt_cache_policy_output_is_parsed_as_apt_prints_it() {
-    // Il parser gira su output reale di `apt-cache policy` (catturato su Ubuntu
-    // 24.04). I tre casi che contano sono indistinguibili se si guarda solo
-    // l'exit code: disponibile, virtuale senza candidato, nome inesistente.
+    // the parser runs on real captured output. the three cases that matter are
+    // indistinguishable from the exit code alone: available, virtual with no
+    // candidate, and non-existent.
     let available =
         "libtiff-dev:\n  Installed: (none)\n  Candidate: 4.5.1+git230720-4ubuntu2.5\n  \
                      Version table:\n     4.5.1+git230720-4ubuntu2.5 500\n";

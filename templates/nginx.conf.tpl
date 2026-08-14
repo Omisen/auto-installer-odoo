@@ -1,26 +1,26 @@
 # =============================================================================
-# templates/nginx.conf.tpl — Reverse proxy Nginx per Odoo
-# Placeholder sostituiti da `nginx_write_config::render_vhost`:
-#   {{NGINX_SERVER_NAME}}   nome di dominio o IP (es. odoo.example.com)
-#   {{ODOO_PORT}}           porta locale di Odoo (default 8069)
-#   {{NGINX_CLIENT_MAX}}    dimensione massima body upload (default 100m)
-#   {{ODOO_VERSION_SHORT}}  versione breve (es. 18), per i nomi dei log
-# =============================================================================
+# nginx reverse proxy for Odoo.
 #
-# TLS: questo vhost ascolta **solo sulla porta 80**, di proposito.
+# placeholders substituted when the vhost is rendered:
+#   {{NGINX_SERVER_NAME}}   domain name or IP
+#   {{ODOO_PORT}}           Odoo's local port (default 8069)
+#   {{NGINX_CLIENT_MAX}}    maximum upload body size (default 100m)
+#   {{ODOO_VERSION_SHORT}}  short version, for the log filenames
 #
-# Il modo supportato per ottenere HTTPS è `certbot --nginx`, che ottiene i
-# certificati e **riscrive questo vhost da sé**, aggiungendo il blocco su 443 e
-# il redirect da 80. Generare qui un blocco 443 significherebbe competere con
-# lui — e, se puntasse a certificati inesistenti, `nginx -t` fallirebbe e con
-# esso l'intera installazione.
+# TLS: this vhost listens on **port 80 only**, deliberately.
 #
-# Il flag `--open-https-port` apre la 443 sul firewall in vista di quel
-# passaggio; non tocca questo file. Si chiamava `--enable-ssl` e prometteva
-# quello che non faceva (A-V3-6).
+# the supported way to get HTTPS is `certbot --nginx`, which obtains the
+# certificates and **rewrites this vhost itself**, adding the 443 block and the
+# redirect. generating a 443 block here would compete with it — and pointing at
+# non-existent certificates would fail validation, and with it the whole
+# installation.
+#
+# `--open-https-port` opens 443 on the firewall ahead of that step; it does not
+# touch this file. it was called `--enable-ssl` and promised what it did not do
+# (A-V3-6).
 # =============================================================================
 
-# ── Upstream Odoo ─────────────────────────────────────────────────────────────
+# -- upstream -----------------------------------------------------------------
 upstream odoo {
     server 127.0.0.1:{{ODOO_PORT}};
     keepalive 16;
@@ -30,32 +30,31 @@ upstream odoo-longpolling {
     server 127.0.0.1:8072;
 }
 
-# ── HTTP (porta 80) ───────────────────────────────────────────────────────────
+# -- HTTP (port 80) -----------------------------------------------------------
 server {
     listen 80;
     listen [::]:80;
     server_name {{NGINX_SERVER_NAME}};
 
-    # Se SSL è attivo redirige tutto il traffico HTTP su HTTPS.
-    # Commentare o rimuovere questo blocco per servire Odoo solo in HTTP.
+    # uncomment once TLS is in place to redirect all HTTP traffic.
     # return 301 https://$host$request_uri;
 
-    # Un file per versione: due istanze sulla stessa macchina non devono
-    # scriversi addosso (A-V3-12). Restano dopo il rollback — sono log, come
-    # quelli di sistema — ma almeno si sa a quale istanza appartengono.
+    # one file per version: two instances on one machine must not write over
+    # each other (A-V3-12). they survive the rollback, being logs, but at least
+    # one can tell whose they are.
     access_log  /var/log/nginx/odoo{{ODOO_VERSION_SHORT}}.access.log;
     error_log   /var/log/nginx/odoo{{ODOO_VERSION_SHORT}}.error.log;
 
-    # Dimensione massima dei file caricati (fatture, allegati, ecc.)
+    # maximum upload size (invoices, attachments)
     client_max_body_size {{NGINX_CLIENT_MAX}};
 
-    # Header di sicurezza
+    # security headers
     add_header X-Frame-Options         SAMEORIGIN;
     add_header X-Content-Type-Options  nosniff;
     add_header X-XSS-Protection        "1; mode=block";
     add_header Referrer-Policy         "strict-origin-when-cross-origin";
 
-    # ── Longpolling (notifiche real-time, bus) ────────────────────────────────
+    # -- longpolling (real-time notifications) --------------------------------
     location /web/websocket {
         proxy_pass         http://odoo-longpolling;
         proxy_http_version 1.1;
@@ -80,7 +79,7 @@ server {
         proxy_send_timeout 3600s;
     }
 
-    # ── Contenuto statico con cache aggressiva ────────────────────────────────
+    # -- static content, aggressively cached ----------------------------------
     location ~* /web/static/ {
         proxy_pass         http://odoo;
         proxy_cache_valid  200 90d;
@@ -93,7 +92,7 @@ server {
         proxy_set_header   X-Forwarded-Proto $scheme;
     }
 
-    # ── Proxy principale ──────────────────────────────────────────────────────
+    # -- main proxy -----------------------------------------------------------
     location / {
         proxy_pass         http://odoo;
         proxy_http_version 1.1;
@@ -102,19 +101,19 @@ server {
         proxy_set_header   X-Forwarded-For   $proxy_add_x_forwarded_for;
         proxy_set_header   X-Forwarded-Proto $scheme;
 
-        # Timeout generosi per operazioni pesanti (importazioni, report)
+        # generous timeouts for heavy work (imports, reports)
         proxy_read_timeout  720s;
         proxy_send_timeout  720s;
         proxy_connect_timeout 30s;
 
-        # Disabilita il buffering per lo streaming (es. download di backup)
+        # buffering off, for streaming downloads such as backups
         proxy_buffering off;
 
-        # Necessario per proxy_pass con header chunked
+        # required for chunked transfer encoding
         proxy_set_header   Connection "";
     }
 
-    # ── Blocca l'accesso diretto ai file di sistema Odoo ─────────────────────
+    # -- deny direct access to Odoo's internal files --------------------------
     location ~* \.(py|pyc|cfg|conf)$ {
         deny all;
     }

@@ -1,10 +1,10 @@
-//! Test del primo step reale (Fase 2): ciclo `snapshot → run → undo` di
-//! [`PrepareOptRoot`] contro il filesystem reale (in tempdir, senza root).
+//! [`PrepareOptRoot`]'s full cycle against a real filesystem, in a tempdir and
+//! without root.
 //!
-//! La directory si crea e si rimuove davvero, in una tempdir; utente e `chown`
-//! passano invece da un mock. Non è un dettaglio: dopo A-V3-4 lo step chiede al
-//! sistema se l'utente esiste, e con `SystemOps` reale l'esito dei test
-//! dipenderebbe dalla macchina che li esegue.
+//! the directory is really created and removed, while the user lookup and the
+//! `chown` go through a mock. not a detail: since A-V3-4 the step asks the
+//! system whether the user exists, and with real `SystemOps` the outcome would
+//! depend on the machine running the tests.
 
 mod common;
 
@@ -16,7 +16,7 @@ use invok::state::PreState;
 use invok::step::Step;
 use invok::steps::prepare_opt_root::PrepareOptRoot;
 
-/// Context minimale: al passo servono `odoo_home`, `odoo_user` e `dry_run`.
+/// a minimal context: the step needs the home, the user and the dry-run flag.
 fn ctx(home: PathBuf, dry_run: bool) -> Context {
     Context {
         odoo_home: home,
@@ -26,14 +26,14 @@ fn ctx(home: PathBuf, dry_run: bool) -> Context {
     }
 }
 
-/// Step con utente **assente**: il caso normale, in cui la home resta a root in
-/// attesa di `CreateOdooUser`.
+/// a step with the user **absent**: the normal case, where the home stays
+/// root-owned awaiting the next step.
 fn step_without_user() -> PrepareOptRoot {
     let (mock, _log) = MockSystemOps::new(MockConfig::default());
     PrepareOptRoot::with_ops(Box::new(mock))
 }
 
-/// Legge il `PreState` persistito dallo step (via `snapshot_value`).
+/// reads the `PreState` the step persisted.
 fn persisted_prestate(step: &PrepareOptRoot) -> PreState {
     serde_json::from_value(step.snapshot_value()).expect("prestate serializzabile")
 }
@@ -62,7 +62,7 @@ fn created_by_us_round_trip() {
 #[test]
 fn preexisting_is_noop() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let home = dir.path().to_path_buf(); // esiste già
+    let home = dir.path().to_path_buf(); // already exists
     assert!(home.exists());
 
     let c = ctx(home.clone(), false);
@@ -74,7 +74,7 @@ fn preexisting_is_noop() {
     step.run(&c).expect("run");
     step.undo(&c).expect("undo");
 
-    // La directory preesistente sopravvive: non è nostra, non la cancelliamo.
+    // a pre-existing directory survives: not ours, not deleted.
     assert!(home.exists(), "undo NON deve rimuovere una dir Preexisting");
 }
 
@@ -90,10 +90,10 @@ fn undo_does_not_force_on_non_empty_dir() {
     step.run(&c).expect("run");
     assert!(home.exists());
 
-    // Simula un artefatto di uno step successivo dentro la dir.
+    // simulates a later step's artifact inside the directory.
     std::fs::write(home.join("intruso.txt"), b"x").expect("write file");
 
-    // undo è best-effort: logga e NON rimuove (niente rm -rf).
+    // the undo is best-effort: it logs and does NOT remove.
     step.undo(&c).expect("undo best-effort");
     assert!(
         home.exists(),
@@ -113,7 +113,7 @@ fn dry_run_does_not_create() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    // In dry-run non si crea nulla e lo stato resta Untracked (undo NO-OP).
+    // a dry run creates nothing and leaves the state untracked.
     assert!(!home.exists(), "dry-run non deve creare la directory");
     assert_eq!(persisted_prestate(&step), PreState::Untracked);
 
@@ -121,16 +121,14 @@ fn dry_run_does_not_create() {
     assert!(!home.exists());
 }
 
-// --- A-V3-4: la consegna della home quando l'utente esiste già ---------------
+// --- A-V3-4: handing over the home when the user already exists -------------
 
-/// Utente `odoo` già presente sulla macchina: la home appena creata gli viene
-/// consegnata **subito**, qui.
+/// with the user already on the machine, the freshly created home is handed
+/// over **at once**, here.
 ///
-/// `owned root` è una condizione d'attesa, non lo stato giusto della home: ha
-/// senso solo finché l'utente non esiste. Se esiste, nessuno gliela consegnerà
-/// più — `CreateOdooUser` vede l'utente `Preexisting` e ritorna senza toccare
-/// nulla — e l'installazione muore tre step dopo, su un `mkdir` come `odoo`
-/// dentro una directory di root.
+/// `owned root` is a waiting condition, not the home's right state. if the user
+/// exists, nobody will hand it over later — the next step sees a `Preexisting`
+/// user and returns — and the installation dies three steps on.
 #[test]
 fn an_already_existing_user_receives_the_home_immediately() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -171,8 +169,8 @@ fn an_already_existing_user_receives_the_home_immediately() {
     );
 }
 
-/// Senza utente non si consegna niente: è il caso normale, e la home resta a
-/// root finché `CreateOdooUser` non crea l'utente e fa il `chown` lui.
+/// without a user nothing is handed over: the normal case, where the home stays
+/// root-owned until the next step creates the user and chowns it.
 #[test]
 fn without_the_user_the_home_stays_root_owned() {
     let dir = tempfile::tempdir().expect("tempdir");
@@ -192,13 +190,13 @@ fn without_the_user_the_home_stays_root_owned() {
     );
 }
 
-/// Una directory **preesistente** non si consegna a nessuno, nemmeno se l'utente
-/// esiste: non è nostra. È il confine fra questo fix e l'anti-drop applicato
-/// alle directory — la proprietà dell'artefatto decide, non la comodità.
+/// a **pre-existing** directory is handed to nobody, user or no user: it is not
+/// ours. the boundary between this fix and the anti-drop rule applied to
+/// directories — ownership decides, not convenience.
 #[test]
 fn a_preexisting_home_is_never_handed_over() {
     let dir = tempfile::tempdir().expect("tempdir");
-    let home = dir.path().to_path_buf(); // esiste già
+    let home = dir.path().to_path_buf(); // already exists
 
     let cfg = MockConfig {
         user_exists: true,
@@ -219,7 +217,7 @@ fn a_preexisting_home_is_never_handed_over() {
     );
 }
 
-/// In dry-run non si crea e non si consegna.
+/// a dry run neither creates nor hands over.
 #[test]
 fn dry_run_hands_over_nothing() {
     let dir = tempfile::tempdir().expect("tempdir");

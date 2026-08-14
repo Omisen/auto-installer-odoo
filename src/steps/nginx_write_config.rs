@@ -1,8 +1,8 @@
-//! [`NginxWriteConfig`] (13b): genera il vhost `sites-available/odoo<N>`.
+//! [`NginxWriteConfig`]: renders the Odoo vhost.
 //!
-//! Come [`GenerateConfig`](crate::steps::generate_config): se il vhost
-//! preesisteva, ne fa il **backup** e all'undo lo **ripristina**; se l'abbiamo
-//! creato noi, all'undo lo rimuove. Gated da `--with-nginx`.
+//! like [`GenerateConfig`](crate::steps::generate_config): a pre-existing vhost
+//! is **backed up** and **restored** by the undo, while one of ours is removed.
+//! gated on `--with-nginx`.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -36,18 +36,18 @@ impl NginxWriteConfig {
         }
     }
 
-    /// Dove va scritto il vhost, secondo le convenzioni di questa famiglia.
+    /// where the vhost goes, per this family's conventions.
     ///
-    /// Non è più una costante: su Fedora la directory è `conf.d` e il file deve
-    /// finire in `.conf`, altrimenti nginx non lo carica — e non lo direbbe.
+    /// not a constant: on one family the directory differs and the file must
+    /// carry an extension, or nginx will not load it — and would not say so.
     fn dest(&self, ctx: &Context) -> std::path::PathBuf {
         self.ops
             .distro()
             .nginx_layout()
             .vhost_path(&ctx.odoo_version_short)
     }
-    /// Temporaneo privato accanto alla destinazione (stesso filesystem → rename
-    /// atomico), con nome imprevedibile e creazione `O_EXCL | O_NOFOLLOW`.
+    /// a private temporary beside the destination, so the move is an atomic
+    /// rename; unpredictable name, fail-closed creation.
     fn temp_path(dest: &std::path::Path) -> std::path::PathBuf {
         crate::system_ops::private_temp_path(dest, "odoo")
     }
@@ -96,8 +96,8 @@ impl Step for NginxWriteConfig {
 
         let tmp = Self::temp_path(&dest);
         self.ops.create_private_file(&tmp, &content)?;
-        // Temp con nome casuale in una dir di sistema che il rollback non
-        // ripulisce: se il move fallisce, lo togliamo di mezzo noi.
+        // a randomly named temporary in a system directory the rollback does
+        // not clean: if the move fails, we remove it ourselves.
         if let Err(e) = self.ops.move_file(&tmp, &dest) {
             let _ = self.ops.remove_file(&tmp);
             return Err(e);
@@ -159,12 +159,12 @@ fn unix_timestamp() -> u64 {
         .unwrap_or(0)
 }
 
-/// Renderizza il vhost dal template embedded.
+/// renders the vhost from the embedded template.
 pub fn render_vhost(ctx: &Context) -> String {
     let port = ctx.port.to_string();
-    // Nessun placeholder per i certificati: il vhost non ha un blocco 443, e
-    // i due che c'erano venivano sostituiti dentro righe commentate — davano
-    // l'impressione che TLS fosse configurato da qui (A-V3-6).
+    // no certificate placeholders: the vhost has no 443 block, and the two that
+    // existed were substituted inside commented-out lines, suggesting TLS was
+    // configured here (A-V3-6).
     let replacements: [(&str, &str); 4] = [
         ("{{NGINX_SERVER_NAME}}", ctx.nginx_server_name.as_str()),
         ("{{ODOO_PORT}}", port.as_str()),
@@ -178,7 +178,7 @@ pub fn render_vhost(ctx: &Context) -> String {
     out
 }
 
-/// Nessun placeholder `{{...}}` residuo nel vhost.
+/// checks that no placeholder is left in the vhost.
 pub fn validate_vhost(content: &str) -> Result<(), StepError> {
     if content.contains("{{") {
         return Err(StepError::Precondition(

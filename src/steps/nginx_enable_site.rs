@@ -1,38 +1,31 @@
-//! [`NginxEnableSite`] (13c): abilita il sito e libera la porta 80.
+//! [`NginxEnableSite`]: enables the site and frees port 80.
 //!
-//! # Mutazione insidiosa: il default site
+//! # a treacherous mutation: the default site
 //!
-//! Per liberare la porta 80, il Bash rimuove `sites-enabled/default` — che è
-//! **config preesistente del cliente**. Qui lo snapshot torna a essere
-//! **protezione**: registra *cosa* c'era prima di noi, e l'undo lo
-//! **ripristina**. È l'analogo del backup di
-//! [`GenerateConfig`](crate::steps::generate_config), esteso alla config Nginx
-//! di terzi.
+//! freeing port 80 means moving `sites-enabled/default` out of the way — the
+//! customer's **pre-existing configuration**. here the snapshot goes back to
+//! being a **protection**: it records *what* was there, and the undo
+//! **restores** it.
 //!
-//! # Registrare *se* c'era non basta (A-V3-5)
+//! # recording *whether* it was there is not enough (A-V3-5)
 //!
-//! Fino alla R10 lo snapshot era un `bool`: «il default site esisteva?». Da lì
-//! due difetti, dallo stesso errore.
+//! the snapshot used to be a `bool`, and two defects grew from that one error.
 //!
-//! **Il ripristino non era fedele.** L'undo ricreava sempre un symlink verso
-//! `/etc/nginx/sites-available/default`, il target *standard di distribuzione*.
-//! Se il cliente aveva un default che puntava altrove — un vhost con un altro
-//! nome — la sua config non tornava com'era: tornava com'è *di solito*. Per un
-//! progetto che ripristina il `.bashrc` byte-per-byte era un doppio standard.
+//! **restoration was not faithful.** the undo always recreated a symlink
+//! towards the *distribution-standard* target, so a customer whose default
+//! pointed elsewhere did not get their config back — they got the usual one.
+//! for a project that restores `.bashrc` byte for byte, a double standard.
 //!
-//! **E si perdeva un file.** `symlink_exists` usa `symlink_metadata`, che
-//! risponde `true` anche per un **file regolare**; `remove_symlink` è
-//! `fs::remove_file`, che lo cancella. Un amministratore che avesse scritto
-//! `sites-enabled/default` come file vero — pratica non rara — si vedeva il
-//! contenuto **distrutto** dal `run`, e l'undo gli restituiva un symlink al
-//! default della distro. Non un residuo: una perdita di configurazione, nella
-//! fase che questo progetto descrive come *«dove vivono le mutazioni su config
-//! di terzi»*.
+//! **and a file could be lost.** `symlink_exists` uses `symlink_metadata`,
+//! which answers `true` for a **regular file** too, and the removal is a plain
+//! `remove_file`. an administrator who had written that path as a real file —
+//! not a rare practice — saw its contents **destroyed**, and got a symlink to
+//! the distro default back. not a leftover: a loss of configuration.
 //!
-//! Ora la natura si legge con [`SystemOps::path_kind`] e si **persiste**, e ogni
-//! natura ha il suo trattamento: un symlink si rimuove e si ricrea verso il
-//! target registrato; un file regolare si **sposta in un backup** e si rimette
-//! al suo posto; qualunque altra cosa non si tocca.
+//! the nature is now read with [`SystemOps::path_kind`] and **persisted**, and
+//! each nature has its treatment: a symlink is removed and recreated towards
+//! the recorded target, a regular file is **moved to a backup** and put back,
+//! and anything else is left alone.
 
 use serde::{Deserialize, Serialize};
 use tracing::{info, warn};
@@ -44,40 +37,39 @@ use crate::step::{decode_snapshot, Step};
 use crate::steps::unix_timestamp;
 use crate::system_ops::{PathKind, SystemOps};
 
-/// Cosa c'era in `sites-enabled/default` prima di noi, e cosa ne abbiamo fatto.
+/// what was at the default site before us, and what we did with it.
 #[derive(Debug, Default, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DefaultSite {
-    /// Non c'era nulla: niente da rimuovere, niente da ripristinare.
+    /// nothing there: nothing to remove, nothing to restore.
     #[default]
     Assente,
-    /// Un symlink. Si rimuove e si ricrea verso **questo** target, non verso
-    /// quello che di solito ci sarebbe.
+    /// a symlink: removed, and recreated towards **this** target rather than
+    /// the one usually found there.
     Symlink { target: std::path::PathBuf },
-    /// Un file regolare: contiene configurazione di qualcuno. Non si cancella —
-    /// si sposta in un backup, e l'undo lo rimette dov'era.
+    /// a regular file: it holds somebody's configuration, so it is moved to a
+    /// backup rather than deleted, and the undo puts it back.
     ///
-    /// `backup` è `None` finché il `run` non l'ha spostato davvero.
+    /// `backup` stays `None` until the run has actually moved it.
     FileRegolare { backup: Option<String> },
-    /// Una directory, o un symlink illeggibile: non sappiamo trattarlo, quindi
-    /// non lo tocchiamo. La porta 80 potrebbe restare occupata, e lo diciamo.
+    /// a directory, or an unreadable symlink: we do not know how to treat it,
+    /// so we do not. port 80 may stay occupied, and we say so.
     Intoccabile,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct NginxEnableSiteSnapshot {
-    /// Stato del nostro symlink `sites-enabled/odoo<N>`.
+    /// the state of our own enabling symlink.
     pub link: PreState,
-    /// **Legacy (pre-R11).** Il default site esisteva prima di noi?
+    /// **legacy, pre-R11**: did the default site exist before us?
     ///
-    /// Non è più la fonte di verità — lo è [`Self::default_site`] — ma si
-    /// continua a scriverlo e a leggerlo: uno stato persistito da una versione
-    /// precedente non ha il campo nuovo, e senza questo ripiego il suo rollback
-    /// lascerebbe la porta 80 senza il default site che avevamo tolto. Stessa
-    /// cura di retrocompatibilità dell'`InstallConfig` in R4.
+    /// no longer the source of truth — [`Self::default_site`] is — but still
+    /// written and read: a state persisted by an earlier version lacks the new
+    /// field, and without this fallback its rollback would leave port 80
+    /// without the default site we removed.
     #[serde(default)]
     pub default_site_existed: bool,
-    /// Cosa c'era davvero, e cosa ne abbiamo fatto. `None` solo negli stati
-    /// scritti prima della R11.
+    /// what was really there, and what we did with it. `None` only in states
+    /// written before R11.
     #[serde(default)]
     pub default_site: Option<DefaultSite>,
 }
@@ -101,23 +93,22 @@ impl NginxEnableSite {
     fn src(&self, ctx: &Context) -> std::path::PathBuf {
         self.layout().vhost_path(&ctx.odoo_version_short)
     }
-    /// Il symlink che abilita il sito — `None` sulle famiglie dove **scrivere il
-    /// vhost è già abilitarlo**.
+    /// the enabling symlink — `None` on families where **writing the vhost is
+    /// enabling it**.
     fn link(&self, ctx: &Context) -> Option<std::path::PathBuf> {
         self.layout().enabled_link(&ctx.odoo_version_short)
     }
-    /// Il default site come file separato — `None` dove non esiste il concetto.
+    /// the default site as a separate file — `None` where the concept does not
+    /// exist.
     fn default_site(&self) -> Option<std::path::PathBuf> {
         self.layout().default_site
     }
 
-    /// Dove finisce il backup di un default site che è un **file regolare**.
+    /// where the backup of a **regular file** default site goes.
     ///
-    /// Deliberatamente **fuori** da `sites-enabled/`: `nginx.conf` include
-    /// `sites-enabled/*` — ogni file, non solo i `.conf` — quindi un backup
-    /// lasciato lì verrebbe caricato lo stesso e la porta 80 resterebbe
-    /// occupata. Cioè il difetto che stiamo correggendo, con un nome diverso.
-    /// `/etc/nginx/` non è invece oggetto di alcun glob.
+    /// deliberately **outside** the enabled directory, which nginx globs — a
+    /// backup left there would still be loaded and port 80 would stay occupied,
+    /// i.e. the defect we are fixing under another name.
     fn default_site_backup(&self) -> String {
         format!(
             "{}/default-site.bak.{}",
@@ -126,13 +117,12 @@ impl NginxEnableSite {
         )
     }
 
-    /// Toglie di mezzo il default site secondo la sua natura, registrando cosa
-    /// è stato fatto perché l'undo possa disfarlo esattamente.
+    /// moves the default site out of the way according to its nature, recording
+    /// what was done so the undo can reverse it exactly.
     fn displace_default_site(&mut self) -> Result<(), StepError> {
-        // Nessun default site come file separato = niente da spiazzare. Su
-        // quelle famiglie il server di default vive dentro `nginx.conf`, e
-        // riscrivere la configurazione principale del cliente non è una cosa che
-        // facciamo (vedi il doc di `Fedora::nginx_layout`).
+        // no separate default site means nothing to displace: there the default
+        // server lives inside `nginx.conf`, and rewriting the customer's main
+        // configuration is not something we do.
         let Some(path) = self.default_site() else {
             return Ok(());
         };
@@ -140,8 +130,8 @@ impl NginxEnableSite {
             DefaultSite::Assente => Ok(()),
 
             DefaultSite::Symlink { .. } => {
-                // Un symlink non ha contenuto proprio: rimuoverlo non distrugge
-                // nulla, e il target è registrato per ricrearlo identico.
+                // a symlink has no contents of its own, and the target is
+                // recorded so it can be recreated identically.
                 if let Err(e) = self.ops.remove_symlink(&path) {
                     warn!(error = %e, "run: rimozione default site fallita, proseguo");
                 } else {
@@ -151,9 +141,9 @@ impl NginxEnableSite {
             }
 
             DefaultSite::FileRegolare { .. } => {
-                // Un file vero contiene configurazione di qualcuno: si sposta,
-                // non si cancella. Un `move` fallito è un errore vero — meglio
-                // fermarsi che proseguire avendo perso il file a metà.
+                // a real file holds somebody's configuration: moved, not
+                // deleted. a failed move is a real error — better to stop than
+                // to carry on having half-lost the file.
                 let backup = self.default_site_backup();
                 self.ops.move_file(&path, std::path::Path::new(&backup))?;
                 self.snap.default_site = Some(DefaultSite::FileRegolare {
@@ -180,10 +170,10 @@ impl NginxEnableSite {
 }
 
 impl NginxEnableSite {
-    /// Rimette il default site **com'era**, non com'è di solito.
+    /// puts the default site back **as it was**, not as it usually is.
     ///
-    /// Best-effort come ogni undo: un fallimento è un `warn!`, non un errore che
-    /// ferma la pulizia degli altri step.
+    /// best-effort like every undo: a failure is a `warn!`, not an error that
+    /// stops the other steps' cleanup.
     fn restore_default_site(&self) {
         let Some(path) = self.default_site() else {
             return;
@@ -192,8 +182,8 @@ impl NginxEnableSite {
             Some(DefaultSite::Assente) | Some(DefaultSite::Intoccabile) => {}
 
             Some(DefaultSite::Symlink { target }) => {
-                // Il target registrato, non la costante: se il cliente aveva un
-                // default che puntava altrove, torna a puntare *là*.
+                // the recorded target, not the constant: a default that pointed
+                // elsewhere goes back to pointing *there*.
                 if let Err(e) = self.ops.create_symlink(target, &path) {
                     warn!(error = %e, "undo: ripristino default site fallito, proseguo (best-effort)");
                 } else {
@@ -216,13 +206,13 @@ impl NginxEnableSite {
                 }
             }
 
-            // Era un file, ma il `run` non è arrivato a spostarlo: non c'è
-            // niente da rimettere ed è giusto così.
+            // a file the run never got to move: nothing to put back, and
+            // rightly so.
             Some(DefaultSite::FileRegolare { backup: None }) => {}
 
-            // Stato persistito prima della R11: sappiamo solo *se* c'era.
-            // Si ricade sul comportamento storico — un symlink al target
-            // standard — che è il meglio ricavabile da quell'informazione.
+            // a pre-R11 state tells us only *whether* it was there, so we fall
+            // back to the historical behaviour: the best that information
+            // allows.
             None => {
                 if !self.snap.default_site_existed {
                     return;
@@ -253,19 +243,19 @@ impl Step for NginxEnableSite {
             self.snap = NginxEnableSiteSnapshot::default();
             return Ok(());
         }
-        // Su una famiglia senza `sites-enabled` non c'è nessun symlink da
-        // creare: scrivere il vhost **è** abilitarlo.
+        // without an enabled directory there is no symlink to create: writing
+        // the vhost **is** enabling it.
         self.snap.link = match self.link(ctx) {
             Some(link) if self.ops.symlink_exists(&link) => PreState::Preexisting,
             _ => PreState::Untracked,
         };
-        // Informazione chiave per l'undo: cosa c'è al posto del default site.
-        // Non "se c'è": *cosa*. Da questa distinzione dipende se il ripristino
-        // sarà fedele o soltanto plausibile (A-V3-5).
+        // the key information for the undo: *what* is at the default site, not
+        // *whether* something is. faithful restoration hangs on that
+        // distinction (A-V3-5).
         //
-        // Dove il default site non è un file separato la domanda non si pone, e
-        // `Assente` è la risposta onesta: non c'è nulla che noi possiamo togliere
-        // e quindi nulla da rimettere.
+        // where it is not a separate file the question does not arise, and
+        // "absent" is the honest answer: nothing for us to remove, so nothing
+        // to put back.
         let default_site = match self.default_site() {
             None => DefaultSite::Assente,
             Some(path) => match self.ops.path_kind(&path) {
@@ -295,9 +285,8 @@ impl Step for NginxEnableSite {
             return Ok(());
         }
 
-        // Libera la porta 80 togliendo di mezzo il default site. *Come* si toglie
-        // dipende da cosa è: un symlink si rimuove (è ricreabile identico), un
-        // file regolare si sposta (il suo contenuto è di qualcuno).
+        // free port 80 by moving the default site aside. *how* depends on what
+        // it is: a symlink is removed, a regular file is moved.
         self.displace_default_site()?;
 
         match self.link(ctx) {
@@ -308,9 +297,8 @@ impl Step for NginxEnableSite {
                 }
                 info!("run: sito abilitato");
             }
-            // Niente `sites-enabled`: il vhost scritto in `conf.d` è già
-            // caricato da nginx. Non c'è un artefatto in più da registrare, e
-            // quindi nemmeno da annullare.
+            // no enabled directory: the vhost is already loaded where it was
+            // written. no extra artifact to record, hence none to undo.
             None => info!(
                 "run: su questa famiglia il vhost è già abilitato dove è stato scritto, \
                  nessun symlink da creare"
@@ -325,7 +313,7 @@ impl Step for NginxEnableSite {
             return Ok(());
         }
 
-        // Rimuovi il nostro symlink se creato da noi.
+        // remove our symlink if we created it.
         if self.snap.link == PreState::CreatedByUs {
             if let Some(link) = self.link(ctx) {
                 if let Err(e) = self.ops.remove_symlink(&link) {
@@ -342,10 +330,10 @@ impl Step for NginxEnableSite {
         serde_json::to_value(&self.snap).unwrap_or(serde_json::Value::Null)
     }
 
-    /// `default_site_existed` è l'informazione che permette all'undo di
-    /// **ricucire** la config del cliente: senza reidratarla, un rollback da
-    /// disco rimuoverebbe il nostro vhost e lascerebbe la porta 80 senza il
-    /// default site che avevamo tolto.
+    /// the default site's recorded state is what lets the undo **stitch** the
+    /// customer's config back: without rehydrating it, a rollback from disk
+    /// would remove our vhost and leave port 80 without the default site we
+    /// took away.
     fn rehydrate(&mut self, snapshot: &serde_json::Value) -> Result<(), StepError> {
         let snap = decode_snapshot(self.name(), snapshot)?;
         self.snap = snap;

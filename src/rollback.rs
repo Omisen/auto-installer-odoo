@@ -1,31 +1,20 @@
-//! Rollback **da stato persistito**: il consumatore di `InstallState` (R4).
+//! rollback **from persisted state**: the consumer of `InstallState` (R4).
 //!
-//! Il motore ([`crate::engine::Installer`]) sa annullare ciò che ha appena
-//! fatto: tiene gli step vivi in memoria, con il loro `PreState`, e ne chiama
-//! gli `undo` in ordine inverso. È il rollback *in-process*, e copre il caso
-//! normale — uno step fallisce, l'installazione si ritira.
+//! the engine undoes what it has just done, from steps still in memory. this
+//! module covers the two cases it cannot reach: a process that never gets to
+//! its error handling (Ctrl-C, `kill -9`, OOM, power loss), and uninstalling a
+//! **successful** installation, which is a legitimate request rather than a
+//! failure.
 //!
-//! Non copre i casi in cui il processo **non arriva** alla gestione dell'errore:
-//! un Ctrl-C, un `kill -9`, un OOM, un power-loss. Lì il sistema resta con gli
-//! artefatti a metà e il file di stato intatto sul disco, che li descrive tutti.
-//! Non copre nemmeno la disinstallazione di un'installazione **riuscita**, che
-//! non è un fallimento ma una richiesta legittima ("rimuovi Odoo da questa
-//! macchina").
+//! for each persisted record it rebuilds the step
+//! ([`crate::steps::step_by_name`]), puts the original snapshot back in
+//! ([`crate::step::Step::rehydrate`]) and runs its undo — reverse order,
+//! best-effort, same protections.
 //!
-//! Questo modulo chiude entrambi i buchi con lo stesso meccanismo: per ogni
-//! record persistito, ricostruisci lo step ([`crate::steps::step_by_name`]),
-//! rimettici dentro lo snapshot dell'epoca
-//! ([`crate::step::Step::rehydrate`]) ed esegui il suo `undo`. In ordine
-//! inverso, best-effort, con le stesse protezioni critiche — che vivono nel
-//! `PreState`, e il `PreState` viene *riletto*, mai reindovinato.
-//!
-//! # Cosa NON fa (deliberatamente)
-//!
-//! Non chiama `snapshot`. Rieseguirlo fotograferebbe il sistema **dopo** le
-//! nostre mutazioni: il database che abbiamo creato risulterebbe già esistente,
-//! quindi `Preexisting`, quindi non droppabile — e viceversa, un `.conf` del
-//! cliente che avevamo salvato in backup risulterebbe nostro. Lo stato da usare
-//! è quello di allora, ed è esattamente ciò che il file di stato contiene.
+//! it deliberately never calls `snapshot`: that would photograph the system
+//! **after** our mutations, so the database we created would read as
+//! `Preexisting` and survive, while a customer `.conf` we had backed up would
+//! read as ours.
 
 use std::path::PathBuf;
 
@@ -36,74 +25,63 @@ use crate::progress::ProgressReporter;
 use crate::state::InstallState;
 use crate::steps::{self, OpsFactory};
 
-/// Esito dell'`undo` di un singolo step nel rollback da disco.
+/// outcome of one step's undo during a rollback from disk.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum UndoOutcome {
-    /// L'`undo` è stato eseguito senza errori (può essere stato un NO-OP
-    /// legittimo: `PreState` diverso da `CreatedByUs`).
+    /// the undo ran without error, possibly as a legitimate no-op when the
+    /// `PreState` was not `CreatedByUs`.
     Undone,
-    /// L'`undo` ha fallito. Best-effort: il rollback prosegue, ma ciò che
-    /// quell'`undo` non ha rimosso **resta** e va elencato all'utente (A1.3).
+    /// the undo failed. best-effort, so the rollback carries on — but what it
+    /// did not remove **stays**, and must be listed to the user (A1.3).
     Failed(String),
-    /// Nome di step non riconosciuto: lo stato viene da una versione con step
-    /// che questo binario non conosce.
+    /// unrecognised step name: the state comes from a version with steps this
+    /// binary does not know.
     Unknown,
-    /// Lo snapshot persistito non è deserializzabile nel tipo dello step.
-    /// L'`undo` **non** viene eseguito: agire con uno stato inventato è peggio
-    /// che non agire (potrebbe droppare ciò che lo snapshot proteggeva).
+    /// the persisted snapshot does not deserialise into the step's type. the
+    /// undo is **not** run: acting on invented state could drop the very thing
+    /// the snapshot was protecting.
     NotRehydrated(String),
 }
 
 impl UndoOutcome {
-    /// `true` se questo esito lascia qualcosa da ripulire a mano.
+    /// `true` when this outcome leaves something to clean up by hand.
     pub fn is_residue(&self) -> bool {
         !matches!(self, UndoOutcome::Undone)
     }
 }
 
-/// Esito dell'`undo` di uno step, con il nome per il report finale.
+/// a step's undo outcome, with its name for the final report.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct StepOutcome {
     pub name: String,
     pub outcome: UndoOutcome,
 }
 
-/// Report di fine rollback (chiude A1.3 / B2).
+/// end-of-rollback report (A1.3, B2).
 ///
-/// Un rollback best-effort *può* lasciare residui: è la contropartita
-/// dell'invariante 3 (un `undo` che fallisce non blocca gli altri). Finora quei
-/// residui finivano in un `warn!` e sparivano nello scroll. Qui vengono
-/// raccolti, così l'utente ha l'elenco esatto di cosa gli resta da rimuovere.
+/// a best-effort rollback *can* leave leftovers — the price of invariant 3.
+/// collecting them here gives the user the exact list of what is left to
+/// remove, instead of a `warn!` that scrolls away.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RollbackReport {
-    /// Esiti nell'ordine in cui gli `undo` sono stati eseguiti (inverso).
+    /// outcomes in the order the undos ran, i.e. reversed.
     pub outcomes: Vec<StepOutcome>,
-    /// La home dell'installazione **esiste ancora** a rollback concluso?
+    /// does the installation home **still exist** once the rollback is over?
     ///
-    /// # Perché si guarda il sistema e non solo gli esiti (A-MD-2)
+    /// A-MD-2: the outcomes and the promise are two different questions, and on
+    /// a real run the second one lied — every undo succeeded, including
+    /// `PrepareOptRoot`'s, which correctly gives up on a non-empty directory
+    /// and returns `Ok`, while `/opt/odoo` was still there. so we check the
+    /// **promise**, not the mechanism.
     ///
-    /// Perché sono due domande diverse, e su una prova reale la seconda ha
-    /// mentito: il rollback ha dichiarato «nessun residuo» mentre `/opt/odoo`
-    /// era ancora lì. Tutti gli `undo` erano riusciti, compreso quello di
-    /// `PrepareOptRoot` — che davanti a una directory non vuota **rinuncia**,
-    /// correttamente e senza mai un `rm -rf`, e restituisce `Ok`. Il verdetto
-    /// sugli esiti era vero; la promessa che l'utente legge no.
-    ///
-    /// È la lezione di R7 rovesciata. Lì un test di CI asseriva il residuo come
-    /// atteso; qui è il **report all'utente** a dichiarare pulito ciò che non lo
-    /// è. Il correttivo è lo stesso: verificare la **promessa** (`/opt/odoo` non
-    /// deve esistere) e non il **meccanismo** (ogni undo è andato bene).
-    ///
-    /// Non entra in [`Self::is_clean`]: quella decide se il manifesto può essere
-    /// consumato, e un manifesto che non descrive più alcun artefatto va rimosso
-    /// comunque (R19). Tenerlo in vita per un file che **non abbiamo creato
-    /// noi** farebbe credere che ci sia ancora qualcosa da annullare, e un
-    /// secondo `rollback` non potrebbe farci nulla.
+    /// deliberately not part of [`Self::is_clean`]: that decides whether the
+    /// manifest can be consumed, and a manifest describing no artifact must go
+    /// anyway (R19).
     pub home_left_behind: Option<PathBuf>,
 }
 
 impl RollbackReport {
-    /// Gli step che hanno lasciato qualcosa dietro di sé.
+    /// the steps that left something behind.
     pub fn residue(&self) -> Vec<&StepOutcome> {
         self.outcomes
             .iter()
@@ -111,18 +89,18 @@ impl RollbackReport {
             .collect()
     }
 
-    /// `true` se ogni `undo` è andato a buon fine: lo stato può essere
-    /// consumato (rimosso), perché non descrive più nulla di vivo.
+    /// `true` when every undo succeeded, so the state describes nothing live
+    /// and can be removed.
     pub fn is_clean(&self) -> bool {
         self.residue().is_empty()
     }
 
-    /// C'è qualcosa da dire all'utente oltre al conteggio degli undo?
+    /// is there anything to tell the user beyond the undo count?
     pub fn has_anything_to_report(&self) -> bool {
         !self.is_clean() || self.home_left_behind.is_some()
     }
 
-    /// Numero di step effettivamente annullati.
+    /// how many steps were actually undone.
     pub fn undone(&self) -> usize {
         self.outcomes
             .iter()
@@ -131,31 +109,29 @@ impl RollbackReport {
     }
 }
 
-/// Stato in cui il file di stato ha trovato l'installazione.
+/// the shape the state file found the installation in.
 ///
-/// Serve a dire all'utente *cosa* sta per annullare: disinstallare un'istanza
-/// funzionante e ripulire i resti di una run interrotta sono due operazioni con
-/// conseguenze molto diverse, e meritano due frasi diverse prima della conferma.
+/// uninstalling a working instance and cleaning up after an interrupted run
+/// have very different consequences, and deserve different wording before the
+/// confirmation.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum InstallStatus {
-    /// Tutti gli step canonici risultano completati.
+    /// every canonical step is recorded as completed.
     Complete { steps: usize },
-    /// L'installazione si è fermata prima della fine (Ctrl-C, crash, errore).
+    /// the installation stopped short (Ctrl-C, crash, error).
     Interrupted { done: usize, total: usize },
 }
 
-/// Classifica lo stato persistito.
+/// classifies the persisted state.
 ///
-/// La fonte primaria è il flag [`InstallState::finished`], scritto
-/// dall'installazione quando arriva in fondo. Il confronto con la sequenza
-/// canonica resta come ripiego per gli stati scritti prima che il flag
-/// esistesse: è un'euristica (la sequenza cambia fra versioni), quindi non ha
-/// la precedenza.
+/// [`InstallState::finished`] is the primary source; comparing against the
+/// canonical sequence is only a fallback for states written before that flag
+/// existed, and stays a heuristic because the sequence changes between
+/// versions.
 ///
-/// `total` è la lunghezza della sequenza canonica
-/// ([`steps::canonical_step_names`]), passata invece che ricavata qui dentro:
-/// così questa resta una funzione **pura**, verificabile senza costruire
-/// ventitré step — e senza dover nominare una famiglia per contare dei nomi.
+/// `total` is passed in rather than derived here, which keeps this function
+/// **pure** — checkable without building every step, or naming a family just to
+/// count names.
 pub fn install_status(state: &InstallState, total: usize) -> InstallStatus {
     let done = state.completed.len();
     if state.finished || done >= total {
@@ -165,23 +141,23 @@ pub fn install_status(state: &InstallState, total: usize) -> InstallStatus {
     }
 }
 
-/// Cosa fare prima di eseguire il rollback, dato il contesto d'invocazione.
+/// what to do before running the rollback, given how it was invoked.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConfirmationGate {
-    /// Si procede senza chiedere: `--yes`, oppure `--dry-run` (non muta nulla).
+    /// proceed without asking: `--yes`, or `--dry-run`, which mutates nothing.
     Proceed,
-    /// C'è un terminale: chiedi conferma esplicita all'utente.
+    /// there is a terminal: ask for explicit confirmation.
     Ask,
-    /// Nessun terminale e nessun `--yes`: rifiuta. Un'operazione distruttiva non
-    /// va eseguita "per default" dentro uno script che non l'ha chiesta.
+    /// no terminal and no `--yes`: refuse. a destructive operation must not run
+    /// by default inside a script that did not ask for it.
     RefuseNonInteractive,
 }
 
-/// Politica di conferma del rollback, **pura** — così è verificabile senza
-/// terminale e senza eseguire il comando.
+/// the rollback's confirmation policy, **pure** so it can be checked without a
+/// terminal.
 ///
-/// Il dry-run non chiede nulla perché non c'è nulla da confermare: elenca e
-/// basta. Il caso che conta è l'ultimo: senza TTY, `--yes` diventa obbligatorio.
+/// a dry run asks nothing because it only lists. the case that matters is the
+/// last: without a TTY, `--yes` becomes mandatory.
 pub fn confirmation_gate(dry_run: bool, yes: bool, interactive: bool) -> ConfirmationGate {
     if dry_run || yes {
         ConfirmationGate::Proceed
@@ -192,10 +168,10 @@ pub fn confirmation_gate(dry_run: bool, yes: bool, interactive: bool) -> Confirm
     }
 }
 
-/// I nomi degli step nell'ordine in cui verranno annullati (inverso).
+/// the step names in the order they will be undone, i.e. reversed.
 ///
-/// Puro: serve al riepilogo mostrato prima della conferma e al `--dry-run`,
-/// senza toccare il sistema.
+/// pure: feeds the summary shown before the confirmation and the `--dry-run`,
+/// without touching the system.
 pub fn undo_plan(state: &InstallState) -> Vec<&str> {
     state
         .completed
@@ -205,17 +181,15 @@ pub fn undo_plan(state: &InstallState) -> Vec<&str> {
         .collect()
 }
 
-/// Esegue il rollback degli step descritti da `state`, in **ordine inverso**
-/// (invariante 2) e **best-effort** (invariante 3).
+/// undoes the steps described by `state`, in **reverse order** (invariant 2)
+/// and **best-effort** (invariant 3).
 ///
-/// `ctx` va costruito dalla configurazione persistita
-/// ([`crate::state::InstallConfig::to_context`]): è ciò che dà agli `undo` i
-/// nomi reali degli artefatti creati. Con `ctx.dry_run == true` nessun `undo`
-/// muta il sistema — ognuno si limita a loggare cosa farebbe.
+/// `ctx` must come from the persisted configuration
+/// ([`crate::state::InstallConfig::to_context`]): that is what gives the undos
+/// the real names of the artifacts created. under `dry_run` no undo mutates.
 ///
-/// Non ritorna `Result`: un rollback non "fallisce", accumula esiti. Quello che
-/// non è riuscito a pulire finisce nel [`RollbackReport`], che è la risposta
-/// onesta da dare all'utente.
+/// returns no `Result`: a rollback does not "fail", it accumulates outcomes.
+/// whatever could not be cleaned up ends in the [`RollbackReport`].
 pub fn rollback_from_state(
     state: &InstallState,
     ctx: &Context,
@@ -248,10 +222,9 @@ pub fn rollback_from_state(
                 name: name.clone(),
                 outcome: UndoOutcome::Unknown,
             });
-            // Anche uno step non annullabile è uno step **esaminato**: la barra
-            // deve avanzare (A-V3-10). Ometterlo lasciava il progresso fermo
-            // proprio nello scenario degradato, che è quello in cui l'utente la
-            // guarda — e faceva sembrare bloccato un rollback che stava andando.
+            // an un-undoable step is still an **examined** one, so the bar must
+            // advance (A-V3-10): otherwise progress froze in exactly the
+            // degraded scenario where the user is watching it.
             reporter.undo_done(&name);
             continue;
         };
@@ -286,13 +259,11 @@ pub fn rollback_from_state(
         report.outcomes.push(StepOutcome { name, outcome });
     }
 
-    // La **promessa**, non il meccanismo: dopo tutti gli undo, `/opt/odoo` c'è
-    // ancora? È una lettura, non una mutazione, e va fatta qui perché è l'unico
-    // punto che vede il sistema a pulizia conclusa.
+    // the **promise**, not the mechanism: is `/opt/odoo` still there? a read,
+    // not a mutation, and this is the only point that sees the finished state.
     //
-    // In dry-run non si guarda: nessun undo ha rimosso nulla, quindi la
-    // directory c'è per costruzione e segnalarla sarebbe un allarme garantito
-    // che insegna a ignorare gli allarmi.
+    // skipped in dry-run, where the directory is still there by construction
+    // and the warning would be a guaranteed false alarm.
     if !ctx.dry_run {
         let ops = make_ops();
         if ops.path_exists(&ctx.odoo_home) {

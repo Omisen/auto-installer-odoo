@@ -1,5 +1,5 @@
-//! Coordinamento CreateDatabase → InitializeOdooDatabase (Fase 5 → 7): il
-//! PreState del DB si propaga via `ctx.db_created_by_us` attraverso il motore.
+//! the database's `PreState` propagates to the init step through
+//! `ctx.db_created_by_us`, across the engine.
 
 mod common;
 
@@ -54,8 +54,7 @@ fn run_chain(db_exists: bool) -> (bool, Vec<Op>) {
 
 #[test]
 fn our_db_allows_init() {
-    // DB assente → creato da noi → CreateDatabase pubblica db_created_by_us=true
-    // → InitializeOdooDatabase procede.
+    // absent database: created by us, so the init is allowed to proceed.
     let (ok, ops) = run_chain(/* db_exists */ false);
     assert!(ok, "la catena deve completare");
     assert!(ops.iter().any(|o| matches!(o, Op::CreateDb { .. })));
@@ -67,8 +66,8 @@ fn our_db_allows_init() {
 
 #[test]
 fn preexisting_db_blocks_init_through_engine() {
-    // DB preesistente → db_created_by_us=false → hard-stop di init → l'intera
-    // catena fallisce e l'init non parte mai.
+    // pre-existing database: the init's hard stop fires and the whole chain
+    // fails without it ever running.
     let (ok, ops) = run_chain(/* db_exists */ true);
     assert!(!ok, "il DB preesistente deve bloccare la catena");
     assert!(
