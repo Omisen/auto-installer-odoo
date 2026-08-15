@@ -413,6 +413,15 @@ pub trait PackageManager {
     /// installs, idempotently, without recommends or weak dependencies.
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError>;
 
+    /// does this failure come from the **mirror** rather than from what was
+    /// asked for?
+    ///
+    /// behind the boundary because the two managers say it differently — apt
+    /// `Failed to fetch`, dnf `Curl error` — and no step is allowed to know
+    /// which family it is running on. The step above decides *what to do* about
+    /// a transient failure; only here is it known *what one looks like*.
+    fn is_transient_failure(&self, stderr: &str) -> bool;
+
     /// removes **exactly** the packages given.
     ///
     /// named `remove` and not `purge` on purpose: "purge" is a deb concept, and

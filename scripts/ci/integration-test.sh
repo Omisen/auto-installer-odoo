@@ -600,9 +600,25 @@ fi
 # probe exists to exercise — that OS's package names (A5.1) and its codename's
 # checksum pin (A5.2, A-RT-1).
 if [ "$MODE" = "probe" ]; then
+  # a failure of the MIRROR is not a failure of portability, and saying so is
+  # the whole point of this branch. a `debian:11` run once went red with
+  # "portability was not verified" while the truth was
+  # `Connection reset by peer` fetching one .deb out of twenty-five: the reader
+  # is sent to look for a portability bug that is not there. The installer now
+  # asks a dropped download again (three attempts); if it still gave up, the
+  # check still FAILS — nothing was verified — but it says what actually
+  # happened.
+  mirror_gave_up=no
+  if grep -qiE 'failed to fetch|unable to fetch some archives|connection reset by peer|temporary failure resolving'        "$WORK/install.out"; then
+    mirror_gave_up=yes
+  fi
+
   for step in install-system-dependencies install-wkhtmltopdf; do
     if grep -qx "$step" "$WORK/steps.txt"; then
       ok "the probe got past '$step' on this OS"
+    elif [ "$mirror_gave_up" = yes ]; then
+      fail "the probe did not reach '$step' because the MIRROR gave up (see the fetch error \
+above), not because of this OS. portability is still unverified — re-run the job"
     else
       fail "the probe did not reach '$step': portability was not verified"
     fi

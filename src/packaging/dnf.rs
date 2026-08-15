@@ -148,6 +148,25 @@ pub const ALTERNATE_PYTHONS: &[((u32, u32), &str, &str)] = &[
 /// extracted because the flag that matters is not checkable otherwise: the code
 /// that runs `dnf` only executes on a real Fedora, so dropping
 /// `install_weak_deps=False` would be a change no test could see.
+/// the `dnf` counterpart of [`crate::packaging::apt::is_transient_fetch_failure`].
+///
+/// a different dialect for the same event: dnf reports `Curl error`, or
+/// `Failed to download`, where apt says `Failed to fetch`. Same rule — the
+/// evidence must name the **download**, never the request.
+pub fn is_transient_fetch_failure(stderr: &str) -> bool {
+    const TRANSIENT: [&str; 7] = [
+        "curl error",
+        "failed to download",
+        "cannot download",
+        "connection reset by peer",
+        "connection timed out",
+        "temporary failure in name resolution",
+        "could not resolve host",
+    ];
+    let lower = stderr.to_lowercase();
+    TRANSIENT.iter().any(|marker| lower.contains(marker))
+}
+
 pub fn install_args(pkgs: &[&str]) -> Vec<String> {
     let mut args = vec![
         "install".to_string(),
@@ -269,6 +288,10 @@ impl PackageManager for DnfBackend {
     ///
     /// the counterpart of `--no-install-recommends`: without it the delta grows
     /// with packages nobody asked for, which the undo would then remove.
+    fn is_transient_failure(&self, stderr: &str) -> bool {
+        is_transient_fetch_failure(stderr)
+    }
+
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {
         let args = install_args(pkgs);
         run_dnf(&args.iter().map(String::as_str).collect::<Vec<_>>())

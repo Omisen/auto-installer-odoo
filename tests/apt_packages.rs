@@ -1043,3 +1043,126 @@ fn delta_survives_state_save_load() {
     assert_eq!(snap.delta, strings(&["b", "c"]));
     assert_eq!(snap.already_installed, strings(&["a"]));
 }
+
+// --- the mirror is not the request ------------------------------------------
+
+/// a download that fails on the **mirror's** side is asked again.
+///
+/// found by the CI, on a `debian:11` probe: `apt-get` got
+/// `Connection reset by peer` fetching one `.deb` out of twenty-five, and a
+/// whole installation was rolled back for it. Nothing was wrong with the
+/// machine, the list, or the code — a mirror closed a socket, which on a
+/// customer's line is an ordinary event. The clone has had retries since R2 for
+/// exactly this reason; the package manager talks to the network too.
+#[test]
+fn a_mirror_that_drops_the_connection_is_asked_again() {
+    let cfg = MockConfig {
+        install_fail_times: 2,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock)).with_retries_for_test(3);
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c)
+        .expect("two mirror failures must not fail the installation");
+
+    let installs = ops_of(&log)
+        .iter()
+        .filter(|op| matches!(op, Op::PkgInstall(_)))
+        .count();
+    assert_eq!(installs, 3, "two failures and the attempt that succeeded");
+}
+
+/// and a failure that is **not** the mirror is not retried at all.
+///
+/// this half matters as much: a name that does not exist answers the same way
+/// every time, so asking again only makes the true message arrive three times
+/// later, hidden behind a wait. The manager decides which is which, because
+/// only it knows the dialect — no step is allowed to match on the family.
+#[test]
+fn a_package_that_does_not_exist_is_not_retried() {
+    let cfg = MockConfig {
+        install_fail_times: 5,
+        install_failure_stderr: "E: Unable to locate package libfoo-dev".to_string(),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock)).with_retries_for_test(3);
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c)
+        .expect_err("a package that does not exist must fail");
+
+    let installs = ops_of(&log)
+        .iter()
+        .filter(|op| matches!(op, Op::PkgInstall(_)))
+        .count();
+    assert_eq!(installs, 1, "asked once, answered once");
+}
+
+/// the retry budget runs out, and the last error is the real one.
+#[test]
+fn a_mirror_that_never_recovers_reports_its_own_error() {
+    let cfg = MockConfig {
+        install_fail_times: 99,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = AptPackagesStep::bootstrap_with_ops(Box::new(mock)).with_retries_for_test(3);
+    let c = ctx(false);
+
+    step.snapshot(&c).expect("snapshot");
+    let err = step.run(&c).expect_err("it must give up in the end");
+    assert!(
+        err.to_string().contains("Connection reset by peer"),
+        "the error handed on must be the mirror's, not one of ours: {err}"
+    );
+    assert_eq!(
+        ops_of(&log)
+            .iter()
+            .filter(|op| matches!(op, Op::PkgInstall(_)))
+            .count(),
+        3,
+        "three attempts, no more"
+    );
+}
+
+/// the retry has to be **wired to the real steps**, not merely to exist.
+///
+/// the mutation that put this here survived every behavioural test: removing
+/// `with_retries()` from `build_steps` left three green tests proving a retry
+/// that production would never perform. The budget is not observable through
+/// `dyn Step`, so this reads the source — paired with the tests above, which
+/// prove what the budget does once it is set.
+///
+/// only the **active** lines: the comment next to those calls names
+/// `with_retries` while explaining it, and a check that read the prose would
+/// stay green with the calls gone (R14's trap, met twice now).
+#[test]
+fn the_installing_steps_are_built_with_the_retry_budget() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/steps/mod.rs"),
+    )
+    .expect("src/steps/mod.rs must be readable");
+
+    let build = source
+        .split("pub fn build_steps")
+        .nth(1)
+        .expect("build_steps must exist");
+    let build = build.split("\npub fn ").next().unwrap_or(build);
+    let active: String = build
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let with_retries = active.matches(".with_retries()").count();
+    assert_eq!(
+        with_retries, 2,
+        "both package steps must be built with the retry budget: a mirror that drops one \
+         download out of twenty-five otherwise costs a whole installation"
+    );
+}

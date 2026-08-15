@@ -142,6 +142,27 @@ pub struct AptPackagesStep {
     /// whether this step's list adapts to the chosen interpreter (M11): the
     /// system Python's headers out, the alternative and its own in.
     adapts_python: bool,
+    /// how many times the install is attempted when the **mirror** is what
+    /// failed, and how long to wait between attempts.
+    ///
+    /// zero backoff in the test constructor, exactly as `CloneOdooRepo` does:
+    /// three instant attempts against an unresponsive network are one attempt,
+    /// so the real value has to come from the real constructor — and tests must
+    /// not sleep.
+    install_attempts: u32,
+    backoff_base_secs: u64,
+}
+
+/// how many times a package install is attempted before giving up.
+const DEFAULT_INSTALL_ATTEMPTS: u32 = 3;
+/// seconds waited after the first failed attempt; it grows linearly.
+const DEFAULT_BACKOFF_SECS: u64 = 5;
+
+fn env_u32(key: &str, default: u32) -> u32 {
+    std::env::var(key)
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(default)
 }
 
 impl AptPackagesStep {
@@ -207,7 +228,75 @@ impl AptPackagesStep {
             resolved: Vec::new(),
             refresh_index: false,
             adapts_python: false,
+            // the test constructor: no waiting, and a single attempt, so a test
+            // that does not care about retries sees exactly one call.
+            install_attempts: 1,
+            backoff_base_secs: 0,
         }
+    }
+
+    /// the retry budget, with **no** waiting: for the tests, which must not
+    /// sleep, and which are about the decision rather than the pause.
+    pub fn with_retries_for_test(mut self, attempts: u32) -> Self {
+        self.install_attempts = attempts.max(1);
+        self.backoff_base_secs = 0;
+        self
+    }
+
+    /// the constructor `build_steps` uses: it reads the retry budget from the
+    /// environment and applies a real backoff between attempts.
+    pub fn with_retries(mut self) -> Self {
+        self.install_attempts =
+            env_u32("PACKAGE_INSTALL_ATTEMPTS", DEFAULT_INSTALL_ATTEMPTS).max(1);
+        self.backoff_base_secs = DEFAULT_BACKOFF_SECS;
+        self
+    }
+
+    /// installs the resolved list, asking again when the **mirror** was what
+    /// failed.
+    ///
+    /// found by the CI, on a `debian:11` probe: `apt-get` got
+    /// `Connection reset by peer` fetching one `.deb` out of twenty-five, and a
+    /// whole installation was rolled back for it. Nothing was wrong with the
+    /// machine, the list or the code — a mirror closed a socket. On a customer's
+    /// line that is not rare, and it is exactly the shape `CloneOdooRepo`
+    /// already handles for the clone: the network is the part that fails.
+    ///
+    /// what is **not** retried is as important: a name that does not exist, a
+    /// dependency that cannot be satisfied, a broken `dpkg`. Those answer the
+    /// same way every time, and asking again only makes the true message arrive
+    /// three times later. The manager decides which is which
+    /// ([`crate::packaging::PackageManager::is_transient_failure`]) because only
+    /// it knows the dialect.
+    fn install_resolved(&self, refs: &[&str]) -> Result<(), StepError> {
+        for attempt in 1..=self.install_attempts {
+            let error = match self.ops.packages().install(refs) {
+                Ok(()) => return Ok(()),
+                Err(e) => e,
+            };
+            let stderr = match &error {
+                StepError::CommandFailed { stderr, .. } => stderr.clone(),
+                _ => String::new(),
+            };
+            let transient = self.ops.packages().is_transient_failure(&stderr);
+            if !transient || attempt == self.install_attempts {
+                return Err(error);
+            }
+            warn!(
+                step = self.name,
+                attempt,
+                attempts = self.install_attempts,
+                error = %error,
+                "run: the package download failed on the mirror's side, asking again"
+            );
+            if self.backoff_base_secs > 0 {
+                std::thread::sleep(std::time::Duration::from_secs(
+                    attempt as u64 * self.backoff_base_secs,
+                ));
+            }
+        }
+        // unreachable: the loop returns on the last attempt.
+        Ok(())
     }
 
     /// picks, inside a group, the name to use on **this** system.
@@ -483,7 +572,7 @@ impl Step for AptPackagesStep {
         }
         // install the whole resolved list: only the missing ones are added.
         let refs: Vec<&str> = self.resolved.iter().map(String::as_str).collect();
-        self.ops.packages().install(&refs)?;
+        self.install_resolved(&refs)?;
         info!(
             step = self.name,
             installed = self.snap.delta.len(),

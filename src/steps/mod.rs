@@ -177,10 +177,12 @@ pub fn build_steps(make_ops: OpsFactory<'_>) -> Vec<Box<dyn Step>> {
         // running as `odoo` writes a cache there. early here means late in the
         // undo, which is where it matters (A-R5-3).
         Box::new(setup_cache_dir::SetupCacheDir::with_ops(make_ops())),
-        Box::new(apt_packages::AptPackagesStep::bootstrap_with_ops(make_ops())),
-        Box::new(apt_packages::AptPackagesStep::odoo_dependencies_with_ops(
-            make_ops(),
-        )),
+        // `with_retries` only here, on the install path: `step_by_name` rebuilds
+        // steps for a rollback, which never calls `run`.
+        Box::new(apt_packages::AptPackagesStep::bootstrap_with_ops(make_ops()).with_retries()),
+        Box::new(
+            apt_packages::AptPackagesStep::odoo_dependencies_with_ops(make_ops()).with_retries(),
+        ),
         Box::new(install_wkhtmltopdf::InstallWkhtmltopdf::with_parts(
             make_ops(),
             Box::new(RealDownloader::new()) as Box<dyn Downloader>,

@@ -352,6 +352,7 @@ Not installation parameters, but knobs for difficult networks, read from the pro
 |---|---|---|
 | `ODOO_NETWORK_TIMEOUT_SECS` | `300` | Timeout for network operations (Odoo clone, fallback tarball, wkhtmltopdf `.deb` download). On expiry the command is interrupted with a clear error instead of hanging. `0` disables it |
 | `GIT_CLONE_RETRIES` | `3` | `git clone` attempts before falling back to the tarball (a timeout consumes one attempt) |
+| `PACKAGE_INSTALL_ATTEMPTS` | `3` | attempts at installing the packages when the **mirror** is what failed (`Failed to fetch`, a connection reset). A package that does not exist is not retried: it would answer the same way every time |
 | `GIT_DEPTH` | `5` | Shallow clone depth |
 
 `apt-get` and long local operations (DB init, `pip install`, venv creation) have **no** timeout:

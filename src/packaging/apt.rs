@@ -27,6 +27,32 @@ fn run_apt(args: &[&str]) -> Result<(), StepError> {
     )
 }
 
+/// does this `apt-get` failure look like the **mirror**, rather than the
+/// request?
+///
+/// pure, and narrow on purpose. a fetch that fails because a mirror reset the
+/// connection is worth asking again — it is an ordinary event on a 25-package
+/// install, and today it costs a whole installation. a package that does not
+/// exist is not worth asking again: retrying a deterministic failure only makes
+/// it take three times as long to say the same thing, and hides it behind a
+/// wait.
+///
+/// so the evidence has to name **fetching**. apt says `Failed to fetch` for the
+/// umbrella case and the reason after it; a name it cannot resolve gives
+/// `Unable to locate package`, which is not here and must not be.
+pub fn is_transient_fetch_failure(stderr: &str) -> bool {
+    const TRANSIENT: [&str; 6] = [
+        "failed to fetch",
+        "unable to fetch some archives",
+        "connection reset by peer",
+        "connection timed out",
+        "temporary failure resolving",
+        "could not resolve",
+    ];
+    let lower = stderr.to_lowercase();
+    TRANSIENT.iter().any(|marker| lower.contains(marker))
+}
+
 /// bootstrap prerequisites: low-risk common utilities.
 ///
 /// these four names are stable across every supported release, so they carry no
@@ -190,6 +216,10 @@ impl PackageManager for AptBackend {
             && run_apt(&["install", "-s", "-y", "--no-install-recommends", "--", pkg]).is_ok();
 
         availability_from(policy_says_real, resolver_accepts)
+    }
+
+    fn is_transient_failure(&self, stderr: &str) -> bool {
+        is_transient_fetch_failure(stderr)
     }
 
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {

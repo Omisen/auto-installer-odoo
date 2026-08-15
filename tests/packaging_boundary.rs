@@ -380,3 +380,69 @@ fn a_real_candidate_always_beats_a_virtual_name() {
          removable name always beats one that is not"
     );
 }
+
+// --- what a transient failure looks like, per family ------------------------
+
+/// the predicate is **narrow on purpose**, and both directions are asserted.
+///
+/// too generous and a deterministic failure gets retried, so the true message
+/// arrives three times later hidden behind a wait; too narrow and a mirror that
+/// closed a socket costs a whole installation. The evidence has to name the
+/// **fetch**, never the request.
+#[test]
+fn only_a_download_failure_is_worth_asking_again() {
+    use invok::packaging::{apt, dnf};
+
+    // the message the CI actually produced, kept verbatim: a fixture describing
+    // a program's output is taken from that program, not written from memory.
+    let from_the_field = "E: Failed to fetch \
+        http://deb.debian.org/debian/pool/main/g/gcc-10/g%2b%2b-10_10.2.1-6_amd64.deb  \
+        Error reading from server - read (104: Connection reset by peer) \
+        [IP: 151.101.202.132 80]\n\
+        E: Unable to fetch some archives, maybe run apt-get update or try with --fix-missing?";
+    assert!(apt::is_transient_fetch_failure(from_the_field));
+
+    for transient in [
+        "E: Failed to fetch http://deb.debian.org/...",
+        "Could not resolve 'deb.debian.org'",
+        "Temporary failure resolving 'deb.debian.org'",
+        "Connection timed out [IP: 1.2.3.4 80]",
+    ] {
+        assert!(
+            apt::is_transient_fetch_failure(transient),
+            "apt: this is the mirror, and it is worth asking again: {transient}"
+        );
+    }
+
+    for deterministic in [
+        "E: Unable to locate package libfoo-dev",
+        "E: Package 'node-less' has no installation candidate",
+        "E: dpkg was interrupted, you must manually run 'dpkg --configure -a'",
+        "The following packages have unmet dependencies:",
+    ] {
+        assert!(
+            !apt::is_transient_fetch_failure(deterministic),
+            "apt: this answers the same way every time, so retrying only delays it: {deterministic}"
+        );
+    }
+
+    for transient in [
+        "Curl error (56): Recv failure: Connection reset by peer",
+        "Failed to download packages",
+        "Could not resolve host: mirrors.fedoraproject.org",
+    ] {
+        assert!(
+            dnf::is_transient_fetch_failure(transient),
+            "dnf: {transient}"
+        );
+    }
+    for deterministic in [
+        "No match for argument: libfoo-devel",
+        "Error: Unable to find a match: python3-foo",
+    ] {
+        assert!(
+            !dnf::is_transient_fetch_failure(deterministic),
+            "dnf: {deterministic}"
+        );
+    }
+}

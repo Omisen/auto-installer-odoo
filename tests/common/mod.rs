@@ -248,6 +248,12 @@ pub struct MockConfig {
     /// makes `chmod` fail, to exercise a `run` that dies **after** having
     /// created the artifact (`A-V3-24`).
     pub chmod_fails: bool,
+    /// how many `install` calls fail before one succeeds, and with which
+    /// stderr. models a mirror that resets the connection, so the retry can be
+    /// exercised — and, with a non-transient message, so it can be checked that
+    /// the retry does **not** fire.
+    pub install_fail_times: u32,
+    pub install_failure_stderr: String,
     /// same, for the ownership call: `chown_to_user` fails once the file has
     /// already been written.
     pub chown_fails: bool,
@@ -307,6 +313,9 @@ impl Default for MockConfig {
             dir_mode: 0o755,
             mode_unreadable: false,
             chmod_fails: false,
+            install_fail_times: 0,
+            install_failure_stderr:
+                "E: Failed to fetch http://deb.debian.org/... Connection reset by peer".to_string(),
             chown_fails: false,
             family: OsFamily::Debian,
         }
@@ -366,6 +375,7 @@ impl MockSystemOps {
             cfg: cfg.clone(),
             dpkg_broken: Rc::clone(&dpkg_broken),
             index_populated: Rc::clone(&index_populated),
+            install_failures_left: Cell::new(cfg.install_fail_times),
         };
         let distro = MockDistro {
             firewall: MockFirewall {
@@ -427,6 +437,8 @@ pub struct MockPackageManager {
     cfg: MockConfig,
     dpkg_broken: Rc<Cell<bool>>,
     index_populated: Rc<Cell<bool>>,
+    /// counts down `install_fail_times`, so the mirror "recovers".
+    install_failures_left: Cell<u32>,
 }
 
 impl MockPackageManager {
@@ -440,6 +452,15 @@ impl MockPackageManager {
 impl PackageManager for MockPackageManager {
     fn is_installed(&self, pkg: &str) -> bool {
         self.cfg.installed_packages.contains(pkg)
+    }
+    fn is_transient_failure(&self, stderr: &str) -> bool {
+        // the real predicate, not a simplified one: a mock that answered `true`
+        // to everything would make the retry look right while the production
+        // rule went untested (the reason R13 made the ufw mock speak `ufw`).
+        match self.cfg.family {
+            OsFamily::Debian => invok::packaging::apt::is_transient_fetch_failure(stderr),
+            OsFamily::Fedora => invok::packaging::dnf::is_transient_fetch_failure(stderr),
+        }
     }
     fn refresh_index(&self) -> Result<(), StepError> {
         self.record(Op::PkgRefreshIndex);
@@ -477,6 +498,15 @@ impl PackageManager for MockPackageManager {
     }
     fn install(&self, pkgs: &[&str]) -> Result<(), StepError> {
         self.record(Op::PkgInstall(pkgs.iter().map(|s| s.to_string()).collect()));
+        let failures_left = self.install_failures_left.get();
+        if failures_left > 0 {
+            self.install_failures_left.set(failures_left - 1);
+            return Err(StepError::CommandFailed {
+                command: "apt-get install".to_string(),
+                status: "100".to_string(),
+                stderr: self.cfg.install_failure_stderr.clone(),
+            });
+        }
         Ok(())
     }
     fn remove(&self, pkgs: &[&str]) -> Result<(), StepError> {

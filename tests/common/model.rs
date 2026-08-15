@@ -171,6 +171,10 @@ pub struct ModelPackages {
 }
 
 impl PackageManager for ModelPackages {
+    fn is_transient_failure(&self, stderr: &str) -> bool {
+        invok::packaging::apt::is_transient_fetch_failure(stderr)
+    }
+
     fn is_installed(&self, pkg: &str) -> bool {
         self.state.lock().expect("l").packages.contains(pkg)
     }
