@@ -112,6 +112,33 @@ fi
 # the crossed comparison of A-V6-3, which nothing else exercises for real: 8072
 # is nobody's HTTP port and — with `workers = 0` — nothing is listening on it
 # either. only the manifests know it is taken.
+phase "the helper of each instance sees the machine, and drives only itself"
+# the helper lives in the INVOKING user's home, one per instance, and until now
+# nothing exercised it: `status` used to show its own service and nothing else,
+# so on a machine with two you could not tell which one you were driving.
+HELPER_HOME="$(getent passwd "${SUDO_USER:-$(id -un)}" | cut -d: -f6)"
+for helper in odoo "odoo-$INSTANCE"; do
+  test -x "$HELPER_HOME/.scripts/$helper.sh" \
+    && say "the helper '$helper' was installed" ok \
+    || say "no helper '$helper' in $HELPER_HOME/.scripts" no
+done
+
+"$HELPER_HOME/.scripts/odoo.sh" status > "$WORK"/helper-status.log 2>&1 || true
+cat "$WORK"/helper-status.log
+grep -q "odoo18.service" "$WORK"/helper-status.log \
+  && say "the helper lists the historical instance" ok || say "odoo18 is missing from the listing" no
+grep -q "odoo-$INSTANCE.service" "$WORK"/helper-status.log \
+  && say "and the named one beside it" ok || say "the named instance is missing from the listing" no
+grep -qE "^-> odoo18\.service .*\(this one: odoo\)" "$WORK"/helper-status.log \
+  && say "and it marks which one it drives" ok || say "the listing does not mark this instance" no
+
+# the isolation, measured rather than assumed: this helper must not be able to
+# stop the other instance.
+"$HELPER_HOME/.scripts/odoo.sh" restart
+systemctl is-active odoo-"$INSTANCE" >/dev/null \
+  && say "restarting one instance left the other running" ok \
+  || say "the helper of one instance touched the other's service" no
+
 phase "a third instance on a longpolling port is refused"
 set +e
 sudo "$INVOK" --config "$NAMED_ENV" --instance terza --port 8072 > "$WORK"/refuse.log 2>&1

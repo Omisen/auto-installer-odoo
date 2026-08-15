@@ -378,7 +378,24 @@ journalctl -u odoo18 -n 50 --no-pager
 
 odoo status                              # helper command; after: source ~/.bashrc
                                          # start | stop | restart | status | dev
+```
 
+Each instance gets **its own** helper — `odoo`, `odoo-cliente-x` — and every verb that starts or
+stops acts on that instance alone: on a machine with two customers, a helper that could stop the
+other one would be a way to take a customer offline by accident. `status` is the exception, because
+reading is not touching — it shows this instance's service **and every Odoo service on the machine**,
+marking the one you are driving:
+
+```
+Odoo services on this machine:
+   odoo-cliente-x.service           inactive
+-> odoo18.service                   active   (this one: odoo)
+```
+
+`dev` stops this instance and opens a shell as its user, to run `odoo-bin` by hand; when you leave,
+the service is still down and the helper says so, with the command to bring it back.
+
+```bash
 sudo cat /var/log/invok.log              # installer log (post-mortem; survives rollback, by design)
 ```
 

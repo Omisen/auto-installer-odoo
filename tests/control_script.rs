@@ -160,10 +160,142 @@ fn script_content_wraps_service_and_user() {
     let content = control_script_content("odoo18", "odoo", "odoo");
     assert!(content.contains("SERVICE_NAME=\"odoo18\""));
     assert!(content.contains("ODOO_OS_USER=\"odoo\""));
+    assert!(content.contains("COMMAND_NAME=\"odoo\""));
     assert!(
-        content.contains("Usage: odoo "),
+        content.contains("Usage: ${COMMAND_NAME} "),
         "the usage line must name the command the helper is invoked by"
     );
     assert!(content.contains("systemctl start"));
     assert!(content.contains("systemctl status"));
+}
+
+/// the helper drives **its own** instance, and only that one.
+///
+/// a machine can carry several, each with its own service, user, database and
+/// port. A helper that started or stopped somebody else's would take one
+/// customer offline to fix another one's problem — the hazard the shared-artifact
+/// rule protects the rollback from, arriving through the front door instead.
+///
+/// so every mutating verb names `${SERVICE_NAME}` and nothing else. This test is
+/// the guard on that: it reads the mutating branches and refuses any `systemctl`
+/// there that acts on a name we did not derive.
+#[test]
+fn only_this_instances_service_is_ever_started_or_stopped() {
+    let content = control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x");
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        // the mutating verbs only: `list-units` and `status` read, and they are
+        // allowed — that is how the helper shows the machine without touching it.
+        for verb in ["systemctl start", "systemctl stop", "systemctl restart"] {
+            if let Some(rest) = line.strip_prefix(&format!("sudo {verb}")) {
+                assert_eq!(
+                    rest.trim(),
+                    "\"${SERVICE_NAME}\"",
+                    "a mutating systemctl must act on this instance's service and no other: {line}"
+                );
+            }
+        }
+    }
+
+    // and the read-only half is there, asked of the right source. `list-units`
+    // is the wrong one and a VM proved it: a stopped service is unloaded and
+    // disappears from that listing even with `--all` — exactly the instance
+    // somebody running `status` is hunting for. The unit FILES are what is
+    // installed; `is-active` says what is up.
+    assert!(
+        content.contains("systemctl list-unit-files"),
+        "the instances are enumerated from the unit files, which do not vanish when stopped"
+    );
+    assert!(
+        content.contains("systemctl is-active"),
+        "and whether each is up is asked per unit"
+    );
+    assert!(
+        !content.contains("systemctl list-units"),
+        "list-units hides a stopped instance: it must not come back"
+    );
+}
+
+/// `dev` leaves the service stopped, and has to say so.
+///
+/// it stops the service on purpose — you are about to run `odoo-bin` by hand on
+/// the same port — but when the shell exits nothing starts it again, and until
+/// now nothing said that either. An instance quietly left down after a debugging
+/// session is a defect of the helper, not of whoever used it.
+#[test]
+fn dev_says_that_it_leaves_the_service_stopped() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+    let dev = content
+        .split("  dev)")
+        .nth(1)
+        .expect("the dev branch must exist")
+        .split("  status)")
+        .next()
+        .expect("it ends where the next branch starts");
+
+    assert!(dev.contains("systemctl stop"), "dev stops the service");
+    assert!(
+        dev.contains("STOPPED") && dev.contains("${COMMAND_NAME} start"),
+        "and it must say that it stays stopped, and how to bring it back:\n{dev}"
+    );
+    assert!(
+        !dev.contains("systemctl start"),
+        "dev must not restart it by itself: you may want to keep working by hand"
+    );
+}
+
+/// an unknown verb is an error, not a suggestion.
+///
+/// it used to print the usage on stdout and exit **0**, so a script calling the
+/// helper could not tell a typo from a success.
+#[test]
+fn an_unknown_verb_fails_and_says_so_on_stderr() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+    assert!(
+        content.contains("usage >&2") && content.contains("exit 2"),
+        "the fallback branch must go to stderr and exit non-zero"
+    );
+    assert!(
+        content.contains("-h|--help|help)"),
+        "asking for help is not an error, and must not exit non-zero"
+    );
+}
+
+/// the generated script is **valid bash**.
+///
+/// nobody compiles it: it is written to a customer's home and first run by a
+/// human, weeks later, when something is already wrong. A syntax error would
+/// surface there. The CI scripts have had this guard for the same reason.
+#[test]
+fn the_generated_script_is_syntactically_valid() {
+    let content = control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x");
+    let dir = tempfile::tempdir().expect("tempdir");
+    let path = dir.path().join("helper.sh");
+    std::fs::write(&path, &content).expect("write");
+
+    let out = std::process::Command::new("bash")
+        .arg("-n")
+        .arg(&path)
+        .output()
+        .expect("bash must be available");
+    assert!(
+        out.status.success(),
+        "the generated helper does not parse:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// prints the rendered helper, to look at it: `cargo test --test control_script
+/// -- --ignored --nocapture show_the_helper`.
+#[test]
+#[ignore]
+fn show_the_helper() {
+    println!(
+        "{}",
+        control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x")
+    );
 }

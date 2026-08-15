@@ -16,13 +16,75 @@ use crate::system_ops::SystemOps;
 
 /// the control script's template; placeholders are substituted by hand.
 const CONTROL_SCRIPT_TEMPLATE: &str = r#"#!/usr/bin/env bash
+#
+# invok's helper for ONE Odoo instance. It drives that instance and no other,
+# deliberately: a machine can carry several — each with its own service, user,
+# database and port — and a helper that started or stopped somebody else's would
+# take one customer offline to fix another one's problem. What it does do is
+# SHOW the others, with the command that drives each: reading, never touching.
 
 set -euo pipefail
 
 SERVICE_NAME="__SERVICE__"
 ODOO_OS_USER="__OSUSER__"
+COMMAND_NAME="__COMMAND__"
+
 usage() {
-  echo "Usage: __COMMAND__ {start|stop|restart|dev|status}"
+  cat <<USAGE
+${COMMAND_NAME} — controls the Odoo instance served by '${SERVICE_NAME}'
+
+Usage: ${COMMAND_NAME} {start|stop|restart|status|dev}
+
+  start     start this instance's service
+  stop      stop it
+  restart   restart it — after changing its configuration file
+  status    its state, followed by every Odoo service on this machine
+  dev       stop it and open a shell as '${ODOO_OS_USER}', to run odoo-bin by
+            hand. The service stays STOPPED when you leave: bring it back with
+            '${COMMAND_NAME} start'
+
+Only this instance is ever touched. If the machine carries others, 'status'
+lists them with the command that drives each one.
+USAGE
+}
+
+# every Odoo service on this machine, ours marked.
+#
+# asked of systemd rather than of the manifests, and that is the point: the
+# question here is "what is running NOW", which no manifest records — the same
+# distinction the installer makes when it checks a port. A manifest says who
+# reserved something, systemd says who is holding it.
+#
+# TWO commands, and the reason is worth keeping. `list-units` was the obvious
+# one and it is the WRONG source: a service that is stopped gets unloaded, so it
+# vanishes from that listing even with `--all` — which is precisely the instance
+# somebody running `status` is looking for. The unit FILES are the record of
+# what is installed; `is-active` answers, per unit, what is up.
+list_instances() {
+  echo
+  echo "Odoo services on this machine:"
+  local unit state marker command_for
+  while read -r unit _rest; do
+    [ -n "${unit:-}" ] || continue
+    state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
+    [ -n "${state}" ] || state="unknown"
+    # `if` rather than `[ … ] && …`: under `set -e` the second form has a rule
+    # subtle enough to be worth not relying on in generated code.
+    marker="  "
+    command_for=""
+    if [ "${unit}" = "${SERVICE_NAME}.service" ]; then
+      marker="->"
+      # the helper's name is the instance's: `odoo` for the historical one,
+      # `odoo-<name>` for the others. The unit carries the version instead, so
+      # only ours can be named with certainty.
+      command_for="   (this one: ${COMMAND_NAME})"
+    fi
+    printf '%s %-32s %s%s\n' "${marker}" "${unit}" "${state}" "${command_for}"
+  done < <(systemctl list-unit-files --no-pager --no-legend 'odoo*.service' 2>/dev/null || true)
+  echo
+  echo "Each instance has a helper of its own: 'odoo' for the historical one,"
+  echo "'odoo-<name>' for a named one. Use that helper to start or stop it —"
+  echo "this one only drives '${SERVICE_NAME}'."
 }
 
 case "${1:-}" in
@@ -36,14 +98,27 @@ case "${1:-}" in
     sudo systemctl restart "${SERVICE_NAME}"
     ;;
   dev)
+    echo "stopping '${SERVICE_NAME}' — the other instances on this machine are left alone."
     sudo systemctl stop "${SERVICE_NAME}"
     sudo su - "${ODOO_OS_USER}" -s /bin/bash
+    echo
+    echo "'${SERVICE_NAME}' is still STOPPED. Start it again with: ${COMMAND_NAME} start"
     ;;
   status)
-    sudo systemctl status "${SERVICE_NAME}"
+    # systemctl exits non-zero for a service that is not running, and under
+    # `set -e` that would take the listing with it — precisely when it is most
+    # wanted. The code is kept and handed on at the end.
+    rc=0
+    sudo systemctl status "${SERVICE_NAME}" --no-pager || rc=$?
+    list_instances
+    exit "${rc}"
+    ;;
+  -h|--help|help)
+    usage
     ;;
   *)
-    usage
+    usage >&2
+    exit 2
     ;;
 esac
 "#;
