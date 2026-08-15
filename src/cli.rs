@@ -149,6 +149,14 @@ pub enum Command {
 /// options for `invok rollback`.
 #[derive(Args, Debug)]
 pub struct RollbackArgs {
+    /// remove **every** instance on this machine, shared artifacts last.
+    ///
+    /// two passes: each instance's own artifacts first, then what they had in
+    /// common — `/opt/odoo`, the system packages, the PostgreSQL cluster —
+    /// once nothing is using them any more. one confirmation covers the lot.
+    #[arg(long, conflicts_with_all = ["instance", "state"])]
+    pub all: bool,
+
     /// which instance to undo; `default` is the one installed without
     /// `--instance`.
     ///

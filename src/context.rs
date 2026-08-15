@@ -68,6 +68,17 @@ pub struct Context {
     /// when set, the rollback also purges what it would normally leave: common
     /// bootstrap utilities and PostgreSQL.
     pub aggressive_rollback: bool,
+    /// another instance is still installed on this machine (phase I2).
+    ///
+    /// rollback-wide policy, like [`Self::aggressive_rollback`], and read by the
+    /// two steps whose undo is **partly** shared: they do their own half and
+    /// leave the shared one alone. the steps that are wholly shared never get
+    /// called at all — that decision is the rollback driver's, from
+    /// [`crate::steps::artifact_scope`].
+    ///
+    /// `false` by default, so every path that does not set it behaves exactly as
+    /// it did before instances existed.
+    pub shared_in_use: bool,
     /// path of the persisted state file; configurable for the tests.
     pub state_path: PathBuf,
     /// OS details from the preflight checks, filled in after `check_os`.
@@ -130,6 +141,7 @@ impl Context {
             nginx_open_https_port: config.nginx_open_https_port,
             dry_run,
             aggressive_rollback: false,
+            shared_in_use: false,
             state_path,
             os_info: None,
             // both are filled in by `main` at preflight; before that no step

@@ -97,10 +97,40 @@ impl Found {
     ///
     /// an empty one does not: after a complete rollback the file is removed
     /// rather than emptied (R19), so an empty manifest is a leftover that says
-    /// nothing. it must not count as an instance when deciding whether somebody
-    /// else is still using the shared artifacts.
+    /// nothing.
     pub fn owns_anything(&self) -> bool {
         !self.state.completed.is_empty()
+    }
+
+    /// is there still an **instance** here, as opposed to a record of shared
+    /// artifacts nobody has removed yet?
+    ///
+    /// after a rollback run while another instance was installed, what stays in
+    /// the manifest is exactly the steps that own shared things — `/opt/odoo`,
+    /// the packages, the cluster. that file is a **tombstone**: the instance is
+    /// gone, its sources, database, unit and home with it, and what remains is
+    /// the record of who owns what everybody else is still using.
+    ///
+    /// the distinction is what stops the machine deadlocking. counting a
+    /// tombstone as an instance would mean two half-removed installations each
+    /// protecting the other's shared artifacts, with neither ever able to
+    /// finish.
+    ///
+    /// a step of scope `Mixed` does **not** count as life: what it leaves
+    /// behind is the shared half, which is the tombstone's whole point.
+    pub fn is_live(&self) -> bool {
+        let unnamed = self
+            .state
+            .config
+            .as_ref()
+            .map(|c| c.instance.is_none())
+            // no configuration at all is a pre-R4 manifest, which describes the
+            // one installation that could exist then: the unnamed one.
+            .unwrap_or(true);
+        self.state.completed.iter().any(|r| {
+            crate::steps::artifact_scope(&r.name, unnamed)
+                == crate::steps::ArtifactScope::OwnInstance
+        })
     }
 }
 
@@ -119,12 +149,26 @@ pub struct Discovery {
 }
 
 impl Discovery {
-    /// the instances **other** than `chosen` that still own artifacts.
-    pub fn others_owning_artifacts(&self, chosen: &InstanceId) -> Vec<String> {
+    /// the instances **other** than `chosen` that are still installed.
+    ///
+    /// tombstones are excluded: they hold no running Odoo, only the record of
+    /// shared artifacts. see [`Found::is_live`].
+    pub fn live_others(&self, chosen: &InstanceId) -> Vec<String> {
         self.found
             .iter()
-            .filter(|f| &f.id != chosen && f.owns_anything())
+            .filter(|f| &f.id != chosen && f.is_live())
             .map(|f| f.id.to_string())
+            .collect()
+    }
+
+    /// the manifests that are **not** live: nothing runs from them, but they
+    /// still record shared artifacts nobody has removed.
+    ///
+    /// what `rollback --all` comes back for once every instance is gone.
+    pub fn tombstones(&self) -> Vec<&Found> {
+        self.found
+            .iter()
+            .filter(|f| !f.is_live() && f.owns_anything())
             .collect()
     }
 }
@@ -325,71 +369,9 @@ pub fn select(found: &[Found], requested: Option<&str>) -> Selection {
 pub fn port_conflict(found: &[Found], chosen: &InstanceId, port: u16) -> Option<(String, u16)> {
     found
         .iter()
-        .filter(|f| &f.id != chosen && f.owns_anything())
+        .filter(|f| &f.id != chosen && f.is_live())
         .find_map(|f| {
             let config = f.state.config.as_ref()?;
             (config.port == port).then(|| (f.id.to_string(), config.port))
         })
-}
-
-/// what a rollback may do while other instances are installed (phase I1).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum SharedArtifactVerdict {
-    Proceed,
-    /// somebody else is still here: the names, for the message.
-    Refuse(Vec<String>),
-}
-
-/// the stopgap that stands in for I2's rule.
-///
-/// `/opt/odoo`, the packages, the cluster, wkhtmltopdf and nginx belong to
-/// whichever instance created them, and that instance's undo removes them —
-/// correctly, while it is alone. with somebody else still installed, the same
-/// undo takes the ground out from under a **running** instance.
-///
-/// the rule that makes this safe artifact by artifact — *is anyone else using
-/// it?* — is phase I2. until it exists this refusal stands in for it, and it is
-/// deliberately **stricter** than what will replace it: a second instance's
-/// rollback is in fact harmless, because it found every shared artifact
-/// `Preexisting` and its undo is already a no-op. being over-strict for one
-/// phase beats destroying a live instance once.
-///
-/// `dry_run` proceeds: it only prints, and printing is what somebody in this
-/// situation needs to see.
-///
-/// a manifest that is not among the discovered ones — `--state` with a path of
-/// its own — cannot be told apart from the local instances, so every one of them
-/// counts as somebody else. fail-closed, like every other verdict built on a
-/// file that came from outside.
-///
-/// **a pure policy**, like [`crate::state::start_decision`]: `main` applies it
-/// and writes the message. the rule does not live in `main`, where no test
-/// reaches it — that is how A-V3-1 was born.
-pub fn shared_artifact_gate(
-    discovery: &Discovery,
-    chosen_path: &Path,
-    dry_run: bool,
-) -> SharedArtifactVerdict {
-    if dry_run {
-        return SharedArtifactVerdict::Proceed;
-    }
-    let chosen = discovery
-        .found
-        .iter()
-        .find(|f| f.path == chosen_path)
-        .map(|f| f.id.clone());
-    let others = match &chosen {
-        Some(id) => discovery.others_owning_artifacts(id),
-        None => discovery
-            .found
-            .iter()
-            .filter(|f| f.owns_anything())
-            .map(|f| f.id.to_string())
-            .collect(),
-    };
-    if others.is_empty() {
-        SharedArtifactVerdict::Proceed
-    } else {
-        SharedArtifactVerdict::Refuse(others)
-    }
 }

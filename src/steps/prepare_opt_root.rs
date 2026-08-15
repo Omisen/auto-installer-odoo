@@ -294,6 +294,17 @@ impl Step for PrepareOptRoot {
         if let Some(home) = Self::own_home(ctx) {
             Self::undo_level(&self.snap.instance_home, &home, ctx.dry_run);
         }
+        // the shared root is not ours alone. with another instance still
+        // installed it stays, whoever created it: every one of them lives
+        // underneath (phase I2). the record stays in the manifest too, so the
+        // last instance to go still knows the directory is its to remove.
+        if ctx.shared_in_use {
+            info!(
+                dir = %ctx.odoo_home.display(),
+                "undo NO-OP on the shared root: another instance still lives under it"
+            );
+            return Ok(());
+        }
         Self::undo_level(&self.snap.shared_root, &ctx.odoo_home, ctx.dry_run);
         Ok(())
     }

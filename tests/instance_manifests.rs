@@ -44,13 +44,24 @@ fn config_of(instance: Option<&str>, port: u16) -> InstallConfig {
     InstallConfig::from_context(&ctx)
 }
 
-/// a manifest that records one completed step, hence one that owns something.
+/// a manifest of a **live** instance: one step that owns something shared and
+/// one that is entirely its own.
+///
+/// both matter. a manifest recording only shared steps is a *tombstone* — the
+/// instance is gone and what is left is the record of what it owns on behalf of
+/// the others — and `Found::is_live` tells them apart.
 fn state_of(instance: Option<&str>, port: u16) -> InstallState {
     InstallState {
-        completed: vec![StepRecord {
-            name: "prepare-opt-root".to_string(),
-            snapshot: serde_json::json!({"shared_root": "CreatedByUs", "instance_home": "Untracked"}),
-        }],
+        completed: vec![
+            StepRecord {
+                name: "prepare-opt-root".to_string(),
+                snapshot: serde_json::json!({"shared_root": "CreatedByUs", "instance_home": "Untracked"}),
+            },
+            StepRecord {
+                name: "create-database".to_string(),
+                snapshot: serde_json::json!("CreatedByUs"),
+            },
+        ],
         config: Some(config_of(instance, port)),
         finished: true,
     }
@@ -306,12 +317,9 @@ fn the_others_are_counted_and_the_chosen_one_is_not() {
     write_named(dir.path(), "cliente-x", 8169);
     let d = discover(dir.path());
 
+    assert_eq!(d.live_others(&InstanceId::Unnamed), vec!["cliente-x"]);
     assert_eq!(
-        d.others_owning_artifacts(&InstanceId::Unnamed),
-        vec!["cliente-x"]
-    );
-    assert_eq!(
-        d.others_owning_artifacts(&InstanceId::Named("cliente-x".to_string())),
+        d.live_others(&InstanceId::Named("cliente-x".to_string())),
         vec![UNNAMED_ID]
     );
 }
@@ -337,7 +345,7 @@ fn an_empty_manifest_does_not_count_as_an_instance_in_use() {
 
     assert_eq!(ids(&d.found).len(), 2, "it is still listed");
     assert!(
-        d.others_owning_artifacts(&InstanceId::Unnamed).is_empty(),
+        d.live_others(&InstanceId::Unnamed).is_empty(),
         "but it owns nothing, so it does not hold the shared artifacts hostage"
     );
 }
@@ -374,70 +382,7 @@ fn an_instance_does_not_conflict_with_itself() {
     );
 }
 
-// --- 6. the I1 stopgap on shared artifacts ----------------------------------
-
-use invok::manifests::{shared_artifact_gate, SharedArtifactVerdict};
-
-/// alone on the machine, a rollback proceeds: there is nobody to protect.
-#[test]
-fn the_only_instance_can_be_removed() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let path = write_unnamed(dir.path(), 8069);
-    let d = discover(dir.path());
-    assert_eq!(
-        shared_artifact_gate(&d, &path, false),
-        SharedArtifactVerdict::Proceed
-    );
-}
-
-/// with somebody else installed it is refused — deliberately stricter than
-/// I2's rule will be, because being over-strict for one phase beats destroying
-/// a live instance once.
-#[test]
-fn removing_one_instance_while_another_is_installed_is_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let unnamed = write_unnamed(dir.path(), 8069);
-    write_named(dir.path(), "cliente-x", 8169);
-    let d = discover(dir.path());
-
-    assert_eq!(
-        shared_artifact_gate(&d, &unnamed, false),
-        SharedArtifactVerdict::Refuse(vec!["cliente-x".to_string()]),
-        "removing the instance that owns /opt/odoo would take the ground from under the other"
-    );
-}
-
-/// `--dry-run` prints and changes nothing, and printing is exactly what
-/// somebody in this situation needs to see.
-#[test]
-fn a_dry_run_is_never_refused() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    let unnamed = write_unnamed(dir.path(), 8069);
-    write_named(dir.path(), "cliente-x", 8169);
-    let d = discover(dir.path());
-    assert_eq!(
-        shared_artifact_gate(&d, &unnamed, true),
-        SharedArtifactVerdict::Proceed
-    );
-}
-
-/// a manifest that is not one of the machine's own — `--state` with a path of
-/// its own — cannot be told apart from the local instances, so every one of
-/// them counts. fail-closed, like every verdict built on a file from outside.
-#[test]
-fn a_foreign_manifest_does_not_slip_past_the_gate() {
-    let dir = tempfile::tempdir().expect("tempdir");
-    write_named(dir.path(), "cliente-x", 8169);
-    let d = discover(dir.path());
-
-    let elsewhere = dir.path().join("copiato-da-un-altra-macchina.json");
-    assert_eq!(
-        shared_artifact_gate(&d, &elsewhere, false),
-        SharedArtifactVerdict::Refuse(vec!["cliente-x".to_string()])
-    );
-}
-
-// --- 7. the command line ----------------------------------------------------
+// --- 6. the command line ----------------------------------------------------
 
 #[test]
 fn the_rollback_takes_an_instance_and_list_exists() {

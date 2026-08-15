@@ -41,6 +41,14 @@ pub enum UndoOutcome {
     /// undo is **not** run: acting on invented state could drop the very thing
     /// the snapshot was protecting.
     NotRehydrated(String),
+    /// the step owns artifacts shared with the instances named here, so what is
+    /// shared was left in place (phase I2).
+    ///
+    /// a **residue** like the others, and for the same reason: something this
+    /// manifest describes is still on the machine. that is what keeps the
+    /// manifest — and its record of *who* owns the shared artifacts — alive
+    /// until the last instance goes.
+    LeftShared(Vec<String>),
 }
 
 impl UndoOutcome {
@@ -196,6 +204,32 @@ pub fn rollback_from_state(
     make_ops: OpsFactory<'_>,
     reporter: &dyn ProgressReporter,
 ) -> RollbackReport {
+    rollback_from_state_sharing_with(state, ctx, make_ops, reporter, &[])
+}
+
+/// [`rollback_from_state`], told which **other instances** are still installed.
+///
+/// with `others` empty this is the historical behaviour exactly. otherwise the
+/// steps whose undo reaches shared artifacts are handled by
+/// [`crate::steps::artifact_scope`]:
+///
+/// - `Shared`: the undo is **not run at all**, and the outcome is
+///   [`UndoOutcome::LeftShared`];
+/// - `Mixed`: the undo *is* run — it does the instance's own half and reads
+///   `Context::shared_in_use` to leave the rest — and the outcome is still
+///   `LeftShared`, because part of what the record describes is still there;
+/// - `OwnInstance`: nothing changes.
+///
+/// the caller must set `Context::shared_in_use` to match; the two are separate
+/// because the driver decides *whether to call*, and the step decides *what to
+/// skip inside*. only the mixed ones need both.
+pub fn rollback_from_state_sharing_with(
+    state: &InstallState,
+    ctx: &Context,
+    make_ops: OpsFactory<'_>,
+    reporter: &dyn ProgressReporter,
+    others: &[String],
+) -> RollbackReport {
     let mut report = RollbackReport::default();
     if state.completed.is_empty() {
         info!("rollback: no step to undo");
@@ -243,8 +277,31 @@ pub fn rollback_from_state(
             continue;
         }
 
+        // the shared-artifact rule (phase I2). `unnamed` decides two of the
+        // scopes, and it is read from the manifest's configuration like
+        // everything else the undos act on.
+        let scope = steps::artifact_scope(&name, ctx.instance.is_none());
+        if !others.is_empty() && scope == steps::ArtifactScope::Shared {
+            info!(
+                step = %name,
+                in_use_by = ?others,
+                "undo NOT run: it removes artifacts other instances are still using"
+            );
+            report.outcomes.push(StepOutcome {
+                name: name.clone(),
+                outcome: UndoOutcome::LeftShared(others.to_vec()),
+            });
+            reporter.undo_done(&name);
+            continue;
+        }
+
         info!(step = %name, "undo (from the persisted state)");
         let outcome = match step.undo(ctx) {
+            // a mixed step did its own half and left the shared one: what the
+            // record describes is still partly there, so it is a residue.
+            Ok(()) if !others.is_empty() && scope == steps::ArtifactScope::Mixed => {
+                UndoOutcome::LeftShared(others.to_vec())
+            }
             Ok(()) => UndoOutcome::Undone,
             Err(e) => {
                 warn!(

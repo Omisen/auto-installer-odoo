@@ -97,8 +97,20 @@ impl Step for NginxInstall {
             info!("undo (dry run): stop and disable nginx; purge only if aggressive");
             return Ok(());
         }
+        // nginx belongs to every instance that proxies through it, so with
+        // another one installed it is neither stopped nor purged (phase I2).
+        // the reload below still happens: our vhost is gone either way, and a
+        // running nginx would go on serving the config it loaded (A1.4).
+        let shared_in_use = ctx.shared_in_use;
+        if shared_in_use {
+            info!(
+                "undo: nginx left running and installed — another instance is still \
+                 configured behind it"
+            );
+        }
+
         // stop and disable only what we enabled (D4, D3).
-        if self.snap.enabled == PreState::CreatedByUs {
+        if !shared_in_use && self.snap.enabled == PreState::CreatedByUs {
             if let Err(e) = self.ops.service_stop(NGINX_SERVICE) {
                 warn!(error = %e, "undo: stopping nginx failed, proceeding (best-effort)");
             }
@@ -107,7 +119,7 @@ impl Step for NginxInstall {
             }
         }
         // purge only under `--aggressive-rollback` (D3).
-        if self.snap.installed == PreState::CreatedByUs {
+        if !shared_in_use && self.snap.installed == PreState::CreatedByUs {
             if ctx.aggressive_rollback {
                 crate::steps::remove_with_recovery(
                     self.ops.packages(),

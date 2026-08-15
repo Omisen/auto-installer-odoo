@@ -327,3 +327,111 @@ pub mod setup_log_dir;
 pub mod setup_postgres;
 pub mod setup_systemd;
 pub mod write_control_script;
+
+// --- what a step's undo can touch beyond its own instance (phase I2) ---------
+
+/// how far a step's undo reaches.
+///
+/// with more than one Odoo on a machine, some artifacts belong to **all** of
+/// them: `/opt/odoo`, the system packages, the PostgreSQL cluster, wkhtmltopdf,
+/// the nginx installation, the firewall rule, the SELinux boolean. Whichever
+/// instance created them owns them and its undo removes them — correctly, while
+/// it is alone. with somebody else still installed, that same undo takes the
+/// ground out from under a running instance.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ArtifactScope {
+    /// everything this undo removes belongs to its own instance.
+    OwnInstance,
+    /// the undo touches artifacts every instance depends on. with another
+    /// instance installed it is **not run at all**.
+    Shared,
+    /// the undo does both, so it is still run and the step itself leaves the
+    /// shared half alone, reading [`Context::shared_in_use`].
+    ///
+    /// two steps only, and each for a reason worth knowing:
+    /// - `prepare-opt-root` owns the shared root **and** this instance's own
+    ///   home. skipping it whole would leave the instance's home behind.
+    /// - `nginx-install` owns the nginx installation **and** the realigning
+    ///   reload, which must happen whatever else does: after our vhost is gone,
+    ///   a running nginx is still serving the config it loaded (A1.4).
+    Mixed,
+}
+
+/// which artifacts `step`'s undo can reach.
+///
+/// `unnamed_instance` is the one thing that changes an answer, and it changes
+/// two: the historical installation's system user is `odoo`, which owns
+/// `/opt/odoo` itself, and its home **is** the shared root. a named instance has
+/// a user and a home of its own (§ 9.2 of `audit-v6`, option α), so both are
+/// entirely its business.
+///
+/// deliberately a function of the step **name**, not a method on the trait: the
+/// trait does not change to add an instance, and a classification spread over
+/// twenty-five files is one nobody can read in one go. the parity test in
+/// `tests/shared_artifacts.rs` makes a new step choose a scope instead of
+/// inheriting a default.
+pub fn artifact_scope(step: &str, unnamed_instance: bool) -> ArtifactScope {
+    use ArtifactScope::*;
+    match step {
+        // --- shared with every instance on the machine ----------------------
+        // the delta purge would remove packages another instance is running on.
+        "bootstrap-prerequisites" | "install-system-dependencies" => Shared,
+        "install-wkhtmltopdf" => Shared,
+        // the service, the cluster, and on Fedora the PGDATA.
+        "setup-postgres" => Shared,
+        // machine-wide switches, not ours alone.
+        "nginx-selinux" | "nginx-firewall" => Shared,
+
+        // --- the two that depend on which instance this is ------------------
+        // the unnamed instance's home IS the shared root, so there is no own
+        // half to salvage; a named one has a directory of its own underneath.
+        "prepare-opt-root" => {
+            if unnamed_instance {
+                Shared
+            } else {
+                Mixed
+            }
+        }
+        // `odoo` owns `/opt/odoo`: deleting it while another instance lives
+        // under that directory leaves it owned by a uid that no longer exists.
+        // a named instance's user owns only its own tree.
+        "create-odoo-user" => {
+            if unnamed_instance {
+                Shared
+            } else {
+                OwnInstance
+            }
+        }
+
+        // --- shared **and** its own, so the step decides --------------------
+        "nginx-install" => Mixed,
+
+        // --- entirely this instance's --------------------------------------
+        // the log dir, the cache and the filestore hang off this instance's
+        // home; the role, the database, the sources, the venv, the config, the
+        // unit, the vhost, the helper and the `.bashrc` line all carry its name.
+        "setup-log-dir"
+        | "setup-cache-dir"
+        | "create-db-role"
+        | "create-database"
+        | "clone-odoo-repo"
+        | "create-virtualenv"
+        | "install-python-requirements"
+        | "generate-config"
+        | "setup-data-dir"
+        | "initialize-odoo-database"
+        | "setup-systemd"
+        | "nginx-write-config"
+        // restoring the customer's default site does not disturb another
+        // instance's vhost: it is a catch-all coming back, not a rule removed.
+        | "nginx-enable-site"
+        | "nginx-reload"
+        | "write-control-script"
+        | "patch-bashrc" => OwnInstance,
+
+        // a step this binary does not know cannot be undone anyway, and the
+        // rollback already reports it as `Unknown`. the safe reading of an
+        // unknown name is "it might touch something shared".
+        _ => Shared,
+    }
+}

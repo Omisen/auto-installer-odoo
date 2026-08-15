@@ -267,6 +267,7 @@ instance can be installed alongside the first, and each is undone on its own.
 sudo invok --instance cliente-x --port 8169    # a second instance
 sudo invok list                                # what this machine carries
 sudo invok rollback --instance cliente-x       # undo just that one
+sudo invok rollback --all                      # undo them all, shared artifacts last
 ```
 
 `invok list` needs root, because the manifests are `0600 root` — a listing that silently came up
@@ -277,12 +278,33 @@ exists but cannot be read is reported as a problem rather than skipped.
 and stops, rather than choose one for you. The unnamed instance is called `default` when you have to
 type it, and for that reason `default` is not accepted as an instance name.
 
-> **Removing one instance while another is installed is refused, for now.** `/opt/odoo`, the system
-> packages and the PostgreSQL cluster belong to whichever instance created them, and undoing them
-> would break the others. The rule that makes this safe artifact by artifact — *is anyone else still
-> using it?* — is the next piece of work; until it lands, the refusal stands in for it. It is
-> deliberately stricter than needed: remove the other instances first, or use `--dry-run` to see what
-> a rollback would do.
+### Removing one instance while the others stay
+
+`/opt/odoo`, the system packages, the PostgreSQL cluster, wkhtmltopdf and the Nginx installation
+belong to whichever instance created them. Removing that instance while another is installed would
+take the ground out from under a running system, so those artifacts are **left in place** and the
+rollback says so:
+
+```
+Shared with the instances still installed (default): left in place.
+  - prepare-opt-root
+  - install-system-dependencies
+  - setup-postgres
+```
+
+The instance's own artifacts — sources, virtualenv, database, role, config, unit, vhost, helper and,
+for a named instance, its system user and home — are removed as always. Its manifest is **kept**: it
+is the record of who owns what the others are still using, and `invok list` shows it as `shared only`.
+
+To take everything off, in the right order:
+
+```bash
+sudo invok rollback --all
+```
+
+Two passes: each instance's own artifacts first, then what they had in common, once nothing is using
+it. That ordering is the whole reason `--all` exists as its own flag rather than a loop you write
+yourself.
 
 ### The `.env` file
 

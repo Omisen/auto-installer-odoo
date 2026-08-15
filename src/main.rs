@@ -566,10 +566,15 @@ fn run_list() -> Result<()> {
             "INSTANCE", "ODOO", "STATE", "DATABASE"
         );
         for found in &discovery.found {
-            let state = match (&found.state.finished, found.owns_anything()) {
-                (true, _) => "installed",
-                (false, true) => "interrupted",
-                (false, false) => "empty",
+            // a manifest that is not live is a **tombstone**: the instance is
+            // gone and what is left is the record of the shared artifacts it
+            // owns on everybody's behalf. calling that "interrupted" would send
+            // the reader looking for an installation that is not there.
+            let state = match (found.state.finished, found.owns_anything(), found.is_live()) {
+                (_, true, false) => "shared only",
+                (true, _, _) => "installed",
+                (false, true, _) => "interrupted",
+                (false, false, _) => "empty",
             };
             match &found.state.config {
                 Some(config) => println!(
@@ -617,6 +622,10 @@ fn run_list() -> Result<()> {
 
 fn run_rollback(args: &RollbackArgs) -> Result<()> {
     let _log_guard = invok::logging::init(args.dry_run);
+
+    if args.all {
+        return rollback_all(args);
+    }
 
     // every manifest on the machine, as one list whatever path each came from.
     // needed even with `--state`: the guard below has to know who else is here.
@@ -669,6 +678,132 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         },
     };
 
+    // the instances that are still **installed**, this one aside. tombstones do
+    // not count: they run nothing, they only record shared artifacts nobody has
+    // removed yet.
+    let others = match discovery.found.iter().find(|f| f.path == state_path) {
+        Some(found) => discovery.live_others(&found.id),
+        // `--state` with a path of its own: we cannot tell it apart from the
+        // machine's own instances, so every live one counts as somebody else.
+        // fail-closed, like every verdict built on a file from outside.
+        None => discovery
+            .found
+            .iter()
+            .filter(|f| f.is_live())
+            .map(|f| f.id.to_string())
+            .collect(),
+    };
+
+    rollback_manifest(
+        &state_path,
+        args,
+        &others,
+        /* already_confirmed */ false,
+    )
+}
+
+/// `rollback --all`: every instance, then the shared artifacts.
+///
+/// **two passes, and the order is the whole point** (`A-V6-4`). the first
+/// removes each instance's own artifacts, leaving what they share; the second
+/// comes back for the tombstones, when nothing is live any more and the shared
+/// rule no longer holds anything back.
+///
+/// two passes rather than one sorted list because sorting would need to know
+/// *which* instance created `/opt/odoo`, the packages and the cluster — and that
+/// lives inside each step's opaque snapshot, which only the step can read. the
+/// second pass needs no such answer: by then there is nobody left to protect, so
+/// whoever owns them removes them. an `rm -rf` and a `userdel` must not depend on
+/// a guess, nor on the order `read_dir` happened to return.
+fn rollback_all(args: &RollbackArgs) -> Result<()> {
+    let initial = invok::manifests::discover();
+    if initial.found.is_empty() {
+        println!("nothing to undo: no installation manifest on this machine.");
+        return Ok(());
+    }
+
+    println!();
+    println!("================================================================");
+    println!("Removing EVERY instance on this machine:");
+    for found in &initial.found {
+        println!(
+            "  - {}{}",
+            found.id,
+            if found.is_live() {
+                ""
+            } else {
+                "   (already removed; only its shared artifacts are left)"
+            }
+        );
+    }
+    println!();
+    println!("The shared artifacts — /opt/odoo, the system packages, the PostgreSQL");
+    println!("cluster — come off last, once no instance is using them.");
+    println!("================================================================");
+    println!();
+
+    // one confirmation for the whole operation, not one per instance.
+    match rollback::confirmation_gate(args.dry_run, args.yes, prompt::is_interactive()) {
+        ConfirmationGate::Proceed => {}
+        ConfirmationGate::Ask => {
+            if !prompt::confirm("Remove every instance listed above?")? {
+                bail!("rollback cancelled by the user. nothing was changed.");
+            }
+        }
+        ConfirmationGate::RefuseNonInteractive => bail!(
+            "the rollback removes resources from the system and needs a confirmation. \
+             without an interactive terminal, use --yes to confirm explicitly."
+        ),
+    }
+
+    // --- pass 1: the live instances -----------------------------------------
+    //
+    // rediscovered each time round: the previous rollback has changed what is on
+    // disk, and the list of who is still installed with it.
+    loop {
+        let discovery = invok::manifests::discover();
+        let Some(found) = discovery.found.iter().find(|f| f.is_live()) else {
+            break;
+        };
+        let path = found.path.clone();
+        let others = discovery.live_others(&found.id);
+        println!();
+        println!(">>> instance {} ...", found.id);
+        rollback_manifest(&path, args, &others, /* already_confirmed */ true)?;
+        // a dry run changes nothing, so the same instance would be found for
+        // ever: one pass over the list is all it can honestly do.
+        if args.dry_run {
+            break;
+        }
+    }
+
+    // --- pass 2: what they shared -------------------------------------------
+    loop {
+        let discovery = invok::manifests::discover();
+        let Some(found) = discovery.tombstones().first().map(|f| (*f).clone()) else {
+            break;
+        };
+        println!();
+        println!(">>> shared artifacts recorded by {} ...", found.id);
+        rollback_manifest(&found.path, args, &[], /* already_confirmed */ true)?;
+        if args.dry_run {
+            break;
+        }
+    }
+
+    Ok(())
+}
+
+/// undoes **one** manifest, told which other instances are still installed.
+///
+/// `others` empty means this instance is alone, and then nothing is held back.
+fn rollback_manifest(
+    state_path: &Path,
+    args: &RollbackArgs,
+    others: &[String],
+    already_confirmed: bool,
+) -> Result<()> {
+    let state_path = state_path.to_path_buf();
     let state = InstallState::load(&state_path).map_err(|e| anyhow!(e))?;
 
     // no state means nothing to undo: the normal condition on a clean machine
@@ -679,25 +814,6 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
             state_path.display()
         );
         return Ok(());
-    }
-
-    // the I1 stopgap that stands in for I2's per-artifact rule. the reasoning
-    // lives with the rule, in `manifests::shared_artifact_gate`.
-    if let invok::manifests::SharedArtifactVerdict::Refuse(others) =
-        invok::manifests::shared_artifact_gate(&discovery, &state_path, args.dry_run)
-    {
-        eprintln!("this machine also carries:");
-        for name in &others {
-            eprintln!("  - {name}");
-        }
-        bail!(
-            "removing one instance while another is installed is refused for now: the shared \
-             artifacts (/opt/odoo, the system packages, the PostgreSQL cluster) belong to \
-             whichever instance created them, and undoing them would break the others.\n\
-             \n\
-             remove the other instances first, or run with --dry-run to see what this \
-             rollback would do."
-        );
     }
 
     // without the persisted config we do not know *which* user, database or
@@ -778,8 +894,14 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
 
     let interactive = prompt::is_interactive();
 
-    // the policy is a pure function, checkable without a terminal.
-    match rollback::confirmation_gate(args.dry_run, args.yes, interactive) {
+    // the policy is a pure function, checkable without a terminal. `--all`
+    // has already asked once, for the whole operation.
+    let gate = if already_confirmed {
+        ConfirmationGate::Proceed
+    } else {
+        rollback::confirmation_gate(args.dry_run, args.yes, interactive)
+    };
+    match gate {
         ConfirmationGate::Proceed => {}
         ConfirmationGate::Ask => {
             if !prompt::confirm("Proceed with the removal listed above?")? {
@@ -804,7 +926,11 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         )
     };
 
-    let ctx = config.to_context(args.dry_run, args.aggressive_rollback, state_path.clone());
+    let mut ctx = config.to_context(args.dry_run, args.aggressive_rollback, state_path.clone());
+    // the two steps whose undo is partly shared read this and leave the shared
+    // half alone; the wholly shared ones are not called at all, which is the
+    // driver's decision below.
+    ctx.shared_in_use = !others.is_empty();
 
     let report = {
         let reporter: Box<dyn ProgressReporter> = if interactive && !args.dry_run {
@@ -812,7 +938,13 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         } else {
             Box::new(LogReporter)
         };
-        rollback::rollback_from_state(&state, &ctx, &make_ops, reporter.as_ref())
+        rollback::rollback_from_state_sharing_with(
+            &state,
+            &ctx,
+            &make_ops,
+            reporter.as_ref(),
+            others,
+        )
     };
 
     print_rollback_report(&report, args.dry_run);
@@ -822,9 +954,28 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
         return Ok(());
     }
 
-    // the state is consumed only if the rollback went all the way: anything
-    // left keeps the file, so a second run can retry.
-    if report.is_clean() {
+    // the manifest must go on saying **what is still on the system** (A-R8-1),
+    // and after a rollback that is only what an undo did not remove: a failure,
+    // a step this binary could not rebuild, or a shared artifact deliberately
+    // left to the instances still using it.
+    //
+    // this rule already governed the in-process rollback; applying it here is
+    // what turns a partly-undone instance into a *tombstone* — a manifest that
+    // no longer describes an installation, only the shared artifacts it owns —
+    // instead of a file still claiming a database and a unit that are gone.
+    let kept: Vec<invok::state::StepRecord> = state
+        .completed
+        .iter()
+        .filter(|record| {
+            report
+                .outcomes
+                .iter()
+                .any(|o| o.name == record.name && o.outcome.is_residue())
+        })
+        .cloned()
+        .collect();
+
+    if kept.is_empty() {
         match InstallState::clear(&state_path) {
             Ok(()) => println!("State consumed: {} removed.", state_path.display()),
             Err(e) => tracing::warn!(
@@ -833,14 +984,30 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
                 "removing the state file failed: remove it by hand"
             ),
         }
-    } else {
-        println!(
-            "the state file {} was NOT removed: it still describes what was not cleaned \n\
-             up. once the problem is fixed you can run `invok rollback` again \n\
-             (the undos are idempotent).",
-            state_path.display()
+        return Ok(());
+    }
+
+    let pruned = InstallState {
+        completed: kept,
+        config: state.config.clone(),
+        // it no longer describes a finished installation: what is left is a
+        // remainder. saying otherwise would make a later install refuse with
+        // "an instance is already installed here", naming artifacts that are
+        // gone.
+        finished: false,
+    };
+    if let Err(e) = pruned.save(&state_path) {
+        tracing::warn!(
+            path = %state_path.display(),
+            error = %e,
+            "rewriting the state file failed: it still lists steps already undone, which \
+             is harmless (the undos are idempotent) but no longer the truth"
         );
     }
+    println!(
+        "the state file {} was kept: it still describes what is on the system.",
+        state_path.display()
+    );
 
     Ok(())
 }
@@ -915,13 +1082,55 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
         report.outcomes.len()
     );
 
-    let residue = report.residue();
+    // the shared artifacts left **on purpose** are reported apart from the
+    // leftovers of something that went wrong. both are residues — the machine
+    // still holds them — but one is the rule working and the other is a
+    // failure, and printing them under one alarming heading would teach the
+    // reader to ignore the heading.
+    let shared: Vec<&invok::rollback::StepOutcome> = report
+        .outcomes
+        .iter()
+        .filter(|o| matches!(o.outcome, UndoOutcome::LeftShared(_)))
+        .collect();
+    if !shared.is_empty() {
+        let in_use_by: Vec<String> = match &shared[0].outcome {
+            UndoOutcome::LeftShared(names) => names.clone(),
+            _ => Vec::new(),
+        };
+        println!();
+        println!(
+            "Shared with the instances still installed ({}): left in place.",
+            in_use_by.join(", ")
+        );
+        for item in &shared {
+            println!("  - {}", item.name);
+        }
+        println!();
+        println!("This instance's own artifacts are gone. What it shares with the others");
+        println!("stays until the last of them is removed — its manifest is kept as the");
+        println!("record of who owns them:");
+        println!();
+        println!("    sudo invok rollback --all");
+        println!();
+    }
+
+    let residue: Vec<&invok::rollback::StepOutcome> = report
+        .residue()
+        .into_iter()
+        .filter(|o| !matches!(o.outcome, UndoOutcome::LeftShared(_)))
+        .collect();
     if residue.is_empty() {
         match &report.home_left_behind {
             // the promise, not the mechanism (A-MD-2): every undo can have
             // succeeded with the home still there, because `PrepareOptRoot`
             // correctly gives up on a non-empty directory and returns `Ok`.
-            None => println!("No leftovers: the system is back to its previous state."),
+            None if shared.is_empty() => {
+                println!("No leftovers: the system is back to its previous state.")
+            }
+            // with shared artifacts left on purpose, "back to its previous
+            // state" would be false — and this report is the only place the
+            // user learns otherwise.
+            None => println!("Nothing was left behind by mistake."),
             Some(home) => {
                 println!("Every undo succeeded, but {} still exists.", home.display());
                 println!();
@@ -958,7 +1167,8 @@ fn print_rollback_report(report: &RollbackReport, dry_run: bool) {
                 "  - {}: snapshot unreadable, undo skipped for safety ({e})",
                 item.name
             ),
-            UndoOutcome::Undone => {}
+            // both are printed in their own section above.
+            UndoOutcome::Undone | UndoOutcome::LeftShared(_) => {}
         }
     }
     println!();

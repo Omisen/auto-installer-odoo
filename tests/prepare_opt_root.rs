@@ -393,3 +393,68 @@ fn the_two_level_snapshot_round_trips() {
     rehydrated.rehydrate(&written).expect("rehydrate");
     assert_eq!(persisted(&rehydrated), persisted(&step));
 }
+
+// --- I2: the shared root belongs to every instance --------------------------
+
+/// this step owns **both** the shared root and this instance's own home, which
+/// is why the rollback driver still calls it when another instance is installed
+/// instead of skipping it whole. it must do its own half and leave the other.
+///
+/// skipping it entirely would leave the instance's home behind; running it
+/// entirely would remove the directory every other instance lives under.
+#[test]
+fn with_another_instance_installed_only_the_instance_home_comes_off() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    let mut c = ctx_named(shared.clone(), "cliente-x");
+    let home = c.user_home();
+
+    let mut step = step_without_user();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    assert!(shared.exists() && home.exists());
+
+    // somebody else is still installed.
+    c.shared_in_use = true;
+    step.undo(&c).expect("undo");
+
+    assert!(
+        !home.exists(),
+        "the instance's own home is nobody else's business: it goes"
+    );
+    assert!(
+        shared.exists(),
+        "the shared root stays while another instance lives under it, whoever created it"
+    );
+
+    // and once it is alone, the same undo finishes the job: the undos are
+    // idempotent, so the second run is not a special case.
+    c.shared_in_use = false;
+    step.undo(&c).expect("undo");
+    assert!(
+        !shared.exists(),
+        "with nobody left, the instance that created the shared root removes it"
+    );
+}
+
+/// the unnamed instance's home **is** the shared root, so there is no own half
+/// to salvage — which is why `artifact_scope` calls it `Shared` there and the
+/// driver does not call this undo at all.
+#[test]
+fn for_the_unnamed_instance_the_shared_root_is_the_home() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = dir.path().join("odoo");
+    let mut c = ctx(home.clone(), false);
+
+    let mut step = step_without_user();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    c.shared_in_use = true;
+    step.undo(&c).expect("undo");
+    assert!(
+        home.exists(),
+        "were the driver ever to call it anyway, the flag alone must still protect the \
+         directory the other instances live under"
+    );
+}
