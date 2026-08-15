@@ -25,7 +25,7 @@
 Run it with no arguments and it asks.
 
 <div align="center">
-  <img src=".github/assets/guided.gif" alt="the guided form, then the installation starting" width="680">
+  <img src=".github/assets/guided.gif" alt="the guided form, then the installation starting" width="676">
   <p><sub>The prompts filled in — version, user, database, port, install directory, master password,
   nginx — and then the installation starting. Everything on screen is the installer's own
   output.</sub></p>
@@ -374,14 +374,6 @@ cutting them short does more damage than waiting.
 
 ## Preview, and life after the installation
 
-<div align="center">
-  <img src=".github/assets/dryrun.gif" alt="invok --dry-run: the whole plan, and nothing touched" width="820">
-  <p><sub><code>--dry-run</code> resolves the configuration, walks all 25 steps and prints what each
-  would do — then <code>/opt/odoo</code> still does not exist and the <code>odoo</code> user was never
-  created.</sub></p>
-</div>
-
-
 `--dry-run` runs the snapshots only (read-only) and prints the **plan**, telling "would act" apart from
 "no-op (already present)". Nothing is changed and no state is persisted. It works with or without
 `sudo`, but not identically: snapshots *interrogate* the system, and some do it through `sudo`
@@ -424,7 +416,7 @@ sudo cat /var/log/invok.log              # installer log (post-mortem; survives 
 ## Rollback
 
 <div align="center">
-  <img src=".github/assets/rollback.gif" alt="invok rollback: 25 undos, and the machine as it was" width="820">
+  <img src=".github/assets/rollback.gif" alt="invok rollback: 25 undos, and the machine as it was" width="676">
   <p><sub>The instance is running, then <code>invok rollback</code> undoes all 25 steps in reverse:
   no leftovers, the manifest is consumed, and <code>/opt/odoo</code>, the user and the service are
   gone. The installation happened before the recording; nothing else is edited.</sub></p>
@@ -440,7 +432,7 @@ guarantee is about **pre-existing resources**, which a rollback never touches:
 - the user's **`~/.bashrc`** comes back **byte for byte** (only our line is removed).
 
 <div align="center">
-  <img src=".github/assets/refusals.gif" alt="two refusals: an existing installation, and a port another instance claims" width="820">
+  <img src=".github/assets/refusals.gif" alt="two refusals: an existing installation, and a port another instance claims" width="676">
   <p><sub>Two refusals, before anything is touched: an installation already registered — with the
   three ways on — and a port <b>another manifest</b> claims, while nothing is listening on it.</sub></p>
 </div>
