@@ -90,7 +90,7 @@ pub fn validate_instance(value: &str) -> Result<String, ConfigError> {
     }
     if value == UNNAMED_ID {
         return Err(invalid(
-            "'default' is reserved: it is how the instance installed without --instance is              named when one has to be typed, so an instance may not take it",
+            "'default' is reserved: it names the instance installed without --instance, so a real one may not take it",
         ));
     }
     if value.len() > MAX_INSTANCE_LEN {

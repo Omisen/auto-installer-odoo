@@ -599,3 +599,24 @@ fn no_artifact_name_is_derived_from_the_version_by_hand() {
         "the guard must have actually read the sources"
     );
 }
+
+/// the refusal messages must read as prose, with no run of stray spaces.
+///
+/// not pedantry about whitespace: these strings are written as `\`-continued
+/// literals, and a formatting pass that joins the lines can bake the
+/// continuation's indentation into the message. The result reaches the user as a
+/// sentence with a hole in it, and nothing else would ever catch it — the value
+/// is the message, so asserting the exit code proves nothing (the R9-hotfix
+/// lesson: `exit != 0` does not say *why*).
+#[test]
+fn the_refusal_messages_are_readable_sentences() {
+    for bad in ["", "default", "Cliente X", "1cliente", &"a".repeat(27)] {
+        let message = validate_instance(bad)
+            .expect_err("this name must be refused")
+            .to_string();
+        assert!(
+            !message.contains("   "),
+            "the message for '{bad}' carries collapsed continuation whitespace:\n{message}"
+        );
+    }
+}
