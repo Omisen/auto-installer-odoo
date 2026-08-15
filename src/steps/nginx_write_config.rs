@@ -102,11 +102,13 @@ impl Step for NginxWriteConfig {
             let _ = self.ops.remove_file(&tmp);
             return Err(e);
         }
-        self.ops.chmod(&dest, VHOST_MODE)?;
-        self.ops.chown_named(&dest, "root", "root")?;
+        // ours from here (A-V3-24): a vhost left behind would be served by
+        // the customer's nginx at the next reload.
         if self.snap.prestate == PreState::Untracked {
             self.snap.prestate = PreState::CreatedByUs;
         }
+        self.ops.chmod(&dest, VHOST_MODE)?;
+        self.ops.chown_named(&dest, "root", "root")?;
         info!(vhost = %dest.display(), "run: nginx vhost written");
         Ok(())
     }

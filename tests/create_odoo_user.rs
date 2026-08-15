@@ -392,3 +392,39 @@ fn a_home_we_found_absent_has_no_mode_to_restore() {
         "no restoring chmod when there was nothing of anybody else's to restore"
     );
 }
+
+/// `A-V3-24`: `useradd` succeeded and the `chmod` after it did not — the user
+/// **exists**, and the undo has to remove it.
+///
+/// the mutation that revealed this test was missing: moving the promotion back
+/// after the `chmod` left the whole suite green while a failed installation
+/// left a system user on the machine for good. the rule the fix encodes is
+/// *ours from the moment it exists, not once it is tidy*.
+#[test]
+fn a_user_created_before_a_later_failure_is_still_undone() {
+    let cfg = MockConfig {
+        user_exists: false,
+        path_exists: true,
+        chmod_fails: true,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = CreateOdooUser::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect_err("the run must fail on the chmod");
+    assert_eq!(
+        persisted(&step).user_prestate,
+        PreState::CreatedByUs,
+        "the user is on the machine: the manifest has to say it is ours"
+    );
+
+    step.undo(&c).expect("undo");
+    assert!(
+        ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::DeleteUser(u) if u == "odoo")),
+        "a system user left behind by a failed installation is exactly what must not happen"
+    );
+}

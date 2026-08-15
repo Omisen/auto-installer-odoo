@@ -82,10 +82,10 @@ impl Step for SetupLogDir {
         }
 
         self.ops.mkdir(dir)?;
+        // ours from here (A-V3-24), before the ownership work that can fail.
+        self.prestate = PreState::CreatedByUs;
         self.ops.chown_named(dir, user, user)?;
         self.ops.chmod(dir, LOG_DIR_MODE)?;
-
-        self.prestate = PreState::CreatedByUs;
         info!(dir = %dir.display(), "run: log dir created, owned {user}:{user} 0750");
         Ok(())
     }

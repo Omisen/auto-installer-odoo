@@ -163,6 +163,10 @@ impl Step for CloneOdooRepo {
         self.ops.mkdir_p_as_user(user, &ctx.install_dir)?;
         self.ops
             .mkdir_p_as_user(user, &ctx.install_dir.join(MODULES_SUBDIR))?;
+        // ours from here (A-V3-24): everything below can fail — the network
+        // above all — and these directories would otherwise stay, keeping
+        // `install_dir` and with it `/opt/odoo` alive through the rollback.
+        self.snap.prestate = PreState::CreatedByUs;
 
         // a pre-existing invalid directory goes before cloning.
         if self.had_invalid_dir {
@@ -208,7 +212,6 @@ impl Step for CloneOdooRepo {
             info!("run: sources installed through the tarball fallback");
         }
 
-        self.snap.prestate = PreState::CreatedByUs;
         Ok(())
     }
 

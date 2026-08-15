@@ -111,13 +111,14 @@ impl Step for GenerateConfig {
             let _ = self.ops.remove_file(&tmp);
             return Err(e);
         }
-        self.ops
-            .chown_named(&dest, &ctx.odoo_user, &ctx.odoo_user)?;
-        self.ops.chmod(&dest, CONF_MODE)?;
-
+        // the file is at its destination: ours from here (A-V3-24), whatever
+        // the ownership calls below do.
         if self.snap.prestate == PreState::Untracked {
             self.snap.prestate = PreState::CreatedByUs;
         }
+        self.ops
+            .chown_named(&dest, &ctx.odoo_user, &ctx.odoo_user)?;
+        self.ops.chmod(&dest, CONF_MODE)?;
         info!(conf = %dest.display(), "run: odoo.conf generated (0640 odoo:odoo)");
         Ok(())
     }

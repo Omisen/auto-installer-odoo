@@ -186,10 +186,11 @@ impl Step for WriteControlScript {
         let service = ctx.artifact_base();
         let content = control_script_content(&service, &ctx.odoo_user, &ctx.qualified_name());
         self.ops.write_private_file(&script, &content)?;
-        self.ops.chmod(&script, SCRIPT_MODE)?;
+        // ours from here (A-V3-24), before the mode that can fail.
         if self.snap.script == PreState::Untracked {
             self.snap.script = PreState::CreatedByUs;
         }
+        self.ops.chmod(&script, SCRIPT_MODE)?;
 
         // the symlink, unless it is already ours.
         if self.snap.symlink != PreState::Preexisting {

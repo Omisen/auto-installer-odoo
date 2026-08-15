@@ -117,9 +117,10 @@ impl Step for PatchBashrc {
 
         // append the SINGLE line; never rewrite the whole file.
         self.ops.append_line(&bashrc, PATH_LINE)?;
-        self.ops.chown_to_user(&bashrc, &user)?;
-
+        // ours from here (A-V3-24): the line is already in **the customer's**
+        // file, and a `chown` that fails below must not leave it there.
         self.snap.prestate = PreState::CreatedByUs;
+        self.ops.chown_to_user(&bashrc, &user)?;
         info!("run: PATH line added to {user}'s .bashrc");
         Ok(())
     }

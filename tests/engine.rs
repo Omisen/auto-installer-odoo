@@ -45,8 +45,13 @@ fn rollback_runs_undo_in_reverse_order() {
 
     assert!(result.is_err(), "the run must fail on gamma");
     let order = log.lock().expect("lock").clone();
-    // only the completed ones are undone, in reverse order.
-    assert_eq!(order, vec!["beta".to_string(), "alpha".to_string()]);
+    // reverse order, and the **failing** step goes first (A-V3-24): a `run`
+    // that stops halfway has usually already created something, and leaving it
+    // out of the rollback leaves that on disk.
+    assert_eq!(
+        order,
+        vec!["gamma".to_string(), "beta".to_string(), "alpha".to_string()]
+    );
 }
 
 /// invariant 3: a failing undo does not stop the others.
@@ -76,8 +81,12 @@ fn rollback_is_best_effort() {
 
     assert!(result.is_err(), "the run must fail on gamma");
     let order = log.lock().expect("lock").clone();
-    // it acts and fails, and the other is cleaned up regardless.
-    assert_eq!(order, vec!["beta".to_string(), "alpha".to_string()]);
+    // it acts and fails, and the others are cleaned up regardless — gamma
+    // included, being the step that failed (A-V3-24).
+    assert_eq!(
+        order,
+        vec!["gamma".to_string(), "beta".to_string(), "alpha".to_string()]
+    );
 }
 
 /// invariant 3 and the protection: a `Preexisting` step performs no undo
@@ -113,9 +122,11 @@ fn preexisting_step_undo_is_noop() {
         1,
         "alpha's undo must be invoked by the engine"
     );
-    // …but performed no action: an empty log means no artifact of ours.
+    // …but performed no action. the log is not empty — it holds `beta`, the
+    // failing step, which A-V3-24 now undoes as well — so the assertion is
+    // about alpha and only alpha.
     assert!(
-        log.lock().expect("lock").is_empty(),
+        !log.lock().expect("lock").contains(&"alpha".to_string()),
         "an undo on Preexisting must take no action"
     );
 }
@@ -419,5 +430,168 @@ fn a_manifest_with_residue_stays_on_disk() {
             .map(|r| r.name.as_str())
             .collect::<Vec<_>>(),
         vec!["alpha"]
+    );
+}
+
+/// acting on an interruption belongs to the **engine**, between one step and
+/// the next — and nowhere else.
+///
+/// this guard exists because the rule was broken while fixing something else:
+/// `A-V3-22` put the network commands in a process group of their own, which
+/// stopped Ctrl-C from reaching them, and the wait was taught to abort on the
+/// flag to make up for it. it looked like responsiveness. it meant the step
+/// *failed*, and a failed step is not in `completed`, so its undo never runs
+/// and what it had already created stays on disk (`A-V3-24`). the CI job that
+/// interrupts a real installation went from a clean system to a `/opt/odoo`
+/// left behind.
+///
+/// reading the flag elsewhere is fine — to log, to explain a wait. **Returning**
+/// the interruption error from anywhere but the engine is what turns a pause
+/// into a half-done step.
+#[test]
+fn only_the_engine_turns_an_interruption_into_an_error() {
+    let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+    let mut offenders: Vec<String> = Vec::new();
+
+    let mut stack = vec![src];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).expect("read_dir") {
+            let path = entry.expect("entry").path();
+            if path.is_dir() {
+                stack.push(path);
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+                continue;
+            }
+            let name = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or_default();
+            // the definition, and the one legitimate caller.
+            if name == "interrupt.rs" || name == "engine.rs" {
+                continue;
+            }
+            let content = std::fs::read_to_string(&path).expect("read");
+            for (n, line) in content.lines().enumerate() {
+                // the call, not a mention of it in a comment.
+                if line.contains("interrupted_error()") && !line.trim_start().starts_with("//") {
+                    offenders.push(format!("{}:{}: {}", path.display(), n + 1, line.trim()));
+                }
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "an interruption becomes an error outside the engine, which makes the step in progress \
+         fail instead of finishing — and a failed step is never undone:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// `A-V3-24`: a step that fails **after** creating something is undone too.
+///
+/// found in the field, and by the CI job that interrupts a real installation:
+/// `clone-odoo-repo` makes its directories before going to the network, so an
+/// interrupted clone left `/opt/odoo/odoo18/repos/modules` behind — which made
+/// `install_dir` non-empty, which made `/opt/odoo` non-empty, which the last
+/// undo correctly refuses to remove. the dominant promise, defeated by a step
+/// that was never asked to clean up after itself.
+///
+/// and it poisoned every later run: the next `prepare-opt-root` finds the
+/// directory `Preexisting`, so its undo is a legitimate no-op forever.
+///
+/// the counter-proof matters as much: a step that fails **before** creating
+/// anything must still undo nothing.
+#[test]
+fn the_step_that_fails_is_undone_too_but_only_if_it_created_something() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let ctx = ctx_with_state(&dir);
+
+    // it created something, then failed: its undo must run.
+    let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
+    let mut steps: Vec<Box<dyn Step>> = vec![Box::new(
+        NoopStep::new("half-done")
+            .fail_on_run()
+            .with_undo_log(Arc::clone(&log)),
+    )];
+    let mut installer = Installer::new();
+    assert!(installer.execute(&mut steps, &ctx).is_err());
+    assert_eq!(
+        log.lock().expect("lock").clone(),
+        vec!["half-done".to_string()],
+        "what it had already created has to come off"
+    );
+
+    // it created nothing — `Preexisting` stands for "not ours" — so the undo
+    // is invoked and does nothing. the gate stays the `PreState`, never the
+    // fact that the step failed.
+    let log: UndoLog = Arc::new(Mutex::new(Vec::new()));
+    let mut steps: Vec<Box<dyn Step>> = vec![Box::new(
+        NoopStep::new("nothing-done")
+            .preexisting()
+            .fail_on_run()
+            .with_undo_log(Arc::clone(&log)),
+    )];
+    let mut installer = Installer::new();
+    assert!(installer.execute(&mut steps, &ctx).is_err());
+    assert!(
+        log.lock().expect("lock").is_empty(),
+        "a step that created nothing must destroy nothing"
+    );
+}
+
+/// the ordering rule `A-V3-24` rests on, for every step that creates something
+/// and then tidies it up: **the promotion to `CreatedByUs` comes before the
+/// ownership calls, never after.**
+///
+/// two behavioural tests prove what this means — a system user
+/// (`tests/create_odoo_user.rs`) and a line in the customer's `.bashrc`
+/// (`tests/patch_bashrc.rs`) both survive a failure that lands between the
+/// creation and the `chmod`. this one extends the same rule to the steps whose
+/// residue would be milder, without five more near-identical tests: the grep
+/// sees the shape, the two above see the consequence.
+#[test]
+fn every_run_claims_ownership_before_tidying_up() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/steps");
+    let ownership = ["self.ops.chmod(", ".chown_named(", ".chown_to_user("];
+    let mut offenders: Vec<String> = Vec::new();
+
+    for entry in std::fs::read_dir(&dir).expect("read_dir") {
+        let path = entry.expect("entry").path();
+        if path.extension().and_then(|e| e.to_str()) != Some("rs") {
+            continue;
+        }
+        let content = std::fs::read_to_string(&path).expect("read");
+        // the `run` body, which is where the order matters: a `snapshot` never
+        // mutates and an `undo` restores rather than creates.
+        let Some(start) = content.find("fn run(&mut self") else {
+            continue;
+        };
+        let body = &content[start..];
+        let end = body.find("\n    fn ").unwrap_or(body.len());
+        let body = &body[..end];
+
+        let promotion = body.find("= PreState::CreatedByUs");
+        let tidy = ownership.iter().filter_map(|c| body.find(c)).min();
+        if let (Some(promotion), Some(tidy)) = (promotion, tidy) {
+            if tidy < promotion {
+                offenders.push(format!(
+                    "{}: an ownership call comes before the step claims what it created",
+                    path.file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or_default()
+                ));
+            }
+        }
+    }
+
+    assert!(
+        offenders.is_empty(),
+        "a failure between the creation and the tidying leaves an artifact no undo will \
+         ever touch — the step is not in `completed`, and its `PreState` still says \
+         `Untracked`:\n{}",
+        offenders.join("\n")
     );
 }

@@ -12,10 +12,18 @@
 //! clone, the tarball, the `.deb` — are started in a **process group of their
 //! own**, so that the timeout can kill the worker instead of the `sudo` in
 //! front of it. that group is not the terminal's foreground group, so a Ctrl-C
-//! does *not* reach them. which is why the flag is read in one more place than
-//! the engine: [`crate::system_ops`] watches it while it waits, and kills that
-//! group itself. without that, Ctrl-C during a `git clone` would look like a
-//! freeze for as long as the clone takes.
+//! does *not* reach them, and they are carried to their end (or to their
+//! timeout) like every other step in progress.
+//!
+//! that is the **documented** rule arriving for real, not a regression: until
+//! now those three were an accidental exception, killed mid-step by a signal
+//! that was never meant to reach them. the price is a longer wait, and it is
+//! said out loud — [`crate::system_ops`] reads [`was_interrupted`] to log, once,
+//! that the interruption is pending and the download is being finished.
+//!
+//! making that wait *abort* instead was tried and reverted: an aborted step
+//! **fails**, a failed step is not in `completed`, and what it had already
+//! created is never undone (`A-V3-24`).
 //!
 //! no `unsafe`: `signal_hook` wraps the async-signal-safe part behind a safe
 //! API, and it was already in the tree as a transitive dependency of
@@ -98,6 +106,9 @@ pub fn install() -> Arc<AtomicBool> {
 static INSTALLED: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
 
 /// has an interruption been requested?
+///
+/// read by the network wait to **say** so, never to act on it: acting is the
+/// engine's, between one step and the next.
 ///
 /// `false` when no handler was ever installed — every test, and any embedding
 /// that does not want the behaviour — so nothing changes for them.

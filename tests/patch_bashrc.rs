@@ -140,3 +140,42 @@ fn remove_exact_line_is_not_fuzzy() {
     assert!(cleaned.contains("alias x='y'"));
     assert_eq!(cleaned, "alias x='y'\nexport PATH=\"$HOME/bin:$PATH\"\n");
 }
+
+/// `A-V3-24`: the line is already in **the customer's** file when the `chown`
+/// after it fails, so the undo has to take it back out.
+///
+/// this is the residue that would be most visible of all — a line in a
+/// `.bashrc` nobody put there, surviving an installation that failed and
+/// reported itself as rolled back.
+#[test]
+fn a_line_added_before_a_later_failure_is_still_removed() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bashrc = dir.path().join(".bashrc");
+    let original = "alias ll='ls -la'\n";
+    std::fs::write(&bashrc, original).expect("write original");
+
+    let cfg = MockConfig {
+        chown_fails: true,
+        ..cfg_home(dir.path())
+    };
+    let (mock, _log) = MockSystemOps::new(cfg);
+    let mut step = PatchBashrc::with_ops(Box::new(mock));
+    let c = ctx_home();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect_err("the run must fail on the chown");
+    assert!(
+        std::fs::read_to_string(&bashrc)
+            .expect("read")
+            .contains(PATH_LINE),
+        "the premise of the test: the line really is in the file"
+    );
+
+    step.undo(&c).expect("undo");
+    assert_eq!(
+        std::fs::read_to_string(&bashrc).expect("read"),
+        original,
+        "byte for byte as it was: a failed installation does not get to leave a line in \
+         somebody else's shell configuration"
+    );
+}

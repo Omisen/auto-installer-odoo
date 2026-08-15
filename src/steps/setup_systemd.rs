@@ -144,11 +144,13 @@ impl Step for SetupSystemd {
             let _ = self.ops.remove_file(&tmp);
             return Err(e);
         }
-        self.ops.chmod(&unit_path, UNIT_MODE)?;
-        self.ops.chown_named(&unit_path, "root", "root")?;
+        // the unit is in place: ours from here (A-V3-24), so a failure in the
+        // ownership calls below does not leave systemd holding our file.
         if self.snap.unit_file == PreState::Untracked {
             self.snap.unit_file = PreState::CreatedByUs;
         }
+        self.ops.chmod(&unit_path, UNIT_MODE)?;
+        self.ops.chown_named(&unit_path, "root", "root")?;
         self.ops.daemon_reload()?;
 
         // enable only if it was not already enabled (D4).

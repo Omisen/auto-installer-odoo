@@ -163,7 +163,25 @@ impl Installer {
             if let Err(e) = steps[idx].run(ctx) {
                 error!(step = %name, error = %e, "run failed, rolling back");
                 reporter.step_failed(&name);
-                self.rollback_with_reporter(steps, &completed, ctx, reporter);
+                // the **failing** step is undone too, first of all (A-V3-24).
+                //
+                // a `run` that fails halfway has usually already created
+                // something: `clone-odoo-repo` makes its directories before
+                // going to the network, `create-odoo-user` runs `useradd`
+                // before the `chown`. leaving that step out of the rollback —
+                // as this did until the field showed it — leaves those
+                // artifacts on disk, `/opt/odoo` non-empty, and therefore the
+                // whole home behind. worse, it poisons every later run: the
+                // next `prepare-opt-root` finds the directory `Preexisting`
+                // and its undo is a legitimate no-op forever.
+                //
+                // safe because an undo acts **only** on `CreatedByUs`, and
+                // that verdict is set by the step itself the moment the
+                // artifact comes into existence. a step that failed before
+                // creating anything undoes nothing.
+                let mut to_undo = completed.clone();
+                to_undo.push(idx);
+                self.rollback_with_reporter(steps, &to_undo, ctx, reporter);
                 return Err(e);
             }
 

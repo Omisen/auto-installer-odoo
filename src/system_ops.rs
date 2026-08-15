@@ -169,9 +169,21 @@ fn kill_group(pgid: u32) {
 ///    instead: a leaked thread is a smaller price than a run that never
 ///    returns.
 ///
-/// the group also means the terminal's Ctrl-C no longer reaches these commands,
-/// so the wait watches [`crate::interrupt::was_interrupted`] and kills the group
-/// itself. otherwise interrupting a slow clone would look like a freeze.
+/// # what the group does to Ctrl-C, and why nothing is done about it
+///
+/// a group of its own is not the terminal's foreground group, so the signal no
+/// longer reaches these three commands. that is **the documented behaviour
+/// arriving for real**: R18 says an interruption takes effect *between* steps
+/// and the step in progress is carried to completion, and until now the network
+/// commands were an accidental exception — the signal killed `git` mid-step and
+/// the step failed.
+///
+/// aborting the wait on the flag was tried and **reverted**: it makes the step
+/// *fail*, and a step that fails is not in `completed`, so its undo never runs
+/// and what it had already created stays on disk (`A-V3-24`). the CI job that
+/// interrupts a real installation caught it — a clean system became a
+/// `/opt/odoo` left behind. so the wait only *says* that an interruption is
+/// pending; the command is carried to its end, or to its timeout.
 ///
 /// # errors
 ///
@@ -211,13 +223,22 @@ fn output_with_timeout(
     };
 
     let deadline = std::time::Instant::now() + limit;
+    let mut interruption_announced = false;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
-                if crate::interrupt::was_interrupted() {
-                    abort(&mut child);
-                    return Err(crate::interrupt::interrupted_error());
+                // said once, because from the outside this is the moment that
+                // looks like a freeze: the user pressed Ctrl-C and the download
+                // carries on. it does so on purpose.
+                if !interruption_announced && crate::interrupt::was_interrupted() {
+                    interruption_announced = true;
+                    tracing::warn!(
+                        command = rendered,
+                        "interruption requested: this network command is carried to completion \
+                         (or to its timeout) and undone right after — a step is either whole or \
+                         not begun"
+                    );
                 }
                 if std::time::Instant::now() >= deadline {
                     abort(&mut child);

@@ -244,9 +244,11 @@ fn resume_inherits_ownership_instead_of_re_deducing_it() {
     assert!(err.is_err(), "beta fails and triggers the rollback");
 
     let actions = log.lock().expect("log").clone();
+    // `beta` comes first because the failing step is undone too (A-V3-24); the
+    // assertion that carries this test is the second entry.
     assert_eq!(
         actions,
-        vec!["alpha".to_string()],
+        vec!["beta".to_string(), "alpha".to_string()],
         "alpha's undo must ACT: the manifest says the artifact is ours. without the \
          inheritance it would have been Preexisting and the artifact would stay on the \
          machine forever — exactly A-V3-1's damage"

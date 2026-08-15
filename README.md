@@ -404,12 +404,13 @@ name the installer stops and says which field does not match.
 
 **Ctrl-C.** A Ctrl-C (or a `kill`/`systemctl stop`) no longer kills the installer: the installation
 **rolls itself back**. The interruption takes effect *between* steps — the one in progress is carried
-to completion, because stopping an `apt` halfway would leave `dpkg` inconsistent. The wait is short:
-the signal reaches the whole process group, so the running command ends by itself — and the three
-commands that talk to the network (the clone, the tarball, the `.deb`) run in a process group of
-their own, so the installer stops them itself rather than waiting them out. A **second Ctrl-C exits
-immediately** with code 130, leaving the system half-done by your choice; clean it up with
-`sudo invok rollback`.
+to completion, because stopping an `apt` halfway would leave `dpkg` inconsistent. For most commands
+the wait is short: the signal reaches the whole process group, so the one running ends by itself. The
+three that talk to the network (the clone, the tarball, the `.deb`) run in a process group of their
+own — so that a timeout can kill the *worker* and not just the `sudo` in front of it — and are
+therefore finished rather than interrupted; the log says so when it happens, and the wait is bounded
+by `ODOO_NETWORK_TIMEOUT_SECS`. A **second Ctrl-C exits immediately** with code 130, leaving the
+system half-done by your choice; clean it up with `sudo invok rollback`.
 
 > **From a script, signal the installer only.** “Two Ctrl-C” means *two signals received*. A
 > `sudo pkill -INT -f invok` hits **two** processes — the `sudo` and the installer — and so counts as

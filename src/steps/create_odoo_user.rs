@@ -218,11 +218,12 @@ impl Step for CreateOdooUser {
             shell: LOGIN_SHELL.to_string(),
         };
         self.ops.create_user(&spec)?;
+        // ours from here (A-V3-24): a `chown` or `chmod` that fails below must
+        // not leave a system user nobody will ever remove.
+        self.snap.user_prestate = PreState::CreatedByUs;
         // `useradd` does not re-chown a pre-existing home, so we do.
         self.ops.chown_named(&home, user, user)?;
         self.ops.chmod(&home, HOME_MODE)?;
-
-        self.snap.user_prestate = PreState::CreatedByUs;
         info!(user = %user, home = %home.display(), "run: user created, home owned {user}:{user} 0750");
         Ok(())
     }

@@ -245,6 +245,12 @@ pub struct MockConfig {
     /// makes reading the permission bits fail: "I do not know", which must not
     /// be read as "wide open".
     pub mode_unreadable: bool,
+    /// makes `chmod` fail, to exercise a `run` that dies **after** having
+    /// created the artifact (`A-V3-24`).
+    pub chmod_fails: bool,
+    /// same, for the ownership call: `chown_to_user` fails once the file has
+    /// already been written.
+    pub chown_fails: bool,
     /// the modelled family, which decides **which catalogue** the package
     /// manager answers with.
     ///
@@ -300,6 +306,8 @@ impl Default for MockConfig {
             pg_cluster_initialized: false,
             dir_mode: 0o755,
             mode_unreadable: false,
+            chmod_fails: false,
+            chown_fails: false,
             family: OsFamily::Debian,
         }
     }
@@ -757,6 +765,12 @@ impl SystemOps for MockSystemOps {
             path: path.to_path_buf(),
             mode,
         });
+        if self.cfg.chmod_fails {
+            return Err(StepError::Precondition(format!(
+                "chmod refused on {} (modelled failure)",
+                path.display()
+            )));
+        }
         if self.cfg.real_fs {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode))
@@ -1096,6 +1110,12 @@ impl SystemOps for MockSystemOps {
             path: path.to_path_buf(),
             user: user.to_string(),
         });
+        if self.cfg.chown_fails {
+            return Err(StepError::Precondition(format!(
+                "chown refused on {} (modelled failure)",
+                path.display()
+            )));
+        }
         Ok(())
     }
     fn append_line(&self, path: &Path, line: &str) -> Result<(), StepError> {
