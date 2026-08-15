@@ -10,7 +10,9 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use invok::system_ops::{private_temp_path, private_temp_path_keeping_extension};
+use invok::system_ops::{
+    private_temp_path, private_temp_path_keeping_extension, tarball_temp_path,
+};
 
 /// every `.rs` under `dir`, recursively, as (relative path, contents).
 fn rust_sources(dir: &Path) -> Vec<(String, String)> {
@@ -217,5 +219,73 @@ fn the_downloader_does_not_follow_a_symlink_at_the_destination() {
         fs::read(&bersaglio).expect("read"),
         b"not to be overwritten",
         "the symlink's target was touched: O_NOFOLLOW is protecting nothing"
+    );
+}
+
+// --- A-V3-23: the tarball could never be downloaded -------------------------
+
+/// the file `root` creates and then hands to `odoo` must not be born in the
+/// shared temporary directory.
+///
+/// not a preference: `/tmp` is sticky and world-writable, and
+/// `fs.protected_regular` refuses `O_CREAT` on a file owned by **somebody
+/// else** there — to root as well, since `may_create_in_sticky()` has no
+/// shortcut for `CAP_FOWNER`. so `wget` was denied its own file and the
+/// fallback failed every single time, with a `Permission denied` that names
+/// root as the one lacking permission.
+///
+/// measured on the VM, and the three variants isolate the cause exactly:
+/// root writing somebody else's file in `/tmp` is refused, the same file owned
+/// by root is fine, and the same situation in a non-sticky directory is fine.
+#[test]
+fn the_source_tarball_is_not_downloaded_into_the_shared_temp_dir() {
+    let sources = PathBuf::from("/opt/odoo/odoo18/odoo");
+    let tmp = tarball_temp_path(&sources);
+
+    assert!(
+        tmp.starts_with(&sources),
+        "it must live in the directory that belongs to the user who reads it, and that the \
+         undo removes with rm -rf: {}",
+        tmp.display()
+    );
+    assert!(
+        !tmp.starts_with(std::env::temp_dir()),
+        "a file chowned away from root cannot be created in a sticky world-writable directory"
+    );
+    // and A-V3-3 still holds: unpredictable name, extension kept.
+    assert_eq!(tmp.extension().and_then(|e| e.to_str()), Some("gz"));
+    assert_ne!(
+        tarball_temp_path(&sources),
+        tmp,
+        "two calls must not produce the same name"
+    );
+    let name = tmp.file_name().and_then(|n| n.to_str()).expect("name");
+    assert!(name.starts_with('.'), "hidden, like the other temporaries");
+}
+
+/// the shared temporary directory has exactly **two** users left, and both are
+/// the same one: the injected default of the wkhtmltopdf step.
+///
+/// frozen on purpose, in the spirit of `tests/apt_packages.rs`. that one is
+/// legitimate — the `.deb` stays `root`-owned and is read by `apt` as root, so
+/// none of the above applies — but the next temporary written there will have
+/// to justify itself here, in front of the reason this test exists.
+#[test]
+fn the_shared_temp_dir_has_no_new_users() {
+    let allowed = ["src/steps/mod.rs"];
+    let mut found: Vec<String> = Vec::new();
+    for (file, content) in rust_sources(&src_dir()) {
+        for (n, line) in content.lines().enumerate() {
+            if line.contains("temp_dir()") && !allowed.iter().any(|a| file.ends_with(a)) {
+                found.push(format!("{file}:{}: {}", n + 1, line.trim()));
+            }
+        }
+    }
+    assert!(
+        found.is_empty(),
+        "a new temporary in the shared directory. if root writes it and another user reads it, \
+         it cannot live there (A-V3-23); if it really can, add the file to `allowed` with the \
+         reason:\n{}",
+        found.join("\n")
     );
 }

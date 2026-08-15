@@ -268,6 +268,23 @@ pub fn private_temp_path(dest: &Path, fallback_name: &str) -> PathBuf {
 /// treats its argument as a local path when it ends in `.deb`, otherwise it
 /// reads it as a package name and fails. a `.tmp` temporary would have been
 /// unpredictable *and* uninstallable — caught by a test, not by reasoning.
+/// where the source tarball is downloaded, given the sources directory
+/// (`A-V3-23`).
+///
+/// **pure**, and separate from [`SystemOps::tarball_install`] for the usual
+/// reason: the interesting property — that this path is not in the shared
+/// temporary directory — is only observable on a real run, and the fallback
+/// only runs when a clone has already failed. as a return value it is checkable
+/// in both directions without a network.
+///
+/// the directory matters because the file is **chowned to the Odoo user** right
+/// after being created by root: `O_CREAT` on somebody else's file inside a
+/// sticky world-writable directory is refused by `fs.protected_regular`, root
+/// included, so `/tmp` made the download impossible.
+pub fn tarball_temp_path(sources_dir: &Path) -> PathBuf {
+    private_temp_path_keeping_extension(sources_dir, "odoo-src.tar.gz")
+}
+
 pub fn private_temp_path_keeping_extension(dir: &Path, name: &str) -> PathBuf {
     let (stem, ext) = match name.rsplit_once('.') {
         Some((stem, ext)) if !stem.is_empty() => (stem, ext),
@@ -1247,28 +1264,45 @@ impl SystemOps for RealSystemOps {
     }
 
     fn tarball_install(&self, user: &str, url: &str, target: &Path) -> Result<(), StepError> {
-        // unpredictable name, and the file is created by us before wget sees
-        // the path (A-V3-3). the old fixed name was known to anyone reading the
-        // source, and unlike the wkhtmltopdf package the tarball has **no
-        // expected checksum** to hold against replaced contents.
+        // the sources directory first, because the temporary tarball is going
+        // **inside** it.
+        let target_str = target.to_string_lossy().into_owned();
+        run_command(
+            "sudo",
+            &["-n", "-u", user, "--", "mkdir", "-p", &target_str],
+        )?;
+
+        // NOT in `/tmp`, and that is the whole of `A-V3-23`. the file is born
+        // `0600 root` and then chowned, because `tar` reads it as `odoo` — and
+        // `O_CREAT` on a file belonging to **somebody else**, inside a sticky
+        // world-writable directory, is what `fs.protected_regular` forbids. it
+        // forbids it to root as well: `may_create_in_sticky()` has no shortcut
+        // for `CAP_FOWNER`. so `wget` was refused its own file and the fallback
+        // could never succeed — never noticed, because a fallback only runs
+        // when the clone has already failed, and in CI it never does.
         //
-        // `create_private_file` is fail-closed, so an occupied path fails the
-        // download instead of hijacking it. the `chown` is not a detail: the
-        // file is born `0600 root` and `tar` reads it as `odoo`.
-        let tmp = private_temp_path_keeping_extension(&std::env::temp_dir(), "odoo-src.tar.gz");
+        // R9's rule already said where it belongs: *a file root writes and
+        // another user reads does not live in a directory writable by third
+        // parties.* pip's requirements went to `<install_dir>/sandbox`; this one
+        // goes into the sources directory, which exists by now, belongs to
+        // `odoo`, is not sticky, and is inside the perimeter the undo removes
+        // with `rm -rf` — so an execution killed mid-download leaves nothing
+        // that could keep `install_dir` alive.
+        //
+        // the name stays unpredictable and the file is still created by us
+        // before `wget` sees the path (A-V3-3): `create_private_file` is
+        // fail-closed, so an occupied path fails the download instead of
+        // hijacking it. unlike the wkhtmltopdf package this tarball has **no
+        // expected checksum** to hold against replaced contents.
+        let tmp = tarball_temp_path(target);
         self.create_private_file(&tmp, "")?;
         self.chown_named(&tmp, user, user)?;
         let tmp_str = tmp.to_string_lossy().into_owned();
-        let target_str = target.to_string_lossy().into_owned();
 
         // only the download is timed: extraction is local and can legitimately
         // take a while on a slow machine.
         let outcome = (|| {
             run_network_command("wget", &["-qO", &tmp_str, url])?;
-            run_command(
-                "sudo",
-                &["-n", "-u", user, "--", "mkdir", "-p", &target_str],
-            )?;
             run_command(
                 "sudo",
                 &[
