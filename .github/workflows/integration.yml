@@ -867,6 +867,63 @@ jobs:
           path: installer-*.log
           if-no-files-found: ignore
 
+
+  # ---------------------------------------------------------------------------
+  # Two instances on one machine (phase I4).
+  #
+  # everything I0–I3 built lives here, and until this job nothing executed it on
+  # a real machine: the derived names, the per-instance manifests, the shared
+  # artifacts left alone, the widened root, the two pairs of ports. in this
+  # project what nobody runs does not exist.
+  #
+  # the scenario is deliberately the CUSTOMER'S: an existing installation — the
+  # historical, unnamed one — with a named instance added beside it. that is the
+  # migration path, and it is where `A-V6-9` lived: the root handed to the first
+  # instance as `0750` locks the second one's user out of its own home.
+  #
+  # the order of the two rollbacks is the other half. removing the SECOND must
+  # leave the first untouched, packages included; removing everything must bring
+  # the machine back to where it started. a job that only installed would prove
+  # the easy half.
+  # ---------------------------------------------------------------------------
+  second-instance:
+    name: two instances side by side (ubuntu-24.04)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      - name: Package index refreshed (explicit test environment)
+        run: sudo apt-get update
+
+      # the assertions live in a file, not here: a script that only the workflow
+      # can run is a script that gets *transcribed* to be tried on a VM, and the
+      # transcription is where the difference hides (A-R8-1-ter).
+      - name: Two instances installed, removed one at a time
+        run: bash scripts/ci/second-instance-test.sh
+
+      - name: The installer's log, if any
+        if: always()
+        run: sudo cp /var/log/invok.log installer-second-instance.log || true
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-second-instance
+          path: installer-*.log
+          if-no-files-found: ignore
+
   # ---------------------------------------------------------------------------
   # Ctrl-C halfway through an installation (B-V3-5).
   #

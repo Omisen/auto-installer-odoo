@@ -7,6 +7,11 @@ configs/*.env
 # the nginx variant (B-V3-7): without it the `nginx` job would not find the file
 # at checkout, and the config test would fail in CI too.
 !configs/ci-nginx.env
+# the second-instance variant (I4): same reason, and it would have been missed —
+# the file was written, the job referenced it, and `git status` did not mention
+# it because this very rule swallowed it. a clone would have had a job pointing
+# at a file that is not there (the shape of A-V3-18).
+!configs/ci-instance.env
 docs/*.md
 
 # Rust build artifacts

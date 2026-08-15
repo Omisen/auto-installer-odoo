@@ -14,6 +14,8 @@ use invok::config::{self, ResolvedConfig};
 
 const CI_ENV: &str = "configs/ci.env";
 const CI_NGINX_ENV: &str = "configs/ci-nginx.env";
+const CI_INSTANCE_ENV: &str = "configs/ci-instance.env";
+const SECOND_INSTANCE_SCRIPT: &str = "scripts/ci/second-instance-test.sh";
 const CI_SCRIPT: &str = "scripts/ci/integration-test.sh";
 
 /// the keys the `.env` parser recognises.
@@ -50,7 +52,7 @@ fn resolve_ci_env() -> ResolvedConfig {
 
 #[test]
 fn every_key_in_ci_env_is_understood_by_the_parser() {
-    for file in [CI_ENV, CI_NGINX_ENV] {
+    for file in [CI_ENV, CI_NGINX_ENV, CI_INSTANCE_ENV] {
         assert_keys_are_known(file);
     }
 }
@@ -106,6 +108,69 @@ fn the_nginx_ci_config_differs_only_by_nginx() {
         Some(true),
         "that is the only reason this file exists"
     );
+}
+
+/// every `.env` a workflow uses must be **exempted** from the ignore rule.
+///
+/// `configs/*.env` is ignored because a `.env` normally holds an admin password;
+/// the CI ones do not, and they have to reach a fresh clone or the job that
+/// names them finds nothing. this was caught while writing I4: the file existed,
+/// the job referenced it, and `git status` stayed silent because the rule had
+/// swallowed it — a clone would have had a job pointing at a file that is not
+/// there, which is A-V3-18's shape.
+///
+/// read from `.gitignore` rather than asked of `git`, so the check also works
+/// where there is no repository — a packaged crate, for one.
+#[test]
+fn every_ci_config_is_exempted_from_the_ignore_rule() {
+    let ignore = std::fs::read_to_string(".gitignore").expect(".gitignore must exist");
+    for config in [CI_ENV, CI_NGINX_ENV, CI_INSTANCE_ENV] {
+        assert!(
+            ignore.lines().any(|l| l.trim() == format!("!{config}")),
+            "{config} is swallowed by `configs/*.env`: it would not reach a clone, and the \
+             job that uses it would find nothing"
+        );
+    }
+}
+
+/// I4: the config for the **second, named** instance must not name the three
+/// fields `--instance` derives.
+///
+/// this is the trap the field notes recorded: in the cascade an explicit
+/// `ODOO_USER` / `DB_USER` / `DB_NAME` beats the value derived from the
+/// instance name, so a job reusing `ci.env` would install a "second instance"
+/// that shares the first one's user, role and database — and would go green
+/// while proving the opposite of what it claims. the file is worth nothing
+/// unless those three are **absent**, so absence is what gets asserted.
+#[test]
+fn the_second_instance_config_leaves_the_derived_names_alone() {
+    let named = config::parse_env_file(Path::new(CI_INSTANCE_ENV)).expect("ci-instance.env");
+
+    assert_eq!(named.odoo_user, None, "the user must come from --instance");
+    assert_eq!(named.db_user, None, "the role must come from --instance");
+    assert_eq!(
+        named.db_name, None,
+        "the database must come from --instance"
+    );
+
+    // and it must not claim the port the first instance holds, or the preflight
+    // would refuse before the job could measure anything.
+    let base = config::parse_env_file(Path::new(CI_ENV)).expect("ci.env");
+    assert_ne!(
+        named.port, base.port,
+        "two instances cannot share the HTTP port: the second install would be refused"
+    );
+    // the gevent port is derived from the HTTP one, so naming it here would be
+    // a second source that can drift from the first.
+    assert_eq!(named.gevent_port, None);
+
+    // everything else stays the same, for the same reason the nginx config
+    // does: a failure that shows up only here has to be attributable to the
+    // instance and to nothing else.
+    assert_eq!(base.version, named.version);
+    assert_eq!(base.admin_passwd, named.admin_passwd);
+    assert_eq!(base.logfile, named.logfile);
+    assert_eq!(named.with_nginx, Some(false));
 }
 
 /// the flag that opens 443 stays **out** of the CI config, and not by accident:
@@ -190,19 +255,44 @@ fn the_integration_script_and_ci_env_agree_on_the_artifacts() {
 #[test]
 fn the_integration_script_is_executable_and_syntactically_valid() {
     use std::os::unix::fs::PermissionsExt;
-    let meta = std::fs::metadata(CI_SCRIPT).expect("the script must exist");
-    assert!(
-        meta.permissions().mode() & 0o111 != 0,
-        "the integration script must carry the execute bit"
-    );
+    // every script a destructive job runs, and for the same reason: a syntax
+    // error would surface halfway through a forty-minute job, with half a
+    // system already installed.
+    for script in [CI_SCRIPT, SECOND_INSTANCE_SCRIPT] {
+        let meta = std::fs::metadata(script).expect("the script must exist");
+        assert!(
+            meta.permissions().mode() & 0o111 != 0,
+            "{script} must carry the execute bit"
+        );
 
-    // a syntax-only check runs nothing. a broken script would otherwise surface
-    // halfway through a forty-minute job, with half a system already installed.
-    let status = std::process::Command::new("bash")
-        .args(["-n", CI_SCRIPT])
-        .status()
-        .expect("bash must be available");
-    assert!(status.success(), "invalid syntax in {CI_SCRIPT}");
+        // a syntax-only check runs nothing.
+        let status = std::process::Command::new("bash")
+            .args(["-n", script])
+            .status()
+            .expect("bash must be available");
+        assert!(status.success(), "invalid syntax in {script}");
+    }
+}
+
+/// the two-instance job runs the **file**, not a copy of it inside the
+/// workflow.
+///
+/// A-R8-1-ter is the reason: assertions that live only in YAML can only be
+/// exercised by the YAML, so what gets tried on a VM is a transcription — and
+/// the transcription is where the difference hides. this test fails if somebody
+/// inlines them again.
+#[test]
+fn the_second_instance_job_calls_the_script() {
+    let wf = std::fs::read_to_string(WORKFLOW).expect("the workflow must exist");
+    let job = wf
+        .split("\n  second-instance:")
+        .nth(1)
+        .expect("the two-instance job must exist");
+    let job = job.split("\n  # ---").next().unwrap_or(job);
+    assert!(
+        job.contains("bash scripts/ci/second-instance-test.sh"),
+        "the job must run the script instead of carrying its own copy of the assertions"
+    );
 }
 
 // --- A5.3: the "newest tested release" constants follow the real CI ---------
