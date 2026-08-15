@@ -552,3 +552,38 @@ fn write(path: &std::path::Path, state: &InstallState) {
     std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
     std::fs::write(path, serde_json::to_vec_pretty(state).expect("serialise")).expect("write");
 }
+
+/// `A-V6-11`: with other instances installed, the shared root still being there
+/// is **the rule working**, not a residue to warn about.
+///
+/// found in the field, not by a test: the report printed the shared-artifacts
+/// section — eight steps left in place — and then, eight lines below, "it holds
+/// something we did not create" (it holds the *other instance*, which we
+/// created) and "everything the installer had created has been removed". Two
+/// sentences that were plainly false, contradicting the section above them.
+///
+/// the check exists for A-MD-2's question — *did the promise hold?* — and that
+/// question only has meaning when this instance was the last one.
+#[test]
+fn the_home_is_not_reported_as_a_residue_while_another_instance_lives_there() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let model = SystemModel::new(fresh_state());
+    let ctx = ctx_for(Some("cliente-x"), dir.path().join("state.json"));
+    let state = install(&model, CHAIN, &ctx);
+
+    let with_others = rollback_with(&model, &state, &ctx, &["default"]);
+    assert!(
+        with_others.home_left_behind.is_none(),
+        "the shared root was kept on purpose: reporting it as a leftover contradicts the \
+         'left in place' section printed just above it"
+    );
+
+    // and the check must still fire when this instance IS the last one — that
+    // is the case A-MD-2 exists for.
+    let alone = rollback_with(&model, &state, &ctx, &[]);
+    assert_eq!(
+        alone.home_left_behind,
+        Some(PathBuf::from(HOME)),
+        "alone on the machine, a home that survives every undo is exactly what must be reported"
+    );
+}

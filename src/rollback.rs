@@ -321,7 +321,15 @@ pub fn rollback_from_state_sharing_with(
     //
     // skipped in dry-run, where the directory is still there by construction
     // and the warning would be a guaranteed false alarm.
-    if !ctx.dry_run {
+    //
+    // skipped with other instances installed for the same reason (`A-V6-11`,
+    // found in the field): there the shared root is one of the artifacts we
+    // deliberately kept, so its presence is the rule working, not a residue.
+    // reporting it anyway printed two sentences that were plainly false — "it
+    // holds something we did not create" (it holds the *other instance*, which
+    // we created) and "everything the installer had created has been removed"
+    // (eight steps' worth had just been listed as left in place, right above).
+    if !ctx.dry_run && others.is_empty() {
         let ops = make_ops();
         if ops.path_exists(&ctx.odoo_home) {
             warn!(
