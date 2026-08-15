@@ -363,15 +363,27 @@ pub fn select(found: &[Found], requested: Option<&str>) -> Selection {
 /// too — they answer different questions, and something else on the machine may
 /// hold the port without any manifest knowing.
 ///
-/// only the HTTP port for now: the gevent port is still hardwired in the
-/// template and is not persisted, so there is nothing to compare (`A-V6-3`, and
-/// phase I3).
-pub fn port_conflict(found: &[Found], chosen: &InstanceId, port: u16) -> Option<(String, u16)> {
+/// **both** ports, and crossed: an instance's gevent port colliding with
+/// another's HTTP port is just as fatal as two HTTP ports colliding, and it is
+/// the likelier accident — `--port 8072` looks perfectly free until the
+/// neighbour's longpolling worker starts.
+///
+/// returns the other instance and **which** port clashes, so the message can
+/// name the number the user actually typed.
+pub fn port_conflict(
+    found: &[Found],
+    chosen: &InstanceId,
+    port: u16,
+    gevent_port: u16,
+) -> Option<(String, u16)> {
     found
         .iter()
         .filter(|f| &f.id != chosen && f.is_live())
         .find_map(|f| {
             let config = f.state.config.as_ref()?;
-            (config.port == port).then(|| (f.id.to_string(), config.port))
+            let theirs = [config.port, config.gevent_port];
+            let mine = [port, gevent_port];
+            let clash = mine.into_iter().find(|p| theirs.contains(p))?;
+            Some((f.id.to_string(), clash))
         })
 }

@@ -360,11 +360,21 @@ fn a_port_recorded_by_another_instance_is_a_conflict_even_with_nothing_listening
     write_unnamed(dir.path(), 8069);
     let d = discover(dir.path());
 
-    let conflict = port_conflict(&d.found, &InstanceId::Named("cliente-x".to_string()), 8069);
+    let conflict = port_conflict(
+        &d.found,
+        &InstanceId::Named("cliente-x".to_string()),
+        8069,
+        8072,
+    );
     assert_eq!(conflict, Some((UNNAMED_ID.to_string(), 8069)));
 
     assert_eq!(
-        port_conflict(&d.found, &InstanceId::Named("cliente-x".to_string()), 8169),
+        port_conflict(
+            &d.found,
+            &InstanceId::Named("cliente-x".to_string()),
+            8169,
+            8172
+        ),
         None,
         "a different port is not a conflict"
     );
@@ -376,7 +386,7 @@ fn an_instance_does_not_conflict_with_itself() {
     write_unnamed(dir.path(), 8069);
     let d = discover(dir.path());
     assert_eq!(
-        port_conflict(&d.found, &InstanceId::Unnamed, 8069),
+        port_conflict(&d.found, &InstanceId::Unnamed, 8069, 8072),
         None,
         "resuming or re-running an instance must not trip over its own recorded port"
     );
@@ -447,5 +457,66 @@ fn state_and_instance_cannot_be_given_together() {
         ])
         .is_err(),
         "two ways of naming the manifest, given at once, must be refused rather than ranked"
+    );
+}
+
+/// the crossed case, and the likelier accident: `--port 8072` looks perfectly
+/// free — nothing is listening on it and no manifest names it as an *HTTP*
+/// port — right up to the moment the neighbour's longpolling worker starts.
+///
+/// comparing only HTTP against HTTP would have waved this through, which is why
+/// both ports of both instances enter the comparison.
+#[test]
+fn the_gevent_port_of_another_instance_is_a_conflict_too() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    write_unnamed(dir.path(), 8069); // so: 8069 HTTP, 8072 gevent
+    let d = discover(dir.path());
+    let me = InstanceId::Named("cliente-x".to_string());
+
+    assert_eq!(
+        port_conflict(&d.found, &me, 8072, 8075),
+        Some((UNNAMED_ID.to_string(), 8072)),
+        "my HTTP port is their longpolling port: the same collision, and nobody would guess it"
+    );
+    assert_eq!(
+        port_conflict(&d.found, &me, 8169, 8069),
+        Some((UNNAMED_ID.to_string(), 8069)),
+        "and the other way round"
+    );
+    assert_eq!(
+        port_conflict(&d.found, &me, 8169, 8172),
+        None,
+        "a pair that touches neither of theirs is free"
+    );
+}
+
+/// a manifest written before I3 has no `gevent_port` field, and what it must
+/// read back as is **8072** — the value hardwired in every template up to then,
+/// whatever HTTP port that instance chose.
+///
+/// deriving `port + 3` on the way in would invent a claim it never made: an
+/// instance on 8169 would be recorded as holding 8172, while the port it really
+/// binds is 8072 — so the check would wave through exactly the collision it
+/// exists to catch.
+#[test]
+fn a_manifest_from_before_i3_claims_the_hardwired_gevent_port() {
+    let json = serde_json::json!({
+        "odoo_version": "18.0",
+        "odoo_version_short": "18",
+        "odoo_user": "odoo",
+        "db_user": "odoo",
+        "db_name": "odoo",
+        "odoo_home": "/opt/odoo",
+        "install_dir": "/opt/odoo/odoo18",
+        "port": 8169,
+        "odoo_logfile": null,
+        "with_nginx": false,
+        "sudo_user": null
+    });
+    let config: InstallConfig = serde_json::from_value(json).expect("a pre-I3 manifest must read");
+    assert_eq!(config.port, 8169);
+    assert_eq!(
+        config.gevent_port, 8072,
+        "what it actually binds, not what today's rule would have derived"
     );
 }

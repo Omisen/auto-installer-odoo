@@ -52,6 +52,14 @@ pub struct Context {
     pub db_name: String,
     /// install directory, always under `odoo_home`.
     pub install_dir: PathBuf,
+    /// the gevent (longpolling) port, derived from [`Self::port`] unless
+    /// overridden.
+    ///
+    /// a field and no longer a constant in the template: two instances that
+    /// both wrote `gevent_port = 8072` start fine one at a time and fight the
+    /// moment they are both up — the collision `A-V6-3` is about, invisible
+    /// until it is not.
+    pub gevent_port: u16,
     /// Odoo master password, redacted in the logs.
     pub admin_passwd: Secret,
     /// Odoo log file; `None` logs to journal/stdout. decides whether
@@ -141,6 +149,7 @@ impl Context {
             db_password: config.db_password,
             odoo_home: config.odoo_home,
             port: config.port,
+            gevent_port: config.gevent_port,
             db_name: config.db_name,
             install_dir: config.install_dir,
             admin_passwd: config.admin_passwd,

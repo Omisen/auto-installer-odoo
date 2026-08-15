@@ -9,7 +9,13 @@ use invok::context::Context;
 use invok::secret::Secret;
 use invok::step::Step;
 use invok::steps::generate_config::GenerateConfig;
-use invok::steps::generate_config::{normalize_empty_directives, render_config, validate_rendered};
+use invok::steps::generate_config::{
+    data_dir, normalize_empty_directives, render_config, validate_rendered,
+};
+
+/// the shipped template, read the same way the step reads it: a copy written
+/// into the test would be a second source that can drift.
+const TEMPLATE: &str = include_str!("../templates/odoo.conf.tpl");
 
 fn ctx(install_dir: PathBuf) -> Context {
     Context {
@@ -161,4 +167,81 @@ fn normalize_directive_helper() {
     );
     assert_eq!(normalize_empty_directives("key = value\n"), "key = value\n");
     assert_eq!(normalize_empty_directives("; comment\n"), "; comment\n");
+}
+
+// --- I3: the ports and the filestore in the rendered config -----------------
+
+/// the config must carry **this** instance's gevent port. `gevent_port = 8072`
+/// was written verbatim by every installation, so two instances agreed to fight
+/// over one socket — and the loser's failure is at *startup*, long after the
+/// installation reported success.
+#[test]
+fn the_rendered_config_carries_this_instances_gevent_port() {
+    let mut c = ctx(PathBuf::from("/opt/odoo/odoo-cliente-x"));
+    c.instance = Some("cliente-x".to_string());
+    c.port = 8169;
+    c.gevent_port = 8172;
+
+    let rendered = render_config(TEMPLATE, &c);
+    let directive = rendered
+        .lines()
+        .find(|l| l.trim_start().starts_with("gevent_port"))
+        .expect("the config must declare a gevent port");
+    assert_eq!(directive.trim(), "gevent_port = 8172");
+    assert!(
+        rendered.lines().any(|l| l.trim() == "http_port = 8169"),
+        "and the HTTP port stays the one that was chosen"
+    );
+}
+
+/// § 4.1, the filestore: two instances must never write attachments into one
+/// directory. `data_dir` derives from the **user's home**, which (α) made
+/// per-instance — this is the test that keeps it that way, because the
+/// derivation is one line and the damage is silent.
+///
+/// silent because Odoo keeps attachments in `filestore/<db>/`, so the files do
+/// not mix: what collides is **ownership**. `setup-data-dir`'s undo removes the
+/// highest level that was missing, so rolling back whoever created it first
+/// would carry off everybody's filestore.
+#[test]
+fn no_two_instances_share_a_filestore() {
+    let unnamed = ctx(PathBuf::from("/opt/odoo/odoo18"));
+
+    let mut named = ctx(PathBuf::from("/opt/odoo/odoo-cliente-x"));
+    named.instance = Some("cliente-x".to_string());
+
+    let mut other = ctx(PathBuf::from("/opt/odoo/odoo-cliente-y"));
+    other.instance = Some("cliente-y".to_string());
+
+    let dirs = [data_dir(&unnamed), data_dir(&named), data_dir(&other)];
+    for (i, a) in dirs.iter().enumerate() {
+        for b in dirs.iter().skip(i + 1) {
+            assert_ne!(a, b, "two instances would write their attachments together");
+            assert!(
+                !a.starts_with(b) && !b.starts_with(a),
+                "and neither may contain the other: {} vs {}",
+                a.display(),
+                b.display()
+            );
+        }
+    }
+}
+
+/// and the unnamed instance's filestore stays **exactly** where it has always
+/// been.
+///
+/// this one is a freeze, in the spirit of `tests/apt_packages.rs`: moving it
+/// would be tidier — inside the instance's own install dir, like the named ones
+/// — and it would silently orphan every existing customer's attachments, since
+/// Odoo would start against an empty directory and report no error at all. the
+/// collision this path could have caused no longer exists, so there is nothing
+/// to buy with that risk.
+#[test]
+fn the_unnamed_instances_filestore_does_not_move() {
+    let c = ctx(PathBuf::from("/opt/odoo/odoo18"));
+    assert_eq!(
+        data_dir(&c),
+        PathBuf::from("/opt/odoo/.local/share/Odoo"),
+        "an existing installation's attachments live here: this path is not ours to improve"
+    );
 }

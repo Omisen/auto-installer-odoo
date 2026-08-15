@@ -356,3 +356,85 @@ fn the_historical_env_key_for_the_https_port_still_works() {
     let raw = config::parse_env_file(&nuovo).expect("parse");
     assert_eq!(raw.open_https_port, Some(true));
 }
+
+// --- I3: the gevent port ----------------------------------------------------
+
+/// derived, so one `--port` moves the pair and a second instance never has to
+/// know this port exists — and 8069 keeps giving 8072, which is what every
+/// installation so far wrote.
+#[test]
+fn the_gevent_port_follows_the_http_port() {
+    let default = resolve(&cli_base(), &RawConfig::default()).expect("resolution");
+    assert_eq!((default.port, default.gevent_port), (8069, 8072));
+
+    let moved = resolve(
+        &RawConfig {
+            port: Some("8169".to_string()),
+            ..cli_base()
+        },
+        &RawConfig::default(),
+    )
+    .expect("resolution");
+    assert_eq!(
+        (moved.port, moved.gevent_port),
+        (8169, 8172),
+        "moving the HTTP port has to move the pair: a second instance that only sets --port \
+         would otherwise take the first one's longpolling port"
+    );
+}
+
+/// overridable, because deriving without an override is a decision the customer
+/// cannot undo — the machine may already have something on 8072.
+#[test]
+fn the_gevent_port_can_be_set_explicitly_and_the_env_can_do_it_too() {
+    let from_cli = resolve(
+        &RawConfig {
+            gevent_port: Some("9072".to_string()),
+            ..cli_base()
+        },
+        &RawConfig::default(),
+    )
+    .expect("resolution");
+    assert_eq!((from_cli.port, from_cli.gevent_port), (8069, 9072));
+
+    let from_env = resolve(
+        &cli_base(),
+        &RawConfig {
+            gevent_port: Some("9073".to_string()),
+            ..Default::default()
+        },
+    )
+    .expect("resolution");
+    assert_eq!(from_env.gevent_port, 9073);
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let file = dir.path().join("named.env");
+    std::fs::write(&file, "ODOO_GEVENT_PORT=\"9074\"\n").expect("write");
+    let parsed = parse_env_file(&file).expect("parse");
+    assert_eq!(
+        parsed.gevent_port.as_deref(),
+        Some("9074"),
+        "the key has to be settable from a .env: it is the file a customer's instance is \
+         described by"
+    );
+}
+
+/// the one combination that cannot work: Odoo would have to listen twice on one
+/// port. refused at resolution, before anything is touched.
+#[test]
+fn the_two_ports_may_not_be_the_same() {
+    let err = resolve(
+        &RawConfig {
+            port: Some("8069".to_string()),
+            gevent_port: Some("8069".to_string()),
+            ..cli_base()
+        },
+        &RawConfig::default(),
+    )
+    .expect_err("one port cannot be both");
+    let message = err.to_string();
+    assert!(
+        message.contains("8069") && message.contains("--gevent-port"),
+        "the message must name the port and the way out:\n{message}"
+    );
+}

@@ -209,6 +209,7 @@ Parameters resolve in this order: **CLI → `.env` → interactive prompt → de
 | `--db-user` | PostgreSQL role | = `--odoo-user` |
 | `--db-password` | password for the DB role | empty → peer authentication |
 | `--port` | HTTP port (1–65535) | `8069` |
+| `--gevent-port` | longpolling/websocket port | `--port` + 3 (so `8072`) |
 | `--db-name` | database name | `odoo` |
 | `--install-dir` | install directory (must live under `/opt/odoo`) | `/opt/odoo/odoo<N>` |
 | `--admin-passwd` | Odoo master password | `admin` (discouraged) |
@@ -263,8 +264,15 @@ Each instance gets its **own uninstall manifest**: `/var/lib/invok/instances/<na
 one, and `/var/lib/invok/state.json` — where it has always been — for the unnamed one. So a second
 instance can be installed alongside the first, and each is undone on its own.
 
+Each instance takes **two** ports: the HTTP one and the longpolling one Odoo's gevent worker binds
+at startup. `--port` moves both — `8169` gives `8172` — so a second instance normally needs nothing
+else; `--gevent-port` is there for the machine that already has something on that number. The
+preflight refuses a port another instance has **recorded**, even when nothing is listening on it
+right now: an instance that is merely stopped holds no socket, and the collision would otherwise
+surface at the first simultaneous start, naming neither of them.
+
 ```bash
-sudo invok --instance cliente-x --port 8169    # a second instance
+sudo invok --instance cliente-x --port 8169    # a second instance (HTTP 8169, longpolling 8172)
 sudo invok list                                # what this machine carries
 sudo invok rollback --instance cliente-x       # undo just that one
 sudo invok rollback --all                      # undo them all, shared artifacts last
@@ -313,7 +321,8 @@ With `--config <FILE>` the parameters come from a `KEY=VALUE` file. Unlike the o
 comments and blank lines ignored, **nothing executed** (a value like `$(...)` stays a literal string).
 Unknown keys produce a warning and are ignored.
 
-Recognised keys: `ODOO_VERSION`, `ODOO_INSTANCE`, `ODOO_USER`, `DB_USER`, `DB_PASSWORD`, `ODOO_PORT`, `DB_NAME`,
+Recognised keys: `ODOO_VERSION`, `ODOO_INSTANCE`, `ODOO_USER`, `DB_USER`, `DB_PASSWORD`, `ODOO_PORT`,
+`ODOO_GEVENT_PORT`, `DB_NAME`,
 `ODOO_INSTALL_DIR`, `ODOO_ADMIN_PASSWD`, `ODOO_LOGFILE`, `WITH_NGINX`, `NGINX_SERVER_NAME`,
 `NGINX_OPEN_HTTPS_PORT` (legacy alias `NGINX_ENABLE_SSL`). `ODOO_HOME` is constant and ignored.
 

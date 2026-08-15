@@ -63,6 +63,9 @@ pub struct Cli {
     #[arg(long, value_name = "PASS")]
     pub db_password: Option<String>,
 
+    /// Odoo's gevent (longpolling) port; defaults to the HTTP port + 3.
+    #[arg(long, value_name = "PORT")]
+    pub gevent_port: Option<u16>,
     /// Odoo's HTTP port; defaults to 8069.
     #[arg(long, value_name = "PORT")]
     pub port: Option<u16>,

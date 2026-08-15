@@ -4,6 +4,7 @@
 # placeholders substituted when the vhost is rendered:
 #   {{NGINX_SERVER_NAME}}   domain name or IP
 #   {{ODOO_PORT}}           Odoo's local port (default 8069)
+#   {{ODOO_GEVENT_PORT}}    Odoo's longpolling port (default 8072)
 #   {{NGINX_CLIENT_MAX}}    maximum upload body size (default 100m)
 #   {{INSTANCE_BASE}}       this instance's name, for the log filenames
 #
@@ -21,13 +22,19 @@
 # =============================================================================
 
 # -- upstream -----------------------------------------------------------------
-upstream odoo {
+# the upstream names carry the instance, and that is not cosmetic: nginx keeps
+# **one** namespace for every vhost it loads, so two instances declaring
+# `upstream odoo` make `nginx -t` fail with a duplicate — the whole second
+# installation rolled back (A-V6-13). the port had the same problem more
+# quietly: both would have proxied longpolling to 8072, i.e. to whichever
+# instance happened to hold it.
+upstream {{INSTANCE_BASE}} {
     server 127.0.0.1:{{ODOO_PORT}};
     keepalive 16;
 }
 
-upstream odoo-longpolling {
-    server 127.0.0.1:8072;
+upstream {{INSTANCE_BASE}}-longpolling {
+    server 127.0.0.1:{{ODOO_GEVENT_PORT}};
 }
 
 # -- HTTP (port 80) -----------------------------------------------------------
@@ -56,7 +63,7 @@ server {
 
     # -- longpolling (real-time notifications) --------------------------------
     location /web/websocket {
-        proxy_pass         http://odoo-longpolling;
+        proxy_pass         http://{{INSTANCE_BASE}}-longpolling;
         proxy_http_version 1.1;
         proxy_set_header   Upgrade    $http_upgrade;
         proxy_set_header   Connection "upgrade";
@@ -69,7 +76,7 @@ server {
     }
 
     location /longpolling {
-        proxy_pass         http://odoo-longpolling;
+        proxy_pass         http://{{INSTANCE_BASE}}-longpolling;
         proxy_http_version 1.1;
         proxy_set_header   Host               $host;
         proxy_set_header   X-Real-IP          $remote_addr;
@@ -81,7 +88,7 @@ server {
 
     # -- static content, aggressively cached ----------------------------------
     location ~* /web/static/ {
-        proxy_pass         http://odoo;
+        proxy_pass         http://{{INSTANCE_BASE}};
         proxy_cache_valid  200 90d;
         proxy_buffering    on;
         expires            864000;
@@ -94,7 +101,7 @@ server {
 
     # -- main proxy -----------------------------------------------------------
     location / {
-        proxy_pass         http://odoo;
+        proxy_pass         http://{{INSTANCE_BASE}};
         proxy_http_version 1.1;
         proxy_set_header   Host              $http_host;
         proxy_set_header   X-Real-IP         $remote_addr;

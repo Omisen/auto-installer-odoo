@@ -150,19 +150,22 @@ fn root_and_sudo_pure_logic() {
 fn port_80_held_by_a_running_nginx_is_not_a_conflict() {
     // already listening: those ports are not looked at.
     assert_eq!(
-        ports_to_check(8069, true, /* nginx_already_serving */ true),
-        vec![8069],
+        ports_to_check(8069, 8072, true, /* nginx_already_serving */ true),
+        vec![8069, 8072],
         "an nginx already serving is not a conflict with itself"
     );
 
     // requested but not yet listening: the conflict would be real.
-    assert_eq!(ports_to_check(8069, true, false), vec![8069, 80, 443]);
+    assert_eq!(
+        ports_to_check(8069, 8072, true, false),
+        vec![8069, 8072, 80, 443]
+    );
 
     // without nginx, port 80 concerns nobody.
-    assert_eq!(ports_to_check(8069, false, false), vec![8069]);
+    assert_eq!(ports_to_check(8069, 8072, false, false), vec![8069, 8072]);
     assert_eq!(
-        ports_to_check(8069, false, true),
-        vec![8069],
+        ports_to_check(8069, 8072, false, true),
+        vec![8069, 8072],
         "without --with-nginx the state of nginx is irrelevant"
     );
 }
@@ -179,7 +182,7 @@ fn an_occupied_port_still_stops_the_installation() {
     let porta = occupata.local_addr().expect("addr").port();
 
     assert!(
-        check_ports(porta, false, false).is_err(),
+        check_ports(porta, porta.saturating_add(3), false, false).is_err(),
         "a port held by a third party must stop the installation"
     );
 }

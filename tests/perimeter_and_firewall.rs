@@ -81,6 +81,7 @@ fn config_with(home: &str, install_dir: &str) -> InstallConfig {
         odoo_home: PathBuf::from(home),
         install_dir: PathBuf::from(install_dir),
         port: 8069,
+        gevent_port: 8072,
         odoo_logfile: None,
         with_nginx: false,
         sudo_user: None,

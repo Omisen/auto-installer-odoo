@@ -232,7 +232,8 @@ pub fn render_config(template: &str, ctx: &Context) -> String {
     let db_password = ctx.db_password.expose();
 
     let port = ctx.port.to_string();
-    let replacements: [(&str, &str); 21] = [
+    let gevent_port = ctx.gevent_port.to_string();
+    let replacements: [(&str, &str); 22] = [
         ("ODOO_VERSION", ctx.odoo_version.as_str()),
         ("ODOO_ADDONS_PATH", addons.as_str()),
         ("ODOO_ADMIN_PASSWD", admin),
@@ -244,6 +245,7 @@ pub fn render_config(template: &str, ctx: &Context) -> String {
         ("DB_USER", ctx.db_user.as_str()),
         ("ODOO_HTTP_INTERFACE", "0.0.0.0"),
         ("ODOO_PORT", port.as_str()),
+        ("ODOO_GEVENT_PORT", gevent_port.as_str()),
         ("ODOO_LIMIT_MEMORY_HARD", "2684354560"),
         ("ODOO_LIMIT_MEMORY_SOFT", "2147483648"),
         ("ODOO_LIMIT_REQUEST", "8192"),

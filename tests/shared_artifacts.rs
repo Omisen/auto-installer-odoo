@@ -540,6 +540,7 @@ fn config_named(name: &str) -> InstallConfig {
         odoo_home: PathBuf::from(HOME),
         install_dir: PathBuf::from(HOME).join(format!("odoo-{name}")),
         port: 8069,
+        gevent_port: 8072,
         odoo_logfile: None,
         with_nginx: false,
         sudo_user: Some("alice".to_string()),

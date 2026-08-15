@@ -168,13 +168,14 @@ fn run_install(cli: &Cli) -> Result<()> {
     };
     let discovery = invok::manifests::discover();
     if let Some((other, port)) =
-        invok::manifests::port_conflict(&discovery.found, &chosen_id, ctx.port)
+        invok::manifests::port_conflict(&discovery.found, &chosen_id, ctx.port, ctx.gevent_port)
     {
         bail!(
             "instance '{other}' already claims port {port}, even if nothing is listening on it \
              right now.\n\
              \n\
-             choose another one with --port, or remove that instance first."
+             choose another one with --port (which moves the gevent port with it) or with \
+             --gevent-port, or remove that instance first."
         );
     }
 
@@ -419,14 +420,20 @@ fn run_environment_checks(
     if port_is_ours {
         tracing::info!(
             port = ctx.port,
-            "the port is held by this installation's own service: check skipped (resume)"
+            gevent_port = ctx.gevent_port,
+            "both ports are held by this installation's own service: check skipped (resume)"
         );
     } else {
         // if nginx is already serving, port 80 is its own: not a conflict but
         // the program we are about to configure (A-V3-15).
         let nginx_already_serving = ctx.with_nginx && make_ops().service_is_active("nginx");
-        checks::check_ports(ctx.port, ctx.with_nginx, nginx_already_serving)
-            .map_err(|e| anyhow!(e))?;
+        checks::check_ports(
+            ctx.port,
+            ctx.gevent_port,
+            ctx.with_nginx,
+            nginx_already_serving,
+        )
+        .map_err(|e| anyhow!(e))?;
     }
     checks::check_commands(ctx.os_family).map_err(|e| anyhow!(e))?;
 

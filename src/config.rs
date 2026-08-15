@@ -23,6 +23,14 @@ use crate::secret::Secret;
 pub const ODOO_HOME: &str = "/opt/odoo";
 const DEFAULT_VERSION: &str = "18.0";
 const DEFAULT_PORT: &str = "8069";
+/// how far the gevent port sits above the HTTP one.
+///
+/// 3, because that reproduces Odoo's own 8069 → 8072 for whoever changes
+/// nothing. deriving instead of hardwiring is what makes a second instance
+/// possible at all: two installations that both wrote `gevent_port = 8072`
+/// collide the moment they are both started, and Odoo's diagnosis names
+/// neither of them.
+pub const GEVENT_PORT_OFFSET: u16 = 3;
 // the defaults for the system user, the role and the database are no longer
 // constants here: they are derived from the instance name, and for the unnamed
 // instance they evaluate to the historical `odoo`. one source
@@ -54,6 +62,11 @@ pub enum ConfigError {
     )]
     InvalidInstance { value: String, reason: &'static str },
 
+    #[error(
+        "the HTTP port and the gevent port are both {port}: Odoo cannot listen twice on one \
+         port. leave --gevent-port out to take the derived one, or give it a different value"
+    )]
+    PortsCollide { port: u16 },
     #[error("invalid Odoo port: '{0}'. enter a number between 1 and 65535")]
     InvalidPort(String),
 
@@ -99,6 +112,7 @@ pub struct RawConfig {
     pub db_user: Option<String>,
     pub db_password: Option<String>,
     pub port: Option<String>,
+    pub gevent_port: Option<String>,
     pub db_name: Option<String>,
     pub install_dir: Option<String>,
     pub admin_passwd: Option<String>,
@@ -119,6 +133,7 @@ impl RawConfig {
             db_user: cli.db_user.clone(),
             db_password: cli.db_password.clone(),
             port: cli.port.map(|p| p.to_string()),
+            gevent_port: cli.gevent_port.map(|p| p.to_string()),
             db_name: cli.db_name.clone(),
             install_dir: cli
                 .install_dir
@@ -189,6 +204,7 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
             "DB_USER" => raw.db_user = Some(value),
             "DB_PASSWORD" => raw.db_password = Some(value),
             "ODOO_PORT" => raw.port = Some(value),
+            "ODOO_GEVENT_PORT" => raw.gevent_port = Some(value),
             "DB_NAME" => raw.db_name = Some(value),
             "ODOO_INSTALL_DIR" => raw.install_dir = Some(value),
             "ODOO_ADMIN_PASSWD" => raw.admin_passwd = Some(value),
@@ -366,6 +382,12 @@ pub struct ResolvedConfig {
     pub db_password: Secret,
     pub odoo_home: PathBuf,
     pub port: u16,
+    /// the port Odoo's gevent/longpolling worker listens on.
+    ///
+    /// derived from [`Self::port`] and overridable, both on purpose: deriving
+    /// without an override would be a choice the customer cannot undo, and an
+    /// override without a default would have to be typed every time.
+    pub gevent_port: u16,
     pub db_name: String,
     pub install_dir: PathBuf,
     pub admin_passwd: Secret,
@@ -437,6 +459,16 @@ impl ResolvedConfig {
             pick(&cli.port, &prompted.port, &env.port).unwrap_or_else(|| DEFAULT_PORT.to_string());
         let port = validate_port(&port_raw)?;
 
+        // derived from the HTTP port, so one `--port` moves the pair and a
+        // second instance does not have to know this port exists.
+        let gevent_port = match pick(&cli.gevent_port, &prompted.gevent_port, &env.gevent_port) {
+            Some(raw) => validate_port(&raw)?,
+            None => port.saturating_add(GEVENT_PORT_OFFSET),
+        };
+        if gevent_port == port {
+            return Err(ConfigError::PortsCollide { port });
+        }
+
         // follows odoo_user unless explicitly decoupled.
         let db_user = resolve_db_user(
             cli.db_user.as_deref(),
@@ -487,6 +519,7 @@ impl ResolvedConfig {
             db_password,
             odoo_home: home,
             port,
+            gevent_port,
             db_name,
             install_dir,
             admin_passwd: Secret::new(admin_raw),

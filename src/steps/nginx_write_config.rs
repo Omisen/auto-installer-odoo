@@ -165,10 +165,12 @@ pub fn render_vhost(ctx: &Context) -> String {
     // no certificate placeholders: the vhost has no 443 block, and the two that
     // existed were substituted inside commented-out lines, suggesting TLS was
     // configured here (A-V3-6).
+    let gevent_port = ctx.gevent_port.to_string();
     let base = ctx.artifact_base();
-    let replacements: [(&str, &str); 4] = [
+    let replacements: [(&str, &str); 5] = [
         ("{{NGINX_SERVER_NAME}}", ctx.nginx_server_name.as_str()),
         ("{{ODOO_PORT}}", port.as_str()),
+        ("{{ODOO_GEVENT_PORT}}", gevent_port.as_str()),
         ("{{NGINX_CLIENT_MAX}}", DEFAULT_CLIENT_MAX),
         ("{{INSTANCE_BASE}}", base.as_str()),
     ];

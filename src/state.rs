@@ -187,6 +187,20 @@ pub struct InstallConfig {
     pub odoo_home: PathBuf,
     pub install_dir: PathBuf,
     pub port: u16,
+    /// the gevent (longpolling) port this instance claims.
+    ///
+    /// persisted for one reason: the preflight of the **next** installation
+    /// reads it (`A-V6-3`). no undo uses it — a port is not an artifact — but
+    /// "which ports are taken" cannot be answered by looking at the system,
+    /// because an instance that is merely stopped holds none of them.
+    ///
+    /// `serde(default)` reads a manifest written before I3 as **8072**, and
+    /// that is not a convenience: those installations have `gevent_port = 8072`
+    /// literally in their `odoo.conf`, whatever their HTTP port. deriving
+    /// `port + 3` on the way in would invent a claim they never made, and the
+    /// check would wave through the collision it exists to catch.
+    #[serde(default = "gevent_port_before_i3")]
+    pub gevent_port: u16,
     /// `None` means Odoo logs to journal/stdout, so no log dir was created.
     pub odoo_logfile: Option<PathBuf>,
     pub with_nginx: bool,
@@ -210,6 +224,12 @@ pub struct InstallConfig {
     /// mandatory would strand an already-deployed instance.
     #[serde(default)]
     pub installer_version: Option<String>,
+}
+
+/// the gevent port every installation before I3 wrote, hardwired in the
+/// template.
+fn gevent_port_before_i3() -> u16 {
+    8072
 }
 
 /// the note to show when a different installer version wrote the manifest.
@@ -243,6 +263,7 @@ impl InstallConfig {
             odoo_home: ctx.odoo_home.clone(),
             install_dir: ctx.install_dir.clone(),
             port: ctx.port,
+            gevent_port: ctx.gevent_port,
             odoo_logfile: ctx.odoo_logfile.clone(),
             with_nginx: ctx.with_nginx,
             sudo_user: ctx.sudo_user.clone(),
@@ -353,6 +374,7 @@ impl InstallConfig {
             odoo_home: self.odoo_home.clone(),
             install_dir: self.install_dir.clone(),
             port: self.port,
+            gevent_port: self.gevent_port,
             odoo_logfile: self.odoo_logfile.clone(),
             with_nginx: self.with_nginx,
             sudo_user: self.sudo_user.clone(),

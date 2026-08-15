@@ -42,6 +42,7 @@ fn config_for(family: OsFamily) -> InstallConfig {
         odoo_home: PathBuf::from("/opt/odoo"),
         install_dir: PathBuf::from("/opt/odoo/odoo18"),
         port: 8069,
+        gevent_port: 8072,
         odoo_logfile: None,
         with_nginx: false,
         sudo_user: None,

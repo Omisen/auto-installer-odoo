@@ -633,3 +633,91 @@ fn the_vhost_logs_carry_the_version_in_their_name() {
     );
     validate_vhost(&reso).expect("no placeholder left");
 }
+
+// --- I3 / A-V6-13: two vhosts on one nginx ----------------------------------
+
+/// `A-V6-13`: nginx keeps **one** namespace for every vhost it loads, so two
+/// instances both declaring `upstream odoo` make `nginx -t` fail with a
+/// duplicate — and a failing `nginx -t` fails `nginx-reload`, hence the whole
+/// second installation, which is then rolled back.
+///
+/// loud rather than silent, so it would have been found on the first real try —
+/// but it is a hard blocker for the only reason to put two instances behind one
+/// proxy, and the fix is in the same template as the port.
+#[test]
+fn two_instances_do_not_declare_the_same_nginx_upstream() {
+    let mut first = ctx(true, false);
+    first.port = 8069;
+    first.gevent_port = 8072;
+
+    let mut second = ctx(true, false);
+    second.instance = Some("cliente-x".to_string());
+    second.port = 8169;
+    second.gevent_port = 8172;
+
+    let a = render_vhost(&first);
+    let b = render_vhost(&second);
+
+    let names_in = |vhost: &str| -> Vec<String> {
+        vhost
+            .lines()
+            .filter_map(|l| l.trim().strip_prefix("upstream "))
+            .map(|l| l.trim_end_matches(" {").to_string())
+            .collect()
+    };
+    let (a_names, b_names) = (names_in(&a), names_in(&b));
+    assert_eq!(a_names, vec!["odoo18", "odoo18-longpolling"]);
+    assert_eq!(
+        b_names,
+        vec!["odoo-cliente-x", "odoo-cliente-x-longpolling"]
+    );
+    assert!(
+        !a_names.iter().any(|n| b_names.contains(n)),
+        "one namespace for the whole of nginx: no name may appear in both vhosts"
+    );
+
+    // and each vhost must proxy to the names it declared, not to somebody
+    // else's — a `proxy_pass` left pointing at `odoo` would compile and serve
+    // the wrong instance.
+    for (vhost, names) in [(&a, &a_names), (&b, &b_names)] {
+        for line in vhost.lines().filter(|l| l.contains("proxy_pass")) {
+            let target = line
+                .trim()
+                .trim_start_matches("proxy_pass")
+                .trim()
+                .trim_start_matches("http://")
+                .trim_end_matches(';');
+            assert!(
+                names.iter().any(|n| n == target),
+                "this vhost proxies to '{target}', which it does not declare"
+            );
+        }
+    }
+    assert!(validate_vhost(&a).is_ok() && validate_vhost(&b).is_ok());
+}
+
+/// the longpolling upstream must carry **this** instance's gevent port. with
+/// 8072 hardwired, both vhosts sent every websocket to whichever instance had
+/// managed to bind it.
+#[test]
+fn the_longpolling_upstream_uses_this_instances_gevent_port() {
+    let mut c = ctx(true, false);
+    c.instance = Some("cliente-x".to_string());
+    c.port = 8169;
+    c.gevent_port = 8172;
+
+    let vhost = render_vhost(&c);
+    assert!(vhost.contains("server 127.0.0.1:8172;"), "{vhost}");
+    // the active lines, not the header comment that documents the default —
+    // R14's lesson: a check that reads the prose explaining a removal fires on
+    // the explanation instead of the thing.
+    let active: String = vhost
+        .lines()
+        .filter(|l| !l.trim_start().starts_with('#'))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(
+        !active.contains("8072"),
+        "no active line may still carry the hardwired port:\n{active}"
+    );
+}

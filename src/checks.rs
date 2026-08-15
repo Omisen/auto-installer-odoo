@@ -743,10 +743,11 @@ pub enum PortStatus {
 /// [`CheckError::PortInUse`] naming the busy port.
 pub fn check_ports(
     odoo_port: u16,
+    gevent_port: u16,
     with_nginx: bool,
     nginx_already_serving: bool,
 ) -> Result<(), CheckError> {
-    for port in ports_to_check(odoo_port, with_nginx, nginx_already_serving) {
+    for port in ports_to_check(odoo_port, gevent_port, with_nginx, nginx_already_serving) {
         match probe_port(port) {
             PortStatus::Free => info!(port, "✔ port available"),
             PortStatus::Unknown => {
@@ -767,8 +768,17 @@ pub fn check_ports(
 /// reproducible in a test: it depends on what runs on the test machine, where a
 /// wrong check would pass anyway. as a return value the rule is checkable in
 /// both directions.
-pub fn ports_to_check(odoo_port: u16, with_nginx: bool, nginx_already_serving: bool) -> Vec<u16> {
-    let mut ports = vec![odoo_port];
+pub fn ports_to_check(
+    odoo_port: u16,
+    gevent_port: u16,
+    with_nginx: bool,
+    nginx_already_serving: bool,
+) -> Vec<u16> {
+    // both, and the gevent one is not a detail: it is the port nobody names in
+    // a `.env`, so it is the one a second instance takes without noticing. Odoo
+    // binds it at **startup**, so a conflict there does not fail the
+    // installation — it fails the service, later, on somebody else's machine.
+    let mut ports = vec![odoo_port, gevent_port];
     // 80 and 443 are only checked when they must be taken by an nginx that is
     // **not already serving** (A-V3-15). adding a vhost to a running reverse
     // proxy is the supported scenario, and there port 80 is held by the very
