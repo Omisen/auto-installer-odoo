@@ -346,6 +346,16 @@ pub trait SystemOps {
     fn user_exists(&self, user: &str) -> bool;
     fn path_exists(&self, path: &Path) -> bool;
     fn owner_of(&self, path: &Path) -> Result<OwnerId, StepError>;
+    /// the permission bits, `chmod`'s counterpart.
+    ///
+    /// exists because [`Self::chmod`] alone can only *set*: widening somebody
+    /// else's directory without having read what it was is a mutation with no
+    /// undo (`A-V6-9`). the same asymmetry R11 found on the nginx default site —
+    /// the snapshot recorded *whether* it was there, not *what* it was.
+    ///
+    /// returns the low twelve bits (permissions plus setuid/setgid/sticky), not
+    /// the file type: it is meant to be handed back to `chmod` unchanged.
+    fn mode_of(&self, path: &Path) -> Result<u32, StepError>;
     fn dir_is_empty(&self, path: &Path) -> Result<bool, StepError>;
 
     fn create_user(&self, spec: &UserSpec) -> Result<(), StepError>;
@@ -828,6 +838,12 @@ impl SystemOps for RealSystemOps {
             uid: meta.uid(),
             gid: meta.gid(),
         })
+    }
+
+    fn mode_of(&self, path: &Path) -> Result<u32, StepError> {
+        use std::os::unix::fs::PermissionsExt;
+        let meta = std::fs::metadata(path).map_err(|e| StepError::io(path, e))?;
+        Ok(meta.permissions().mode() & 0o7777)
     }
 
     fn dir_is_empty(&self, path: &Path) -> Result<bool, StepError> {

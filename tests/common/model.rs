@@ -20,6 +20,10 @@ use invok::packaging::{Availability, PackageCatalog, PackageManager};
 use invok::system_ops::{OdooSourceState, OwnerId, PathKind, SystemOps, UserSpec};
 
 /// the modelled system state; comparable to check start against end.
+/// the mode a directory nobody chmodded is assumed to have: traversable, so a
+/// chain does not have to widen a root in order to run.
+pub const DEFAULT_MODE: u32 = 0o755;
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ModelState {
     pub packages: HashSet<String>,
@@ -48,6 +52,16 @@ pub struct ModelState {
     /// minimal VM: installed by whoever resolves dependencies.
     pub pending_deps: HashSet<String>,
     pub file_contents: HashMap<PathBuf, String>,
+    /// permission bits, for the paths whose mode is **not** the default
+    /// (`A-V6-9`).
+    ///
+    /// only the deviations, deliberately: absent means `DEFAULT_MODE`, and a
+    /// `chmod` back to it removes the entry. that keeps the invariant the whole
+    /// model rests on — two states compare equal **iff** every path's effective
+    /// mode is the same — so a fixture never has to spell out the modes of the
+    /// directories it did not touch, and a mode restored to what it was becomes
+    /// indistinguishable from one that was never changed. which is the point.
+    pub modes: HashMap<PathBuf, u32>,
     // environment, which does not mutate and does not enter the comparison.
     pub ufw_available: bool,
     pub ufw_active: bool,
@@ -319,6 +333,16 @@ impl SystemOps for SystemModel {
     fn owner_of(&self, _path: &Path) -> Result<OwnerId, StepError> {
         Ok(OwnerId { uid: 0, gid: 0 })
     }
+    fn mode_of(&self, path: &Path) -> Result<u32, StepError> {
+        Ok(self
+            .state
+            .lock()
+            .expect("l")
+            .modes
+            .get(path)
+            .copied()
+            .unwrap_or(DEFAULT_MODE))
+    }
     fn dir_is_empty(&self, path: &Path) -> Result<bool, StepError> {
         let s = self.state.lock().expect("l");
         let has_child =
@@ -452,7 +476,13 @@ impl SystemOps for SystemModel {
     fn chown_to_user(&self, _p: &Path, _u: &str) -> Result<(), StepError> {
         Ok(())
     }
-    fn chmod(&self, _p: &Path, _m: u32) -> Result<(), StepError> {
+    fn chmod(&self, p: &Path, m: u32) -> Result<(), StepError> {
+        let mut s = self.state.lock().expect("l");
+        if m == DEFAULT_MODE {
+            s.modes.remove(p);
+        } else {
+            s.modes.insert(p.to_path_buf(), m);
+        }
         Ok(())
     }
     fn mkdir(&self, path: &Path) -> Result<(), StepError> {
@@ -472,7 +502,9 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn rmdir(&self, path: &Path) -> Result<(), StepError> {
-        self.state.lock().expect("l").paths.remove(path);
+        let mut s = self.state.lock().expect("l");
+        s.paths.remove(path);
+        s.modes.remove(path);
         Ok(())
     }
     fn remove_dir_all(&self, path: &Path) -> Result<(), StepError> {
@@ -481,6 +513,7 @@ impl SystemOps for SystemModel {
         s.symlinks.retain(|e| e != path && !e.starts_with(path));
         s.file_contents
             .retain(|k, _| k != path && !k.starts_with(path));
+        s.modes.retain(|k, _| k != path && !k.starts_with(path));
         Ok(())
     }
     fn create_symlink(&self, _src: &Path, link: &Path) -> Result<(), StepError> {
@@ -492,7 +525,9 @@ impl SystemOps for SystemModel {
         Ok(())
     }
     fn remove_symlink(&self, link: &Path) -> Result<(), StepError> {
-        self.state.lock().expect("l").symlinks.remove(link);
+        let mut s = self.state.lock().expect("l");
+        s.symlinks.remove(link);
+        s.modes.remove(link);
         Ok(())
     }
     fn write_private_file(&self, path: &Path, content: &str) -> Result<(), StepError> {
@@ -521,6 +556,9 @@ impl SystemOps for SystemModel {
         let content = s.file_contents.remove(src);
         s.paths.remove(src);
         s.symlinks.remove(src);
+        if let Some(mode) = s.modes.remove(src) {
+            s.modes.insert(dst.to_path_buf(), mode);
+        }
         s.paths.insert(dst.to_path_buf());
         if let Some(c) = content {
             s.file_contents.insert(dst.to_path_buf(), c);
@@ -538,6 +576,7 @@ impl SystemOps for SystemModel {
         let mut s = self.state.lock().expect("l");
         s.paths.remove(path);
         s.file_contents.remove(path);
+        s.modes.remove(path);
         Ok(())
     }
     fn append_line(&self, path: &Path, line: &str) -> Result<(), StepError> {

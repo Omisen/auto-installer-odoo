@@ -313,3 +313,82 @@ fn the_verdict_does_not_depend_on_the_system_language() {
          machine the text differs and the conclusion must be the same"
     );
 }
+
+/// `A-V6-12`: the home's **mode** is restored like its owner.
+///
+/// `run` sets `0750` on a home that may be somebody else's with permissions of
+/// their choosing, and until now only the owner came back. handing a directory
+/// to its owner with permissions we picked is not handing it back — the same
+/// asymmetry R11 found on the nginx default site, and the same one `A-V6-9`
+/// fixes one level up.
+///
+/// found by the model, not by reading: once it started answering `mode_of` with
+/// what had actually been set, the "and that state is the virgin system"
+/// assertion in `tests/rehydrate.rs` stopped holding.
+#[test]
+fn a_preexisting_homes_mode_is_restored_like_its_owner() {
+    let cfg = MockConfig {
+        user_exists: false,
+        path_exists: true,
+        owner: OwnerId {
+            uid: 1000,
+            gid: 1000,
+        },
+        dir_mode: 0o700,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = CreateOdooUser::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    assert_eq!(
+        persisted(&step).home_original_mode,
+        Some(0o700),
+        "what the undo has to put back must be read before the run changes it"
+    );
+
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    let ops = ops_of(&log);
+    let home = PathBuf::from("/opt/odoo");
+    let chmods: Vec<u32> = ops
+        .iter()
+        .filter_map(|op| match op {
+            Op::Chmod { path, mode } if path == &home => Some(*mode),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        chmods,
+        vec![0o750, 0o700],
+        "the run takes the home to 0750, the undo gives it back exactly as it was"
+    );
+}
+
+/// a home that did not exist has no mode of its own to restore: it belongs to
+/// `prepare-opt-root`, whose undo removes it.
+#[test]
+fn a_home_we_found_absent_has_no_mode_to_restore() {
+    let cfg = MockConfig {
+        user_exists: false,
+        path_exists: false,
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = CreateOdooUser::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    assert_eq!(persisted(&step).home_original_mode, None);
+    step.run(&c).expect("run");
+    step.undo(&c).expect("undo");
+
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::Chmod { mode, .. } if *mode != 0o750)),
+        "no restoring chmod when there was nothing of anybody else's to restore"
+    );
+}

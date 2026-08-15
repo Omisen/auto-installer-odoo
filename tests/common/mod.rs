@@ -236,6 +236,15 @@ pub struct MockConfig {
     /// **every** path: turning that on for the cluster would claim the home
     /// exists too.
     pub pg_cluster_initialized: bool,
+    /// the shared root's permission bits, for `A-V6-9`.
+    ///
+    /// `0o755` is what a freshly created root has; a machine that already runs
+    /// the unnamed instance has `0o750`, which is the case the finding is about.
+    /// with `real_fs` the filesystem answers instead of this field.
+    pub dir_mode: u32,
+    /// makes reading the permission bits fail: "I do not know", which must not
+    /// be read as "wide open".
+    pub mode_unreadable: bool,
     /// the modelled family, which decides **which catalogue** the package
     /// manager answers with.
     ///
@@ -289,6 +298,8 @@ impl Default for MockConfig {
             apt_update_fails: false,
             selinux_boolean: Some(false),
             pg_cluster_initialized: false,
+            dir_mode: 0o755,
+            mode_unreadable: false,
             family: OsFamily::Debian,
         }
     }
@@ -696,6 +707,20 @@ impl SystemOps for MockSystemOps {
     }
     fn owner_of(&self, _path: &Path) -> Result<OwnerId, StepError> {
         Ok(self.cfg.owner)
+    }
+    fn mode_of(&self, path: &Path) -> Result<u32, StepError> {
+        if self.cfg.mode_unreadable {
+            return Err(StepError::Precondition(format!(
+                "cannot read the permissions of {}",
+                path.display()
+            )));
+        }
+        if self.cfg.real_fs {
+            use std::os::unix::fs::PermissionsExt;
+            let meta = std::fs::metadata(path).map_err(|e| StepError::io(path, e))?;
+            return Ok(meta.permissions().mode() & 0o7777);
+        }
+        Ok(self.cfg.dir_mode)
     }
     fn dir_is_empty(&self, _path: &Path) -> Result<bool, StepError> {
         Ok(self.cfg.dir_empty)

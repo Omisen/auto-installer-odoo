@@ -44,6 +44,28 @@
 //! — stays out: that directory is not ours to chown, and the installation stops
 //! with an explicit precondition in
 //! [`CreateOdooUser`](crate::steps::create_odoo_user).
+//!
+//! # the shared root has to be walkable by everybody under it (`A-V6-9`)
+//!
+//! the unnamed instance's home *is* `/opt/odoo`, so it is handed over as
+//! `odoo:odoo 0750` — right while it is one instance's private home, wrong the
+//! moment a second one moves in. adding `--instance cliente-x` to that machine
+//! creates `odoo-cliente-x`, a user that is neither the owner nor in the group:
+//! with `0750` it cannot **traverse** `/opt/odoo`, so it never reaches its own
+//! home. that is the migration path of every existing customer, and in the field
+//! it failed at `setup-cache-dir` with `mkdir: cannot create directory
+//! '/opt/odoo': Permission denied` — a directory that *exists*, which sends
+//! whoever reads it looking for the wrong problem.
+//!
+//! so a named instance that finds the shared root **not traversable** widens it
+//! by exactly one bit (`o+x`: walk through, still not list), and records the
+//! mode it found. the widening is an artifact like any other — R11's rule on the
+//! nginx default site, applied to a mode instead of a symlink: we touch what the
+//! customer owns *only* by writing down what it was.
+//!
+//! `o+x` and not `o+rx` because traversal is all that is needed: the contents
+//! stay unlistable to third parties, and each instance's own home keeps its
+//! `0750`.
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -66,6 +88,10 @@ const OPT_ROOT_MODE: u32 = 0o755;
 /// identical whichever step handed it over.
 const HANDED_OVER_MODE: u32 = 0o750;
 
+/// the one bit a named instance needs on the shared root: **traverse**, not
+/// list (`A-V6-9`).
+const TRAVERSE_BY_OTHERS: u32 = 0o001;
+
 /// what this step created, level by level.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
 pub struct OptRootSnapshot {
@@ -77,6 +103,16 @@ pub struct OptRootSnapshot {
     /// root: recording it twice would give the undo two claims on one directory.
     #[serde(default)]
     pub instance_home: PreState,
+    /// the shared root's mode **before** we widened it, and `None` when we did
+    /// not touch it (`A-V6-9`).
+    ///
+    /// `None` covers three different situations that need no undo and must not
+    /// be told apart here: we created the root ourselves, it was already
+    /// traversable, or this is the unnamed instance. what they have in common is
+    /// the only thing the undo asks — there is no foreign mode of ours to put
+    /// back.
+    #[serde(default)]
+    pub shared_root_mode_before: Option<u32>,
 }
 
 /// how this step's snapshot is read back from disk.
@@ -103,6 +139,7 @@ impl From<SnapshotRepr> for OptRootSnapshot {
             SnapshotRepr::Legacy(shared_root) => OptRootSnapshot {
                 shared_root,
                 instance_home: PreState::Untracked,
+                shared_root_mode_before: None,
             },
             SnapshotRepr::Current(snap) => snap,
         }
@@ -173,6 +210,126 @@ impl PrepareOptRoot {
         Ok(())
     }
 
+    /// decides — **without mutating**, this runs in `snapshot` — whether the
+    /// shared root has to be widened for this instance's user to reach its home
+    /// (`A-V6-9`), and returns the mode found so the undo can put it back.
+    ///
+    /// # errors
+    ///
+    /// [`StepError::Precondition`] when the mode cannot be read. an unreadable
+    /// mode is "I do not know", never "it is fine": widening without having read
+    /// what was there would be a mutation with no undo, and *not* widening would
+    /// send the installation into the misleading `mkdir` failure this exists to
+    /// prevent. so it stops here, before anything is touched, with a message
+    /// that names the permission.
+    fn traversal_to_widen(&self, ctx: &Context) -> Result<Option<u32>, StepError> {
+        // the unnamed instance is the root's owner: it walks in as itself, and
+        // widening would open one instance's private home to third parties.
+        let Some(home) = Self::own_home(ctx) else {
+            return Ok(None);
+        };
+        // a root we are about to create is born 0755 — traversable by design,
+        // because it is shared by design.
+        if self.snap.shared_root != PreState::Preexisting {
+            return Ok(None);
+        }
+        let dir = &ctx.odoo_home;
+        let mode = self.ops.mode_of(dir).map_err(|e| {
+            StepError::Precondition(format!(
+                "cannot read the permissions of {}: {e}. user '{}' has to traverse it to reach \
+                 {}, and without knowing what the mode is now there is no way to widen it and \
+                 put it back afterwards",
+                dir.display(),
+                ctx.odoo_user,
+                home.display()
+            ))
+        })?;
+        if mode & TRAVERSE_BY_OTHERS != 0 {
+            info!(
+                dir = %dir.display(),
+                mode = format_args!("{mode:o}"),
+                "snapshot: the shared root is already traversable, nothing to widen"
+            );
+            return Ok(None);
+        }
+        Ok(Some(mode))
+    }
+
+    /// applies the widening decided in `snapshot`.
+    ///
+    /// `warn` and not `info`: this is the one place the step touches something
+    /// somebody else owns, and the log is where a customer's post-mortem looks.
+    fn widen_shared_root(&self, ctx: &Context) -> Result<(), StepError> {
+        let Some(before) = self.snap.shared_root_mode_before else {
+            return Ok(());
+        };
+        let widened = before | TRAVERSE_BY_OTHERS;
+        let dir = &ctx.odoo_home;
+        if ctx.dry_run {
+            info!(
+                dir = %dir.display(),
+                from = format_args!("{before:o}"),
+                to = format_args!("{widened:o}"),
+                "run (dry run): would widen the shared root so this instance can traverse it"
+            );
+            return Ok(());
+        }
+        self.ops.chmod(dir, widened)?;
+        warn!(
+            dir = %dir.display(),
+            from = format_args!("{before:o}"),
+            to = format_args!("{widened:o}"),
+            user = %ctx.odoo_user,
+            "run: the shared root was not traversable by this instance's user; widened by o+x \
+             (walk through, still not list). the rollback puts the mode back"
+        );
+        Ok(())
+    }
+
+    /// puts the shared root's mode back — only what we changed, and only if it
+    /// is still what we left.
+    ///
+    /// never fails the rollback: like every undo it is best-effort, and a mode
+    /// left wide is a residue, not a loss.
+    fn restore_shared_root_mode(&self, ctx: &Context) {
+        let Some(before) = self.snap.shared_root_mode_before else {
+            return;
+        };
+        let dir = &ctx.odoo_home;
+        if ctx.dry_run {
+            info!(dir = %dir.display(), mode = format_args!("{before:o}"), "undo (dry run): would put the shared root's mode back");
+            return;
+        }
+        if !dir.exists() {
+            info!(dir = %dir.display(), "undo: the shared root is already gone, no mode to put back");
+            return;
+        }
+        let widened = before | TRAVERSE_BY_OTHERS;
+        match self.ops.mode_of(dir) {
+            // the .bashrc rule, on a mode: we put back what we changed, or we
+            // leave it alone — never a mode somebody else may have chosen since.
+            Ok(now) if now != widened => warn!(
+                dir = %dir.display(),
+                now = format_args!("{now:o}"),
+                left = format_args!("{widened:o}"),
+                "undo: the shared root's mode is not the one we left, leaving it alone"
+            ),
+            Ok(_) => match self.ops.chmod(dir, before) {
+                Ok(()) => info!(
+                    dir = %dir.display(),
+                    mode = format_args!("{before:o}"),
+                    "undo: the shared root's mode is back to what we found"
+                ),
+                Err(e) => {
+                    warn!(dir = %dir.display(), error = %e, "undo: could not put the mode back (best-effort)")
+                }
+            },
+            Err(e) => {
+                warn!(dir = %dir.display(), error = %e, "undo: cannot read the mode, leaving it alone")
+            }
+        }
+    }
+
     /// removes one level we created: only if it is still empty, never `rm -rf`.
     ///
     /// later steps' undos run first in the reverse order, so by now it should
@@ -233,10 +390,13 @@ impl Step for PrepareOptRoot {
             Some(_) => PreState::Untracked,
             None => PreState::Untracked,
         };
+        // reads only, and decides: the mutation is `run`'s (C4).
+        self.snap.shared_root_mode_before = self.traversal_to_widen(ctx)?;
         info!(
             dir = %ctx.odoo_home.display(),
             prestate = ?self.snap.shared_root,
             instance_home = ?self.snap.instance_home,
+            widen_from = ?self.snap.shared_root_mode_before.map(|m| format!("{m:o}")),
             "snapshot: prepare-opt-root"
         );
         Ok(())
@@ -248,6 +408,10 @@ impl Step for PrepareOptRoot {
         // --- the shared root ---------------------------------------------
         if self.snap.shared_root == PreState::Preexisting {
             info!(dir = %ctx.odoo_home.display(), "run: directory already present, nothing to do");
+            // …except, for a named instance, making it walkable (A-V6-9). the
+            // directory stays somebody else's; one bit of its mode becomes ours
+            // to put back.
+            self.widen_shared_root(ctx)?;
         } else if ctx.dry_run {
             info!(dir = %ctx.odoo_home.display(), "run (dry run): would create the directory (owned root, 0755)");
         } else {
@@ -305,6 +469,9 @@ impl Step for PrepareOptRoot {
             );
             return Ok(());
         }
+        // the mode we widened comes back before the directory itself may go:
+        // both are the shared root, and both are only ours once we are alone.
+        self.restore_shared_root_mode(ctx);
         Self::undo_level(&self.snap.shared_root, &ctx.odoo_home, ctx.dry_run);
         Ok(())
     }

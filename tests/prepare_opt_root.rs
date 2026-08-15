@@ -8,6 +8,7 @@
 
 mod common;
 
+use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
 
 use common::{ops_of, MockConfig, MockSystemOps, Op};
@@ -456,5 +457,181 @@ fn for_the_unnamed_instance_the_shared_root_is_the_home() {
         home.exists(),
         "were the driver ever to call it anyway, the flag alone must still protect the \
          directory the other instances live under"
+    );
+}
+
+// --- A-V6-9: the shared root has to be walkable by everybody under it -------
+
+/// a mock that answers about the **real** filesystem, so mode and `chmod` agree
+/// with what the step actually did.
+fn step_on_real_fs() -> (PrepareOptRoot, common::OpLog) {
+    let (mock, log) = MockSystemOps::new(MockConfig {
+        real_fs: true,
+        ..Default::default()
+    });
+    (PrepareOptRoot::with_ops(Box::new(mock)), log)
+}
+
+fn mode_of(path: &std::path::Path) -> u32 {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path).expect("stat").permissions().mode() & 0o7777
+}
+
+/// the finding itself: `/opt/odoo` handed to the unnamed instance is `0750`, and
+/// a named instance's user is neither its owner nor in its group — so without
+/// this it cannot reach its own home, and fails three steps later with a
+/// `mkdir` error that names a directory which exists.
+#[test]
+fn a_named_instance_widens_a_shared_root_it_could_not_traverse() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    std::fs::create_dir(&shared).expect("mkdir");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o750)).expect("chmod");
+
+    let c = ctx_named(shared.clone(), "cliente-x");
+    let (mut step, _log) = step_on_real_fs();
+
+    step.snapshot(&c).expect("snapshot");
+    assert_eq!(
+        mode_of(&shared),
+        0o750,
+        "the snapshot only reads: the mutation is the run's (C4)"
+    );
+
+    step.run(&c).expect("run");
+    assert_eq!(
+        mode_of(&shared),
+        0o751,
+        "one bit, and only that one: traverse yes, list no"
+    );
+    assert_eq!(
+        persisted(&step).shared_root_mode_before,
+        Some(0o750),
+        "the mode found is what the undo has to put back, so it must be persisted"
+    );
+
+    // and the promise: alone on the machine, the customer's directory goes back
+    // to the permissions it had.
+    step.undo(&c).expect("undo");
+    assert_eq!(mode_of(&shared), 0o750, "the widening is ours to take back");
+    assert!(shared.exists(), "the directory itself was never ours");
+}
+
+/// the reason this could not be done before I2: putting the mode back while
+/// another instance is still installed locks *that* instance out of its own
+/// home — the very failure, caused by the fix for it.
+#[test]
+fn the_widening_stays_while_another_instance_still_needs_it() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    std::fs::create_dir(&shared).expect("mkdir");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o750)).expect("chmod");
+
+    let mut c = ctx_named(shared.clone(), "cliente-x");
+    let (mut step, _log) = step_on_real_fs();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    c.shared_in_use = true;
+    step.undo(&c).expect("undo");
+    assert_eq!(
+        mode_of(&shared),
+        0o751,
+        "somebody else is still living under it and still has to walk in"
+    );
+}
+
+/// a root that is already traversable is not touched, and nothing is recorded:
+/// there is no undo to owe when there was no mutation.
+#[test]
+fn a_traversable_root_is_left_exactly_as_it_is() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    std::fs::create_dir(&shared).expect("mkdir");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o755)).expect("chmod");
+
+    let c = ctx_named(shared.clone(), "cliente-x");
+    let (mut step, log) = step_on_real_fs();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    assert_eq!(persisted(&step).shared_root_mode_before, None);
+    assert_eq!(mode_of(&shared), 0o755);
+    assert!(
+        !ops_of(&log)
+            .iter()
+            .any(|op| matches!(op, Op::Chmod { path, .. } if path == &shared)),
+        "no chmod at all on a root that was already fine"
+    );
+}
+
+/// the unnamed instance **owns** the shared root — it is its home — so widening
+/// it would open one instance's private directory to third parties for nobody's
+/// benefit.
+#[test]
+fn the_unnamed_instance_never_widens_its_own_home() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = dir.path().join("opt-odoo");
+    std::fs::create_dir(&home).expect("mkdir");
+    std::fs::set_permissions(&home, std::fs::Permissions::from_mode(0o750)).expect("chmod");
+
+    let c = ctx(home.clone(), false);
+    let (mut step, _log) = step_on_real_fs();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    assert_eq!(persisted(&step).shared_root_mode_before, None);
+    assert_eq!(mode_of(&home), 0o750, "its own home, its own permissions");
+}
+
+/// an unreadable mode is "I do not know", never "it is fine": widening without
+/// having read what was there is a mutation with no undo, so the installation
+/// stops **before** anything is touched — and the message names the permission,
+/// which is what the field failure did not.
+#[test]
+fn an_unreadable_mode_stops_the_installation_before_it_mutates() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    std::fs::create_dir(&shared).expect("mkdir");
+
+    let (mock, _log) = MockSystemOps::new(MockConfig {
+        real_fs: true,
+        mode_unreadable: true,
+        ..Default::default()
+    });
+    let mut step = PrepareOptRoot::with_ops(Box::new(mock));
+    let c = ctx_named(shared.clone(), "cliente-x");
+
+    let message = step
+        .snapshot(&c)
+        .expect_err("an unreadable mode must stop the installation")
+        .to_string();
+    assert!(
+        message.contains("permissions") && message.contains("odoo-cliente-x"),
+        "the message must name the permission and whose traversal it blocks:\n{message}"
+    );
+}
+
+/// the `.bashrc` rule, applied to a mode: we put back what we changed, or we
+/// leave it alone — never a value somebody else may have chosen since.
+#[test]
+fn a_mode_changed_by_somebody_else_is_not_overwritten() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    std::fs::create_dir(&shared).expect("mkdir");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o750)).expect("chmod");
+
+    let c = ctx_named(shared.clone(), "cliente-x");
+    let (mut step, _log) = step_on_real_fs();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    // the administrator has since decided otherwise.
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o775)).expect("chmod");
+    step.undo(&c).expect("undo");
+    assert_eq!(
+        mode_of(&shared),
+        0o775,
+        "their decision stands: our undo only takes back the mode it left"
     );
 }

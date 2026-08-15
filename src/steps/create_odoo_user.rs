@@ -42,6 +42,16 @@ pub struct CreateUserSnapshot {
     /// the home's owner **before** our `chown`, so the undo can restore it.
     /// `None` when the home did not exist.
     pub home_original_owner: Option<OwnerId>,
+    /// the home's mode **before** our `chmod` (`A-V6-12`), same reason and same
+    /// `None`.
+    ///
+    /// the owner alone was half the answer: `run` sets `0750` on a home that may
+    /// have been somebody else's with a mode of their choosing, and an undo that
+    /// hands the directory back with different permissions has not put it back.
+    /// found by the model once it started remembering modes at all — the same
+    /// way R13 found `A-V3-7`: a mock that answers like the real command.
+    #[serde(default)]
+    pub home_original_mode: Option<u32>,
 }
 
 /// creates the `odoo` system user, reversibly, and gives it the home.
@@ -155,8 +165,14 @@ impl Step for CreateOdooUser {
         // the home's owner BEFORE any chown of ours, for a correct undo when it
         // was pre-existing.
         let home = ctx.user_home();
-        self.snap.home_original_owner = if self.ops.path_exists(&home) {
+        let home_there = self.ops.path_exists(&home);
+        self.snap.home_original_owner = if home_there {
             self.ops.owner_of(&home).ok()
+        } else {
+            None
+        };
+        self.snap.home_original_mode = if home_there {
+            self.ops.mode_of(&home).ok()
         } else {
             None
         };
@@ -165,6 +181,7 @@ impl Step for CreateOdooUser {
             user = %user,
             prestate = ?self.snap.user_prestate,
             home_owner = ?self.snap.home_original_owner,
+            home_mode = ?self.snap.home_original_mode.map(|m| format!("{m:o}")),
             "snapshot: create-odoo-user"
         );
 
@@ -247,13 +264,28 @@ impl Step for CreateOdooUser {
         // restore the home's original owner if we changed it. when the home is
         // `PrepareOptRoot`'s it will be removed anyway, so this is a harmless
         // best-effort.
-        if let Some(original) = self.snap.home_original_owner {
+        if self.snap.home_original_owner.is_some() || self.snap.home_original_mode.is_some() {
             let home = ctx.user_home();
             if self.ops.path_exists(&home) {
-                if let Err(e) = self.ops.chown_numeric(&home, original) {
-                    warn!(error = %e, "undo: restoring the home owner failed, proceeding (best-effort)");
-                } else {
-                    info!(owner = ?original, "undo: the home's original owner was restored");
+                if let Some(original) = self.snap.home_original_owner {
+                    if let Err(e) = self.ops.chown_numeric(&home, original) {
+                        warn!(error = %e, "undo: restoring the home owner failed, proceeding (best-effort)");
+                    } else {
+                        info!(owner = ?original, "undo: the home's original owner was restored");
+                    }
+                }
+                // owner and mode are one restoration, not two: handing a
+                // directory back to its owner with permissions we chose is
+                // still not handing it back.
+                if let Some(original) = self.snap.home_original_mode {
+                    if let Err(e) = self.ops.chmod(&home, original) {
+                        warn!(error = %e, "undo: restoring the home mode failed, proceeding (best-effort)");
+                    } else {
+                        info!(
+                            mode = format_args!("{original:o}"),
+                            "undo: the home's original mode was restored"
+                        );
+                    }
                 }
             }
         }
