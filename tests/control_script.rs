@@ -299,3 +299,34 @@ fn show_the_helper() {
         control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x")
     );
 }
+
+/// `logs` follows **this** instance's journal, and takes an optional count.
+///
+/// read-only, so it is allowed to exist next to the verbs that mutate — but it
+/// is still scoped to one unit: on a machine with two customers, a log that
+/// mixed both would be worse than no log.
+#[test]
+fn logs_follows_this_instances_journal_only() {
+    let content = control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x");
+    let branch = content
+        .split("  logs)")
+        .nth(1)
+        .expect("the logs branch must exist")
+        .split("  status)")
+        .next()
+        .expect("it ends where the next branch starts");
+
+    assert!(
+        branch.contains(r#"journalctl -u "${SERVICE_NAME}""#),
+        "the journal must be this instance's:\n{branch}"
+    );
+    assert!(branch.contains("-f"), "it follows: that is what it is for");
+    assert!(
+        branch.contains(r#""${2:-100}""#),
+        "the number of lines is an optional argument, with a default"
+    );
+    assert!(
+        content.contains("Ctrl-C stops reading; the service keeps running"),
+        "the usage must say Ctrl-C does not stop Odoo — right after `dev`, which does stop it"
+    );
+}

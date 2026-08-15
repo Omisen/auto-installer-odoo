@@ -33,12 +33,14 @@ usage() {
   cat <<USAGE
 ${COMMAND_NAME} — controls the Odoo instance served by '${SERVICE_NAME}'
 
-Usage: ${COMMAND_NAME} {start|stop|restart|status|dev}
+Usage: ${COMMAND_NAME} {start|stop|restart|status|logs [N]|dev}
 
   start     start this instance's service
   stop      stop it
   restart   restart it — after changing its configuration file
   status    its state, followed by every Odoo service on this machine
+  logs      follow its log, from the last N lines (default 100).
+            Ctrl-C stops reading; the service keeps running
   dev       stop it and open a shell as '${ODOO_OS_USER}', to run odoo-bin by
             hand. The service stays STOPPED when you leave: bring it back with
             '${COMMAND_NAME} start'
@@ -103,6 +105,16 @@ case "${1:-}" in
     sudo su - "${ODOO_OS_USER}" -s /bin/bash
     echo
     echo "'${SERVICE_NAME}' is still STOPPED. Start it again with: ${COMMAND_NAME} start"
+    ;;
+  logs)
+    # this instance's journal and nobody else's, like every other verb here.
+    #
+    # it follows, because that is what a log is opened for while something is
+    # wrong; `-n` gives the lines before the tail. Ctrl-C ends `journalctl` and
+    # with it this script — the service is untouched, which the usage says out
+    # loud: right after `dev`, somebody may reasonably fear that Ctrl-C stops
+    # Odoo.
+    sudo journalctl -u "${SERVICE_NAME}" -n "${2:-100}" -f
     ;;
   status)
     # systemctl exits non-zero for a service that is not running, and under

@@ -377,7 +377,7 @@ systemctl status odoo18                  # N = short version, e.g. 18
 journalctl -u odoo18 -n 50 --no-pager
 
 odoo status                              # helper command; after: source ~/.bashrc
-                                         # start | stop | restart | status | dev
+                                         # start | stop | restart | status | logs | dev
 ```
 
 Each instance gets **its own** helper — `odoo`, `odoo-cliente-x` — and every verb that starts or
@@ -392,7 +392,9 @@ Odoo services on this machine:
 -> odoo18.service                   active   (this one: odoo)
 ```
 
-`dev` stops this instance and opens a shell as its user, to run `odoo-bin` by hand; when you leave,
+`logs` follows this instance's journal (`logs 500` for more scrollback); Ctrl-C stops reading and
+leaves the service running — worth saying, because `dev` is the verb right next to it and that one
+does stop it. `dev` opens a shell as the instance's user to run `odoo-bin` by hand; when you leave,
 the service is still down and the helper says so, with the command to bring it back.
 
 ```bash
