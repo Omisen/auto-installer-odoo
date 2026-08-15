@@ -5,7 +5,11 @@
 //!
 //! # coordinating with `PrepareOptRoot`
 //!
-//! that step creates `/opt/odoo`; this one makes it `odoo:odoo`. the rollback's
+//! that step creates the home — `/opt/odoo` for the unnamed instance, the
+//! install dir for a named one — and this one makes it `<user>:<user>`. which
+//! directory that is comes from [`Context::user_home`](crate::context::Context::user_home),
+//! never from `odoo_home` directly: for a named instance the shared root is not
+//! this user's home and must not be chowned to it. the rollback's
 //! ownership rule is **every step owns the removal of what it created**, so:
 //!
 //! - the undo runs `userdel` **without `-r`** and does NOT remove the home,
@@ -105,7 +109,7 @@ impl CreateOdooUser {
                sudo chown -R {user}:{user} {home}     (if that directory is meant for Odoo)\n\
              or remove it, if it is a leftover, and run the installer again.",
             user = ctx.odoo_user,
-            home = ctx.odoo_home.display()
+            home = ctx.user_home().display()
         )))
     }
 }
@@ -150,8 +154,9 @@ impl Step for CreateOdooUser {
 
         // the home's owner BEFORE any chown of ours, for a correct undo when it
         // was pre-existing.
-        self.snap.home_original_owner = if self.ops.path_exists(&ctx.odoo_home) {
-            self.ops.owner_of(&ctx.odoo_home).ok()
+        let home = ctx.user_home();
+        self.snap.home_original_owner = if self.ops.path_exists(&home) {
+            self.ops.owner_of(&home).ok()
         } else {
             None
         };
@@ -169,7 +174,7 @@ impl Step for CreateOdooUser {
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         let user = &ctx.odoo_user;
-        let home = &ctx.odoo_home;
+        let home = ctx.user_home();
 
         // pre-existing user: not ours. no `useradd`, and deliberately no
         // aggressive chown on a situation that is not ours either.
@@ -197,8 +202,8 @@ impl Step for CreateOdooUser {
         };
         self.ops.create_user(&spec)?;
         // `useradd` does not re-chown a pre-existing home, so we do.
-        self.ops.chown_named(home, user, user)?;
-        self.ops.chmod(home, HOME_MODE)?;
+        self.ops.chown_named(&home, user, user)?;
+        self.ops.chmod(&home, HOME_MODE)?;
 
         self.snap.user_prestate = PreState::CreatedByUs;
         info!(user = %user, home = %home.display(), "run: user created, home owned {user}:{user} 0750");
@@ -243,8 +248,9 @@ impl Step for CreateOdooUser {
         // `PrepareOptRoot`'s it will be removed anyway, so this is a harmless
         // best-effort.
         if let Some(original) = self.snap.home_original_owner {
-            if self.ops.path_exists(&ctx.odoo_home) {
-                if let Err(e) = self.ops.chown_numeric(&ctx.odoo_home, original) {
+            let home = ctx.user_home();
+            if self.ops.path_exists(&home) {
+                if let Err(e) = self.ops.chown_numeric(&home, original) {
                     warn!(error = %e, "undo: restoring the home owner failed, proceeding (best-effort)");
                 } else {
                     info!(owner = ?original, "undo: the home's original owner was restored");

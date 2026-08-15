@@ -157,9 +157,13 @@ fn missing_sudo_user_is_error() {
 
 #[test]
 fn script_content_wraps_service_and_user() {
-    let content = control_script_content("odoo18", "odoo");
+    let content = control_script_content("odoo18", "odoo", "odoo");
     assert!(content.contains("SERVICE_NAME=\"odoo18\""));
     assert!(content.contains("ODOO_OS_USER=\"odoo\""));
+    assert!(
+        content.contains("Usage: odoo "),
+        "the usage line must name the command the helper is invoked by"
+    );
     assert!(content.contains("systemctl start"));
     assert!(content.contains("systemctl status"));
 }

@@ -22,9 +22,12 @@ use crate::secret::Secret;
 /// an architectural constant: not overridable.
 pub const ODOO_HOME: &str = "/opt/odoo";
 const DEFAULT_VERSION: &str = "18.0";
-const DEFAULT_ODOO_USER: &str = "odoo";
 const DEFAULT_PORT: &str = "8069";
-const DEFAULT_DB_NAME: &str = "odoo";
+// the defaults for the system user, the role and the database are no longer
+// constants here: they are derived from the instance name, and for the unnamed
+// instance they evaluate to the historical `odoo`. one source
+// ([`crate::instance::qualified_name`]), because a second copy of the word here
+// would be a second answer to the same question.
 const DEFAULT_ADMIN_PASSWD: &str = "admin";
 
 // --- configuration errors ---------------------------------------------------
@@ -41,6 +44,15 @@ pub enum ConfigError {
          taken for an option by the system commands)"
     )]
     InvalidIdentifier { field: &'static str, value: String },
+
+    #[error(
+        "invalid instance name '{value}': {reason}.\n\
+         \n\
+         the name becomes a systemd unit, a directory, a PostgreSQL role, a database and an \
+         nginx vhost, so it has to be acceptable to all of them: lowercase letters, digits, \
+         '-' and '_', starting with a letter, up to 26 characters."
+    )]
+    InvalidInstance { value: String, reason: &'static str },
 
     #[error("invalid Odoo port: '{0}'. enter a number between 1 and 65535")]
     InvalidPort(String),
@@ -81,6 +93,8 @@ pub enum ConfigError {
 #[derive(Default, Clone)]
 pub struct RawConfig {
     pub version: Option<String>,
+    /// name of this instance; `None` is the historical, unnamed one.
+    pub instance: Option<String>,
     pub odoo_user: Option<String>,
     pub db_user: Option<String>,
     pub db_password: Option<String>,
@@ -100,6 +114,7 @@ impl RawConfig {
     pub fn from_cli(cli: &Cli) -> Self {
         RawConfig {
             version: cli.version.clone(),
+            instance: cli.instance.clone(),
             odoo_user: cli.odoo_user.clone(),
             db_user: cli.db_user.clone(),
             db_password: cli.db_password.clone(),
@@ -169,6 +184,7 @@ pub fn parse_env_file(path: &Path) -> Result<RawConfig, ConfigError> {
 
         match key {
             "ODOO_VERSION" => raw.version = Some(value),
+            "ODOO_INSTANCE" => raw.instance = Some(value),
             "ODOO_USER" => raw.odoo_user = Some(value),
             "DB_USER" => raw.db_user = Some(value),
             "DB_PASSWORD" => raw.db_password = Some(value),
@@ -271,14 +287,18 @@ pub fn validate_port(value: &str) -> Result<u16, ConfigError> {
 
 /// resolves and validates the install dir: derived default, absolute, under
 /// `home`.
+///
+/// the default is `home/<base>`, where `base` comes from
+/// [`crate::instance::artifact_base`] — `odoo18` for the unnamed instance, which
+/// is what it has always been, `odoo-<name>` for a named one.
 pub fn resolve_install_dir(
     explicit: Option<&str>,
     home: &Path,
-    version_short: &str,
+    base: &str,
 ) -> Result<PathBuf, ConfigError> {
     let dir = match explicit {
         Some(value) => PathBuf::from(value),
-        None => home.join(format!("odoo{version_short}")),
+        None => home.join(base),
     };
 
     if !dir.is_absolute() {
@@ -337,6 +357,9 @@ pub fn check_admin_password(
 pub struct ResolvedConfig {
     pub version: String,
     pub version_short: String,
+    /// name of this instance; `None` is the historical, unnamed one, whose
+    /// artifacts keep their pre-I0 names.
+    pub instance: Option<String>,
     pub odoo_user: String,
     pub db_user: String,
     /// password of the PostgreSQL role; empty means peer auth.
@@ -386,12 +409,28 @@ impl ResolvedConfig {
             .unwrap_or_else(|| DEFAULT_VERSION.to_string());
         let (version, version_short) = normalize_version(&version_raw)?;
 
+        // the instance name is resolved **before** everything it names, and
+        // validated here rather than at preflight: this is the earliest point
+        // where the value exists, and nothing has been mutated yet (A-V6-1).
+        // an empty value is read as "unnamed", so `ODOO_INSTANCE=` in an `.env`
+        // means what it looks like.
+        let instance = pick(&cli.instance, &prompted.instance, &env.instance)
+            .filter(|s| !s.is_empty())
+            .map(|s| crate::instance::validate_instance(&s))
+            .transpose()?;
+        let instance = instance.as_deref();
+
+        // the two name families. for the unnamed instance they evaluate to the
+        // historical values, which is the whole I0 contract.
+        let artifact_base = crate::instance::artifact_base(instance, &version_short);
+        let instance_default_name = crate::instance::qualified_name(instance);
+
         let odoo_user_raw = pick(&cli.odoo_user, &prompted.odoo_user, &env.odoo_user)
-            .unwrap_or_else(|| DEFAULT_ODOO_USER.to_string());
+            .unwrap_or_else(|| instance_default_name.clone());
         let odoo_user = validate_identifier(&odoo_user_raw, "Odoo user")?;
 
         let db_name_raw = pick(&cli.db_name, &prompted.db_name, &env.db_name)
-            .unwrap_or_else(|| DEFAULT_DB_NAME.to_string());
+            .unwrap_or_else(|| instance_default_name.clone());
         let db_name = validate_identifier(&db_name_raw, "database name")?;
 
         let port_raw =
@@ -399,7 +438,13 @@ impl ResolvedConfig {
         let port = validate_port(&port_raw)?;
 
         // follows odoo_user unless explicitly decoupled.
-        let db_user = resolve_db_user(cli.db_user.as_deref(), env.db_user.as_deref(), &odoo_user)?;
+        let db_user = resolve_db_user(
+            cli.db_user.as_deref(),
+            env.db_user.as_deref(),
+            &odoo_user,
+            &instance_default_name,
+        )?;
+        warn_if_role_decoupled(&db_user, &odoo_user);
 
         // empty or absent → peer auth.
         let db_password = Secret::new(
@@ -407,7 +452,7 @@ impl ResolvedConfig {
         );
 
         let install_dir_raw = pick(&cli.install_dir, &prompted.install_dir, &env.install_dir);
-        let install_dir = resolve_install_dir(install_dir_raw.as_deref(), &home, &version_short)?;
+        let install_dir = resolve_install_dir(install_dir_raw.as_deref(), &home, &artifact_base)?;
 
         let admin_raw = pick(&cli.admin_passwd, &prompted.admin_passwd, &env.admin_passwd)
             .unwrap_or_else(|| DEFAULT_ADMIN_PASSWD.to_string());
@@ -436,6 +481,7 @@ impl ResolvedConfig {
         Ok(ResolvedConfig {
             version,
             version_short,
+            instance: instance.map(str::to_string),
             odoo_user,
             db_user,
             db_password,
@@ -455,23 +501,58 @@ impl ResolvedConfig {
 /// applies the "db_user follows odoo_user" rule.
 ///
 /// they stay coupled unless `db_user` came explicitly from the CLI, or from an
-/// `.env` value different from the `odoo` default.
+/// `.env` value different from this instance's default name.
+///
+/// `instance_default` is that default — `odoo` for the unnamed instance, which
+/// is the historical constant, `odoo-<name>` for a named one. comparing against
+/// it rather than against a fixed `"odoo"` keeps the meaning intact: an `.env`
+/// carrying the default is treated as "not really set", whatever the default is
+/// here.
 fn resolve_db_user(
     cli_db_user: Option<&str>,
     env_db_user: Option<&str>,
     odoo_user: &str,
+    instance_default: &str,
 ) -> Result<String, ConfigError> {
     let explicit_from_cli = cli_db_user.is_some();
     match cli_db_user.or(env_db_user) {
         None => Ok(odoo_user.to_string()),
         Some(value) => {
-            if !explicit_from_cli && value == DEFAULT_ODOO_USER {
+            if !explicit_from_cli && value == instance_default {
                 Ok(odoo_user.to_string())
             } else {
                 validate_identifier(value, "database user")
             }
         }
     }
+}
+
+/// warns when the PostgreSQL role and the system user have been decoupled.
+///
+/// a warning and **not** a refusal, deliberately. Odoo connects over the local
+/// unix socket (`db_host` is empty), where `pg_hba.conf`'s `local` line decides,
+/// and its default on Debian/Ubuntu is `peer` — which authenticates by the
+/// **operating system** user and therefore requires the role to carry the same
+/// name. with the two decoupled the connection is refused, and no password in
+/// `odoo.conf` changes that, because `peer` never looks at one.
+///
+/// but `pg_hba.conf` belongs to the customer and may well say `scram-sha-256`,
+/// in which case decoupling is perfectly valid. refusing would block a working
+/// setup on an assumption we cannot check from here — the A5.1-bis lesson: a
+/// refusal without proof blocks the good case, and a blocked installation is a
+/// certain harm against a hypothetical one.
+fn warn_if_role_decoupled(db_user: &str, odoo_user: &str) {
+    if db_user == odoo_user {
+        return;
+    }
+    warn!(
+        role = db_user,
+        user = odoo_user,
+        "the PostgreSQL role and the system user differ. Odoo connects through the local unix \
+         socket, where the usual default is `peer` authentication — which matches the role \
+         against the operating system user and ignores the password. unless this machine's \
+         pg_hba.conf says otherwise, the service will fail to connect"
+    );
 }
 
 // lets a config error cross into the engine without coupling the two modules.

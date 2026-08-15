@@ -445,7 +445,8 @@ fn print_configuration(ctx: &Context) {
 /// the rollback had its report since R4, while a successful installation ended
 /// with a single log line.
 fn print_install_summary(ctx: &Context) {
-    let unit = format!("odoo{}", ctx.odoo_version_short);
+    let unit = ctx.artifact_base();
+    let helper = ctx.qualified_name();
     println!();
     println!("================================================================");
     println!("Installation complete.");
@@ -454,14 +455,16 @@ fn print_install_summary(ctx: &Context) {
         "  Odoo {}          http://localhost:{}",
         ctx.odoo_version, ctx.port
     );
+    if let Some(instance) = &ctx.instance {
+        println!("  Instance         {instance}");
+    }
     println!("  Service          {unit} (systemd)");
     println!("  System user      {}", ctx.odoo_user);
     println!("  Database         {} (role {})", ctx.db_name, ctx.db_user);
     println!("  Sources          {}", ctx.install_dir.display());
     println!(
-        "  Config           {}/odoo{}.conf",
-        ctx.install_dir.display(),
-        ctx.odoo_version_short
+        "  Config           {}/{unit}.conf",
+        ctx.install_dir.display()
     );
     if let Some(logfile) = &ctx.odoo_logfile {
         println!("  Odoo log         {}", logfile.display());
@@ -472,7 +475,7 @@ fn print_install_summary(ctx: &Context) {
         println!("  Nginx            reverse proxy serving on :80");
     }
     println!();
-    println!("  Management       odoo start|stop|restart|status   (reopen the shell)");
+    println!("  Management       {helper} start|stop|restart|status   (reopen the shell)");
     println!("  Uninstall        sudo invok rollback");
     println!();
     println!(

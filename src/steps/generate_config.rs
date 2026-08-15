@@ -47,8 +47,7 @@ impl GenerateConfig {
     }
 
     fn dest(ctx: &Context) -> std::path::PathBuf {
-        ctx.install_dir
-            .join(format!("odoo{}.conf", ctx.odoo_version_short))
+        config_path(ctx)
     }
 
     /// the private temporary's path, in the **same** directory as the
@@ -177,6 +176,25 @@ impl Step for GenerateConfig {
     }
 }
 
+/// where this instance's `odoo.conf` lives: `<install_dir>/<instance>.conf`.
+///
+/// **one** function, and the reason is the one already written for
+/// [`data_dir`]: this path had three authors — this step, which writes the file;
+/// [`InitializeOdooDatabase`](crate::steps::initialize_odoo_database), which
+/// passes it to `odoo-bin`; and the systemd unit, which composed it inside the
+/// template. three `format!`s that must agree, where a disagreement does not
+/// fail loudly: the service simply starts against a config file that is not
+/// there, or `odoo-bin -i base` initialises with different settings than the
+/// service will run with.
+///
+/// I0 gave that a way to actually happen — the name stopped being a function of
+/// the version alone — so the three became one and the unit now receives the
+/// finished path instead of building its own.
+pub fn config_path(ctx: &Context) -> std::path::PathBuf {
+    ctx.install_dir
+        .join(format!("{}.conf", ctx.artifact_base()))
+}
+
 /// Odoo's `data_dir`: where the **filestore** and the sessions live.
 ///
 /// here because this step writes it into the config, but no longer only a
@@ -185,7 +203,11 @@ impl Step for GenerateConfig {
 /// identical `format!`s in two files are the premise of a rollback cleaning the
 /// wrong directory.
 pub fn data_dir(ctx: &Context) -> std::path::PathBuf {
-    ctx.odoo_home.join(".local").join("share").join("Odoo")
+    // the **user's** home, not the shared root: for a named instance those are
+    // different directories, and that is what keeps two instances' attachments
+    // apart. the derivation itself does not change — Odoo has always put the
+    // filestore under the home of the user it runs as.
+    ctx.user_home().join(".local").join("share").join("Odoo")
 }
 
 /// renders the template, then normalises directives left empty to `False`,

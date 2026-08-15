@@ -54,8 +54,10 @@ impl InitializeOdooDatabase {
         ctx.install_dir.join(REPO_SUBDIR).join("odoo-bin")
     }
     fn conf(ctx: &Context) -> std::path::PathBuf {
-        ctx.install_dir
-            .join(format!("odoo{}.conf", ctx.odoo_version_short))
+        // the same function the config step writes through, not a second copy
+        // of the rule: initialising against one path while the service reads
+        // another is a divergence nothing would report.
+        crate::steps::generate_config::config_path(ctx)
     }
 }
 

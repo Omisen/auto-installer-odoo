@@ -77,7 +77,7 @@ impl SetupDataDir {
     fn highest_missing_level(&self, ctx: &Context) -> Option<std::path::PathBuf> {
         crate::steps::highest_missing_level(
             self.ops.as_ref(),
-            &ctx.odoo_home,
+            &ctx.user_home(),
             &generate_config::data_dir(ctx),
         )
     }
@@ -175,7 +175,7 @@ impl Step for SetupDataDir {
         crate::steps::remove_created_root(
             self.ops.as_ref(),
             self.name(),
-            &ctx.odoo_home,
+            &ctx.user_home(),
             &target,
             ctx.dry_run,
         );

@@ -22,7 +22,7 @@ set -euo pipefail
 SERVICE_NAME="__SERVICE__"
 ODOO_OS_USER="__OSUSER__"
 usage() {
-  echo "Usage: odoo {start|stop|restart|dev|status}"
+  echo "Usage: __COMMAND__ {start|stop|restart|dev|status}"
 }
 
 case "${1:-}" in
@@ -95,14 +95,28 @@ impl WriteControlScript {
 }
 
 /// builds the control script's contents.
-pub fn control_script_content(service: &str, os_user: &str) -> String {
+///
+/// `command` is the name the helper is invoked by, and it goes into the usage
+/// line: a helper called `odoo-cliente-x` printing "Usage: odoo" would send the
+/// reader to the wrong instance's command.
+pub fn control_script_content(service: &str, os_user: &str, command: &str) -> String {
     CONTROL_SCRIPT_TEMPLATE
         .replace("__SERVICE__", service)
         .replace("__OSUSER__", os_user)
+        .replace("__COMMAND__", command)
 }
 
+/// where the helper's four artifacts live, given the invoking user's home and
+/// this instance's command name.
+///
+/// the name is `odoo` for the unnamed instance — unchanged — and
+/// `odoo-<instance>` otherwise. one helper per instance rather than one helper
+/// taking the instance as an argument, and the reason is not ergonomics: a
+/// single shared file would be **rewritten by every installation**, which is
+/// A-V3-9 all over again, one instance driving another's service.
 fn paths(
     home: &std::path::Path,
+    command: &str,
 ) -> (
     std::path::PathBuf,
     std::path::PathBuf,
@@ -110,9 +124,9 @@ fn paths(
     std::path::PathBuf,
 ) {
     let scripts_dir = home.join(".scripts");
-    let script = scripts_dir.join("odoo.sh");
+    let script = scripts_dir.join(format!("{command}.sh"));
     let localbin = home.join(".local").join("bin");
-    let symlink = localbin.join("odoo");
+    let symlink = localbin.join(command);
     (scripts_dir, script, localbin, symlink)
 }
 
@@ -123,7 +137,7 @@ impl Step for WriteControlScript {
 
     fn snapshot(&mut self, ctx: &Context) -> Result<(), StepError> {
         let (_user, home) = self.user_and_home(ctx)?;
-        let (scripts_dir, script, localbin, symlink) = paths(&home);
+        let (scripts_dir, script, localbin, symlink) = paths(&home, &ctx.qualified_name());
 
         self.snap.script = if self.ops.path_exists(&script) {
             PreState::Preexisting
@@ -143,7 +157,7 @@ impl Step for WriteControlScript {
 
     fn run(&mut self, ctx: &Context) -> Result<(), StepError> {
         let (user, home) = self.user_and_home(ctx)?;
-        let (scripts_dir, script, localbin, symlink) = paths(&home);
+        let (scripts_dir, script, localbin, symlink) = paths(&home, &ctx.qualified_name());
 
         if ctx.dry_run {
             info!("run (dry run): would write odoo.sh and the symlink for user {user}");
@@ -169,8 +183,8 @@ impl Step for WriteControlScript {
             self.snap.script_backup = Some(backup.clone());
             warn!(backup = %backup, "run: the control script existed, a backup was made");
         }
-        let service = format!("odoo{}", ctx.odoo_version_short);
-        let content = control_script_content(&service, &ctx.odoo_user);
+        let service = ctx.artifact_base();
+        let content = control_script_content(&service, &ctx.odoo_user, &ctx.qualified_name());
         self.ops.write_private_file(&script, &content)?;
         self.ops.chmod(&script, SCRIPT_MODE)?;
         if self.snap.script == PreState::Untracked {
@@ -195,7 +209,7 @@ impl Step for WriteControlScript {
 
     fn undo(&self, ctx: &Context) -> Result<(), StepError> {
         let (_user, home) = self.user_and_home(ctx)?;
-        let (scripts_dir, script, localbin, symlink) = paths(&home);
+        let (scripts_dir, script, localbin, symlink) = paths(&home, &ctx.qualified_name());
 
         if ctx.dry_run {
             info!("undo (dry run): would remove the script and the symlink (and the dirs if we made them)");

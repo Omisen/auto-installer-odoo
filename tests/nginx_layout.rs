@@ -52,12 +52,12 @@ fn cfg(family: OsFamily) -> MockConfig {
 #[test]
 fn the_vhost_goes_where_its_family_looks_for_it() {
     assert_eq!(
-        Debian::new().nginx_layout().vhost_path("18"),
+        Debian::new().nginx_layout().vhost_path("odoo18"),
         std::path::PathBuf::from("/etc/nginx/sites-available/odoo18"),
         "on one family the glob loads any file: no extension needed"
     );
     assert_eq!(
-        Fedora::new().nginx_layout().vhost_path("18"),
+        Fedora::new().nginx_layout().vhost_path("odoo18"),
         std::path::PathBuf::from("/etc/nginx/conf.d/odoo18.conf"),
         "there, without the extension the file is not loaded at all"
     );
@@ -71,7 +71,7 @@ fn a_missing_concept_is_none_not_a_made_up_path() {
     assert!(debian.enabled_dir.is_some());
     assert!(debian.default_site.is_some());
     assert_eq!(
-        debian.enabled_link("18"),
+        debian.enabled_link("odoo18"),
         Some(std::path::PathBuf::from("/etc/nginx/sites-enabled/odoo18"))
     );
 
@@ -84,7 +84,7 @@ fn a_missing_concept_is_none_not_a_made_up_path() {
         fedora.default_site, None,
         "the default server lives inside the main configuration, not in a file of its own"
     );
-    assert_eq!(fedora.enabled_link("18"), None);
+    assert_eq!(fedora.enabled_link("odoo18"), None);
 }
 
 /// the default site's backup does **not** land in the directory nginx globs.

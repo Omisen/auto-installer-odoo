@@ -22,15 +22,29 @@ use crate::secret::Secret;
 pub struct Context {
     /// full Odoo version, e.g. `"18.0"`.
     pub odoo_version: String,
-    /// short Odoo version, e.g. `"18"`, used in file and unit names.
+    /// short Odoo version, e.g. `"18"`.
+    ///
+    /// no longer the thing that names artifacts: that is
+    /// [`Context::artifact_base`], which for the unnamed instance still produces
+    /// `odoo18` from this value.
     pub odoo_version_short: String,
+    /// name of this instance, or `None` for the historical unnamed one.
+    ///
+    /// stored **raw**, and every derived name is computed from it on demand
+    /// rather than stored alongside: two fields that must agree is how this
+    /// project's defects are shaped, and there is no reason to keep a copy of
+    /// something a `format!` reproduces.
+    pub instance: Option<String>,
     /// system user that will own the installation.
     pub odoo_user: String,
     /// PostgreSQL role.
     pub db_user: String,
     /// password of the PostgreSQL role; empty means peer auth.
     pub db_password: Secret,
-    /// installation home: the constant `/opt/odoo`.
+    /// the **shared** root: the constant `/opt/odoo`.
+    ///
+    /// shared by every instance on the machine, which is why it is not the same
+    /// thing as the home of the user running Odoo — see [`Context::user_home`].
     pub odoo_home: PathBuf,
     /// Odoo's HTTP port.
     pub port: u16,
@@ -101,6 +115,7 @@ impl Context {
         Context {
             odoo_version: config.version,
             odoo_version_short: config.version_short,
+            instance: config.instance,
             odoo_user: config.odoo_user,
             db_user: config.db_user,
             db_password: config.db_password,
@@ -130,5 +145,48 @@ impl Context {
     pub fn with_state_path(mut self, path: impl Into<PathBuf>) -> Self {
         self.state_path = path.into();
         self
+    }
+
+    /// the base name of this instance's versioned artifacts: unit, config file,
+    /// vhost, install dir.
+    ///
+    /// `odoo18` unnamed — what every release so far wrote — `odoo-<name>` for a
+    /// named instance. steps ask this instead of formatting the version
+    /// themselves, so the naming rule has one home
+    /// ([`crate::instance::artifact_base`]) and not eleven copies.
+    pub fn artifact_base(&self) -> String {
+        crate::instance::artifact_base(self.instance.as_deref(), &self.odoo_version_short)
+    }
+
+    /// this instance's name for the artifacts that are plain `odoo` today: the
+    /// runtime directory, and the default for the user, the role, the database
+    /// and the helper command.
+    ///
+    /// distinct from [`Self::artifact_base`] only for the unnamed instance —
+    /// `odoo` against `odoo18` — and that difference is the whole reason both
+    /// exist: `/run/odoo` and the `odoo` command must keep their names, while
+    /// the unit and the config file must keep theirs.
+    pub fn qualified_name(&self) -> String {
+        crate::instance::qualified_name(self.instance.as_deref())
+    }
+
+    /// the home of the user Odoo runs as — **not** the same as
+    /// [`Self::odoo_home`].
+    ///
+    /// unnamed instance: `/opt/odoo`, exactly as before, shared with whatever
+    /// else lives under it. named instance: the install dir, so that the
+    /// filestore, the cache and everything else Odoo writes into its home lands
+    /// inside that instance's own perimeter — and stays unreadable to the other
+    /// instances, whose users are different (§ 9.2 of `audit-v6`, option α).
+    ///
+    /// the distinction is what makes isolation real rather than nominal: with a
+    /// single shared home and a single shared user, per-instance PostgreSQL
+    /// roles would separate nothing, since one instance could read the other's
+    /// `odoo.conf` and with it the password.
+    pub fn user_home(&self) -> PathBuf {
+        match self.instance {
+            Some(_) => self.install_dir.clone(),
+            None => self.odoo_home.clone(),
+        }
     }
 }

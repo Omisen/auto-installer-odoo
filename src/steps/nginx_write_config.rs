@@ -44,7 +44,7 @@ impl NginxWriteConfig {
         self.ops
             .distro()
             .nginx_layout()
-            .vhost_path(&ctx.odoo_version_short)
+            .vhost_path(&ctx.artifact_base())
     }
     /// a private temporary beside the destination, so the move is an atomic
     /// rename; unpredictable name, fail-closed creation.
@@ -165,11 +165,12 @@ pub fn render_vhost(ctx: &Context) -> String {
     // no certificate placeholders: the vhost has no 443 block, and the two that
     // existed were substituted inside commented-out lines, suggesting TLS was
     // configured here (A-V3-6).
+    let base = ctx.artifact_base();
     let replacements: [(&str, &str); 4] = [
         ("{{NGINX_SERVER_NAME}}", ctx.nginx_server_name.as_str()),
         ("{{ODOO_PORT}}", port.as_str()),
         ("{{NGINX_CLIENT_MAX}}", DEFAULT_CLIENT_MAX),
-        ("{{ODOO_VERSION_SHORT}}", ctx.odoo_version_short.as_str()),
+        ("{{INSTANCE_BASE}}", base.as_str()),
     ];
     let mut out = VHOST_TEMPLATE.to_string();
     for (token, value) in replacements {

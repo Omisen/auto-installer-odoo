@@ -83,17 +83,22 @@ pub struct NginxLayout {
 }
 
 impl NginxLayout {
-    /// the vhost path for this Odoo version.
-    pub fn vhost_path(&self, version_short: &str) -> PathBuf {
+    /// the vhost path for this instance.
+    ///
+    /// `base` is [`crate::context::Context::artifact_base`] — `odoo18` for the
+    /// unnamed instance, which is the name every release so far wrote, and
+    /// `odoo-<name>` for a named one. it takes the finished name rather than the
+    /// version so that two instances of the **same** version get two vhosts.
+    pub fn vhost_path(&self, base: &str) -> PathBuf {
         self.vhost_dir
-            .join(format!("odoo{version_short}{}", self.vhost_extension))
+            .join(format!("{base}{}", self.vhost_extension))
     }
 
     /// the enabling symlink's path, where the family has the concept.
-    pub fn enabled_link(&self, version_short: &str) -> Option<PathBuf> {
+    pub fn enabled_link(&self, base: &str) -> Option<PathBuf> {
         self.enabled_dir
             .as_ref()
-            .map(|dir| dir.join(format!("odoo{version_short}{}", self.vhost_extension)))
+            .map(|dir| dir.join(format!("{base}{}", self.vhost_extension)))
     }
 }
 

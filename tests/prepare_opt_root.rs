@@ -14,7 +14,7 @@ use common::{ops_of, MockConfig, MockSystemOps, Op};
 use invok::context::Context;
 use invok::state::PreState;
 use invok::step::Step;
-use invok::steps::prepare_opt_root::PrepareOptRoot;
+use invok::steps::prepare_opt_root::{OptRootSnapshot, PrepareOptRoot};
 
 /// a minimal context: the step needs the home, the user and the dry-run flag.
 fn ctx(home: PathBuf, dry_run: bool) -> Context {
@@ -33,9 +33,15 @@ fn step_without_user() -> PrepareOptRoot {
     PrepareOptRoot::with_ops(Box::new(mock))
 }
 
-/// reads the `PreState` the step persisted.
+/// reads the shared root's `PreState` from what the step persisted.
+///
+/// since I0 the snapshot carries two levels — the shared `/opt/odoo` and, for a
+/// named instance, that instance's own home. these tests all describe the
+/// unnamed instance, where only the first one is in play.
 fn persisted_prestate(step: &PrepareOptRoot) -> PreState {
-    serde_json::from_value(step.snapshot_value()).expect("prestate serializzabile")
+    let snap: OptRootSnapshot =
+        serde_json::from_value(step.snapshot_value()).expect("prestate serializzabile");
+    snap.shared_root
 }
 
 #[test]
@@ -239,4 +245,151 @@ fn dry_run_hands_over_nothing() {
 
     assert!(!home.exists());
     assert!(ops_of(&log).is_empty(), "a dry run mutates nothing");
+}
+
+// --- I0: the second level, for a named instance -----------------------------
+
+/// a context for a **named** instance: the shared root and this instance's own
+/// home are two different directories, and the step owns both.
+fn ctx_named(shared_root: PathBuf, instance: &str) -> Context {
+    let install_dir = shared_root.join(format!("odoo-{instance}"));
+    Context {
+        odoo_home: shared_root,
+        install_dir,
+        instance: Some(instance.to_string()),
+        odoo_user: format!("odoo-{instance}"),
+        dry_run: false,
+        ..Default::default()
+    }
+}
+
+/// reads both levels the step persisted.
+fn persisted(step: &PrepareOptRoot) -> OptRootSnapshot {
+    serde_json::from_value(step.snapshot_value()).expect("snapshot serializzabile")
+}
+
+#[test]
+fn a_named_instance_creates_both_levels_and_removes_both() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    let c = ctx_named(shared.clone(), "cliente-x");
+    let home = c.user_home();
+    assert!(!shared.exists());
+
+    let mut step = step_without_user();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    assert!(shared.exists(), "the shared root must be created");
+    assert!(home.exists(), "the instance's own home must be created too");
+    let snap = persisted(&step);
+    assert_eq!(snap.shared_root, PreState::CreatedByUs);
+    assert_eq!(snap.instance_home, PreState::CreatedByUs);
+
+    step.undo(&c).expect("undo");
+    assert!(!home.exists(), "the instance home must come off");
+    assert!(
+        !shared.exists(),
+        "and with the last instance gone, so must the shared root"
+    );
+}
+
+/// the case that makes the two levels necessary: `/opt/odoo` was already there,
+/// because another instance created it. this instance's rollback must take its
+/// own home and **leave the shared root alone**.
+///
+/// with a single `PreState` for both, the second instance's rollback either
+/// spared its own home or destroyed the ground the first one stands on.
+#[test]
+fn a_preexisting_shared_root_survives_the_instance_rollback() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    std::fs::create_dir(&shared).expect("the other instance created it");
+
+    let c = ctx_named(shared.clone(), "cliente-x");
+    let home = c.user_home();
+
+    let mut step = step_without_user();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let snap = persisted(&step);
+    assert_eq!(
+        snap.shared_root,
+        PreState::Preexisting,
+        "we did not create /opt/odoo, so it is not ours to remove"
+    );
+    assert_eq!(snap.instance_home, PreState::CreatedByUs);
+
+    step.undo(&c).expect("undo");
+    assert!(!home.exists(), "our own home comes off");
+    assert!(
+        shared.exists(),
+        "the shared root must survive: another instance lives under it"
+    );
+}
+
+/// the unnamed instance has **one** level, and recording a second would give
+/// the undo two claims on one directory.
+#[test]
+fn the_unnamed_instance_still_has_a_single_level() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = dir.path().join("odoo");
+
+    let c = ctx(home.clone(), false);
+    let mut step = step_without_user();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let snap = persisted(&step);
+    assert_eq!(snap.shared_root, PreState::CreatedByUs);
+    assert_eq!(
+        snap.instance_home,
+        PreState::Untracked,
+        "its home IS the shared root: there is no second directory to own"
+    );
+}
+
+/// a manifest written before I0 stored a bare `PreState` for this step. it must
+/// still rehydrate, and the undo must still fire.
+///
+/// this is not politeness towards old files: a snapshot that cannot be read is
+/// an undo that is **skipped** (fail-closed), so a rename of the snapshot shape
+/// would leave every instance installed before I0 with `/opt/odoo` on disk
+/// forever — A-V3-1's harm, arriving through a refactor.
+#[test]
+fn a_pre_i0_snapshot_is_still_readable_and_its_undo_still_fires() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let home = dir.path().join("odoo");
+    std::fs::create_dir(&home).expect("mkdir");
+
+    let c = ctx(home.clone(), false);
+    let mut step = step_without_user();
+    // exactly what versions before I0 wrote: the enum, on its own.
+    step.rehydrate(&serde_json::json!("CreatedByUs"))
+        .expect("a pre-I0 snapshot must stay readable");
+
+    assert_eq!(persisted(&step).shared_root, PreState::CreatedByUs);
+    step.undo(&c).expect("undo");
+    assert!(
+        !home.exists(),
+        "the undo of a rehydrated pre-I0 snapshot must still remove the directory"
+    );
+}
+
+/// and the current shape round-trips through the same door.
+#[test]
+fn the_two_level_snapshot_round_trips() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    let c = ctx_named(shared, "cliente-x");
+
+    let mut step = step_without_user();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    let written = step.snapshot_value();
+
+    let mut rehydrated = step_without_user();
+    rehydrated.rehydrate(&written).expect("rehydrate");
+    assert_eq!(persisted(&rehydrated), persisted(&step));
 }

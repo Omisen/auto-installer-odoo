@@ -140,7 +140,11 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
             .or_else(|| env.version.clone())
             .unwrap_or_else(|| "18.0".to_string());
         let short = version_for_dir.split('.').next().unwrap_or("18");
-        let suggested_subdir = format!("odoo{short}");
+        // the suggestion follows the instance when there is one: proposing
+        // `odoo18` to somebody who passed `--instance cliente-x` would invite
+        // them to accept a directory named after the wrong thing.
+        let instance = cli.instance.as_deref().or(env.instance.as_deref());
+        let suggested_subdir = crate::instance::artifact_base(instance, short);
         let home = config::ODOO_HOME;
         let subdir = Text::new(&format!("Install directory (under {home})"))
             .with_default(&suggested_subdir)

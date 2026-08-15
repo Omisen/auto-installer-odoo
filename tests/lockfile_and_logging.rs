@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use invok::context::Context;
 use invok::state::PreState;
 use invok::step::Step;
-use invok::steps::prepare_opt_root::PrepareOptRoot;
+use invok::steps::prepare_opt_root::{OptRootSnapshot, PrepareOptRoot};
 use invok::{config, lockfile, logging, state};
 
 #[test]
@@ -241,10 +241,10 @@ fn opt_root_is_created_by_us_even_with_the_lock_acquired_first() {
     step.snapshot(&ctx).expect("snapshot");
     step.run(&ctx).expect("run");
 
-    let prestate: PreState =
+    let snap: OptRootSnapshot =
         serde_json::from_value(step.snapshot_value()).expect("prestate serializzabile");
     assert_eq!(
-        prestate,
+        snap.shared_root,
         PreState::CreatedByUs,
         "with the lock outside the perimeter the home is ours, not pre-existing"
     );
@@ -282,9 +282,9 @@ fn lock_inside_the_home_is_what_made_the_undo_dead_code() {
     step.run(&ctx).expect("run");
     step.undo(&ctx).expect("undo");
 
-    let prestate: PreState =
+    let snap: OptRootSnapshot =
         serde_json::from_value(step.snapshot_value()).expect("prestate serializzabile");
-    assert_eq!(prestate, PreState::Preexisting);
+    assert_eq!(snap.shared_root, PreState::Preexisting);
     assert!(
         home.exists(),
         "it documents the defect: with the lock inside, the undo could never fire"

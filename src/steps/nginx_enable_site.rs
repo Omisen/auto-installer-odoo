@@ -98,12 +98,12 @@ impl NginxEnableSite {
         self.ops.distro().nginx_layout()
     }
     fn src(&self, ctx: &Context) -> std::path::PathBuf {
-        self.layout().vhost_path(&ctx.odoo_version_short)
+        self.layout().vhost_path(&ctx.artifact_base())
     }
     /// the enabling symlink — `None` on families where **writing the vhost is
     /// enabling it**.
     fn link(&self, ctx: &Context) -> Option<std::path::PathBuf> {
-        self.layout().enabled_link(&ctx.odoo_version_short)
+        self.layout().enabled_link(&ctx.artifact_base())
     }
     /// the default site as a separate file — `None` where the concept does not
     /// exist.

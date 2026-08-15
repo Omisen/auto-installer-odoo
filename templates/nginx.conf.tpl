@@ -5,7 +5,7 @@
 #   {{NGINX_SERVER_NAME}}   domain name or IP
 #   {{ODOO_PORT}}           Odoo's local port (default 8069)
 #   {{NGINX_CLIENT_MAX}}    maximum upload body size (default 100m)
-#   {{ODOO_VERSION_SHORT}}  short version, for the log filenames
+#   {{INSTANCE_BASE}}       this instance's name, for the log filenames
 #
 # TLS: this vhost listens on **port 80 only**, deliberately.
 #
@@ -42,8 +42,8 @@ server {
     # one file per version: two instances on one machine must not write over
     # each other (A-V3-12). they survive the rollback, being logs, but at least
     # one can tell whose they are.
-    access_log  /var/log/nginx/odoo{{ODOO_VERSION_SHORT}}.access.log;
-    error_log   /var/log/nginx/odoo{{ODOO_VERSION_SHORT}}.error.log;
+    access_log  /var/log/nginx/{{INSTANCE_BASE}}.access.log;
+    error_log   /var/log/nginx/{{INSTANCE_BASE}}.error.log;
 
     # maximum upload size (invoices, attachments)
     client_max_body_size {{NGINX_CLIENT_MAX}};

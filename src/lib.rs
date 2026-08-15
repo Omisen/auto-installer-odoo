@@ -24,6 +24,7 @@ pub mod context;
 pub mod distro;
 pub mod engine;
 pub mod error;
+pub mod instance;
 pub mod interrupt;
 pub mod lockfile;
 pub mod logging;

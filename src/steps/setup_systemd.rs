@@ -66,13 +66,13 @@ impl SetupSystemd {
     }
 
     fn unit_name(ctx: &Context) -> String {
-        format!("odoo{}", ctx.odoo_version_short)
+        ctx.artifact_base()
     }
 
     fn unit_path(ctx: &Context) -> std::path::PathBuf {
         std::path::PathBuf::from(format!(
-            "/etc/systemd/system/odoo{}.service",
-            ctx.odoo_version_short
+            "/etc/systemd/system/{}.service",
+            Self::unit_name(ctx)
         ))
     }
 
@@ -229,13 +229,31 @@ impl Step for SetupSystemd {
 /// renders the unit from the embedded template.
 pub fn render_unit(ctx: &Context) -> String {
     let install = ctx.install_dir.to_string_lossy();
-    let home = ctx.odoo_home.to_string_lossy();
-    let replacements: [(&str, &str); 7] = [
+    let base = ctx.artifact_base();
+    let qualified = ctx.qualified_name();
+    // the finished path, from the one function that decides it — the template
+    // no longer composes it out of parts.
+    let conf = crate::steps::generate_config::config_path(ctx);
+    let conf = conf.to_string_lossy();
+    // `{{ODOO_HOME}}` was substituted here and appears nowhere in the template:
+    // a dead entry, removed rather than kept, because "home" now has two
+    // meanings (the shared root and the instance user's home) and leaving the
+    // token available would invite the next person to reach for the wrong one.
+    let replacements: [(&str, &str); 8] = [
         ("{{ODOO_VERSION}}", ctx.odoo_version.as_str()),
-        ("{{ODOO_VERSION_SHORT}}", ctx.odoo_version_short.as_str()),
+        // the syslog identity and the config file are named after the
+        // **instance**: two instances of the same Odoo version would otherwise
+        // share both.
+        ("{{INSTANCE_BASE}}", base.as_str()),
+        // `RuntimeDirectory` takes the other family, so the unnamed instance
+        // keeps `/run/odoo` exactly as before. it matters more than it looks:
+        // systemd removes that directory when the service stops, so two units
+        // declaring the same one would have each stop pull the ground from
+        // under the other.
+        ("{{INSTANCE_QUALIFIED}}", qualified.as_str()),
         ("{{ODOO_USER}}", ctx.odoo_user.as_str()),
-        ("{{ODOO_HOME}}", home.as_ref()),
         ("{{ODOO_INSTALL_DIR}}", install.as_ref()),
+        ("{{ODOO_CONF}}", conf.as_ref()),
         ("{{ODOO_REPO_DIR}}", REPO_SUBDIR),
         ("{{ODOO_VENV_DIR}}", VENV_SUBDIR),
     ];

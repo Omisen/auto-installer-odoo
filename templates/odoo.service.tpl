@@ -11,7 +11,7 @@ StartLimitBurst=3
 
 [Service]
 Type=simple
-SyslogIdentifier=odoo{{ODOO_VERSION_SHORT}}
+SyslogIdentifier={{INSTANCE_BASE}}
 
 # -- identity and isolation ---------------------------------------------------
 User={{ODOO_USER}}
@@ -19,7 +19,7 @@ Group={{ODOO_USER}}
 WorkingDirectory={{ODOO_INSTALL_DIR}}
 NoNewPrivileges=true
 PrivateTmp=true
-RuntimeDirectory=odoo
+RuntimeDirectory={{INSTANCE_QUALIFIED}}
 RuntimeDirectoryMode=0750
 
 # -- hardening (A-V3-13) ------------------------------------------------------
@@ -47,7 +47,7 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 # -- binary and config --------------------------------------------------------
 ExecStart={{ODOO_INSTALL_DIR}}/{{ODOO_VENV_DIR}}/bin/python3 \
     {{ODOO_INSTALL_DIR}}/{{ODOO_REPO_DIR}}/odoo-bin \
-    -c {{ODOO_INSTALL_DIR}}/odoo{{ODOO_VERSION_SHORT}}.conf
+    -c {{ODOO_CONF}}
 
 StandardOutput=journal+console
 StandardError=journal+console

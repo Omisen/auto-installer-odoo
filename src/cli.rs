@@ -31,6 +31,18 @@ pub struct Cli {
     #[arg(long, value_name = "VERSION")]
     pub version: Option<String>,
 
+    /// name of this instance, for running more than one Odoo on one machine.
+    ///
+    /// it becomes the name of the unit, the install dir, the system user, the
+    /// PostgreSQL role, the database and the `odoo` helper — all prefixed
+    /// `odoo-`. absent means the historical, unnamed instance, whose names are
+    /// unchanged (`odoo18`, user `odoo`, database `odoo`).
+    ///
+    /// lowercase letters, digits, `-` and `_`; must start with a letter and stay
+    /// within 26 characters (see [`crate::instance`]).
+    #[arg(long, value_name = "NAME")]
+    pub instance: Option<String>,
+
     /// print the **installer's** version and exit.
     ///
     /// spelled out rather than `--version`, which already means Odoo's version:

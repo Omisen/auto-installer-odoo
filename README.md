@@ -204,6 +204,7 @@ Parameters resolve in this order: **CLI → `.env` → interactive prompt → de
 | Flag | Value | Default |
 |---|---|---|
 | `--version` | `16` \| `17` \| `18` \| `19` (or `NN.0`) | `18.0` |
+| `--instance` | name of this instance — see below | none (the historical names) |
 | `--odoo-user` | system user | `odoo` |
 | `--db-user` | PostgreSQL role | = `--odoo-user` |
 | `--db-password` | password for the DB role | empty → peer authentication |
@@ -229,6 +230,40 @@ sudo invok --with-nginx --server-name '[your-domain.example.com]'
 sudo invok --version 18 --db-name odoo --port 8069 --admin-passwd '[YOUR_ADMIN_PASSWORD]'
 ```
 
+### `--instance`: naming an installation
+
+By default the installer names its artifacts after the Odoo **version**: the unit is `odoo18`, the
+sources live in `/opt/odoo/odoo18`, the system user and the database are both `odoo`. That is what
+every release so far has written on disk, and passing no `--instance` keeps every one of those names
+exactly as it is.
+
+`--instance <name>` names them after the **instance** instead. With `--instance cliente-x`:
+
+| | Without `--instance` | `--instance cliente-x` |
+|---|---|---|
+| systemd unit | `odoo18` | `odoo-cliente-x` |
+| sources and virtualenv | `/opt/odoo/odoo18` | `/opt/odoo/odoo-cliente-x` |
+| system user and PostgreSQL role | `odoo` | `odoo-cliente-x` |
+| database | `odoo` | `odoo-cliente-x` |
+| home, filestore, cache | `/opt/odoo/...` | `/opt/odoo/odoo-cliente-x/...` |
+| helper command | `odoo` | `odoo-cliente-x` |
+
+The name must be lowercase letters, digits, `-` and `_`, start with a letter and stay within 26
+characters — the intersection of what a systemd unit, a path, a PostgreSQL identifier, an Nginx
+`server_name` and a Unix user name each accept. It is checked before anything on the machine is
+touched.
+
+The system user and the PostgreSQL role are always given the **same** name, and that is not a
+convention: Odoo connects over the local Unix socket, where `pg_hba.conf` usually says `peer` — which
+authenticates by operating-system user and ignores the password. A role named differently from the
+user would simply be refused. If you decouple them explicitly, the installer says so and lets you
+proceed: your `pg_hba.conf` may well be configured for it.
+
+> **Today one instance at a time.** Naming an installation is the whole of what `--instance` does so
+> far: the uninstall manifest is still a single file, so installing a *second* instance alongside the
+> first is still refused, exactly as reinstalling has always been. Running several Odoo instances on
+> one machine is being built on top of this and is not finished.
+
 ### The `.env` file
 
 With `--config <FILE>` the parameters come from a `KEY=VALUE` file. Unlike the old Bash version (which
@@ -236,7 +271,7 @@ With `--config <FILE>` the parameters come from a `KEY=VALUE` file. Unlike the o
 comments and blank lines ignored, **nothing executed** (a value like `$(...)` stays a literal string).
 Unknown keys produce a warning and are ignored.
 
-Recognised keys: `ODOO_VERSION`, `ODOO_USER`, `DB_USER`, `DB_PASSWORD`, `ODOO_PORT`, `DB_NAME`,
+Recognised keys: `ODOO_VERSION`, `ODOO_INSTANCE`, `ODOO_USER`, `DB_USER`, `DB_PASSWORD`, `ODOO_PORT`, `DB_NAME`,
 `ODOO_INSTALL_DIR`, `ODOO_ADMIN_PASSWD`, `ODOO_LOGFILE`, `WITH_NGINX`, `NGINX_SERVER_NAME`,
 `NGINX_OPEN_HTTPS_PORT` (legacy alias `NGINX_ENABLE_SSL`). `ODOO_HOME` is constant and ignored.
 

@@ -74,6 +74,7 @@ fn config_with(home: &str, install_dir: &str) -> InstallConfig {
     InstallConfig {
         odoo_version: "18.0".to_string(),
         odoo_version_short: "18".to_string(),
+        instance: None,
         odoo_user: "odoo".to_string(),
         db_user: "odoo".to_string(),
         db_name: "odoo".to_string(),

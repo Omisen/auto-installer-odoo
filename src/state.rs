@@ -170,6 +170,17 @@ pub struct StepRecord {
 pub struct InstallConfig {
     pub odoo_version: String,
     pub odoo_version_short: String,
+    /// name of this instance, or `None` for the historical unnamed one.
+    ///
+    /// persisted because every other name derives from it: the unit to disable,
+    /// the vhost to remove, the config file to delete. re-deriving it at
+    /// rollback time would mean guessing, and the rule here is the same one that
+    /// governs ownership and the OS family — **it is re-read, not re-derived**.
+    ///
+    /// `serde(default)` reads every manifest written before I0 as `None`, which
+    /// is the truth: they all describe the unnamed instance.
+    #[serde(default)]
+    pub instance: Option<String>,
     pub odoo_user: String,
     pub db_user: String,
     pub db_name: String,
@@ -225,6 +236,7 @@ impl InstallConfig {
             installer_version: Some(crate::INSTALLER_VERSION.to_string()),
             odoo_version: ctx.odoo_version.clone(),
             odoo_version_short: ctx.odoo_version_short.clone(),
+            instance: ctx.instance.clone(),
             odoo_user: ctx.odoo_user.clone(),
             db_user: ctx.db_user.clone(),
             db_name: ctx.db_name.clone(),
@@ -256,6 +268,17 @@ impl InstallConfig {
     pub fn identity(&self) -> Vec<(&'static str, String)> {
         vec![
             ("Odoo version", self.odoo_version.clone()),
+            // names the unit, the config file, the vhost and the install dir: a
+            // resume that changed it would undo artifacts belonging to another
+            // instance. `None` renders as the unnamed instance rather than as an
+            // empty string, so the message reads as something instead of
+            // nothing.
+            (
+                "instance",
+                self.instance
+                    .clone()
+                    .unwrap_or_else(|| "(unnamed)".to_string()),
+            ),
             ("system user", self.odoo_user.clone()),
             ("database role", self.db_user.clone()),
             ("database name", self.db_name.clone()),
@@ -319,6 +342,11 @@ impl InstallConfig {
         Context {
             odoo_version: self.odoo_version.clone(),
             odoo_version_short: self.odoo_version_short.clone(),
+            // explicit, like `os_family`: the undos name artifacts through it,
+            // and letting it fall back to the `Default` would make every
+            // rollback act on the unnamed instance's names — removing the wrong
+            // unit, or nothing at all.
+            instance: self.instance.clone(),
             odoo_user: self.odoo_user.clone(),
             db_user: self.db_user.clone(),
             db_name: self.db_name.clone(),

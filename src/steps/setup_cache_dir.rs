@@ -71,9 +71,9 @@ impl SetupCacheDir {
         }
     }
 
-    /// `<odoo_home>/.cache`.
+    /// `<user_home>/.cache` — per instance, because the home is.
     pub fn cache_dir(ctx: &Context) -> std::path::PathBuf {
-        ctx.odoo_home.join(CACHE_SUBDIR)
+        ctx.user_home().join(CACHE_SUBDIR)
     }
 }
 
@@ -90,7 +90,7 @@ impl Step for SetupCacheDir {
         } else {
             self.snap.prestate = PreState::Untracked;
             self.snap.created_root =
-                crate::steps::highest_missing_level(self.ops.as_ref(), &ctx.odoo_home, &cache);
+                crate::steps::highest_missing_level(self.ops.as_ref(), &ctx.user_home(), &cache);
         }
         info!(
             cache = %cache.display(),
@@ -143,7 +143,7 @@ impl Step for SetupCacheDir {
         crate::steps::remove_created_root(
             self.ops.as_ref(),
             self.name(),
-            &ctx.odoo_home,
+            &ctx.user_home(),
             &target,
             ctx.dry_run,
         );
