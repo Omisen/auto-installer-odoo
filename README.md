@@ -395,8 +395,11 @@ guarantee is about **pre-existing resources**, which a rollback never touches:
 - the user's **`~/.bashrc`** comes back **byte for byte** (only our line is removed).
 
 **Re-running the installer.** A registered installation is never silently overwritten. If the previous
-one was **complete**, the installer stops and tells you what to do — `invok rollback` to remove it, or
-`--force` to install over it, which *archives* the old manifest rather than deleting it. If it was
+one was **complete**, the installer stops and tells you the three ways on — `--instance <name>
+--port <free port>` to add a **second** instance beside it, `invok rollback` to remove it, or
+`--force` to install over it, which *archives* the old manifest rather than deleting it. Note that
+plainly re-running does not add an instance: an instance is created by **naming** it, on the command
+line or with `ODOO_INSTANCE` in a `.env`. If it was
 **interrupted** (Ctrl-C, crash, power loss), it resumes where it stopped: steps already executed are
 not redone, and the record that those artifacts are **ours** is preserved — which is what lets the
 rollback remove them months later. Resuming needs the **same parameters**: with a different database

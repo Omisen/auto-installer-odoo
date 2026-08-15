@@ -387,3 +387,58 @@ fn a_manifest_past_setup_systemd_owns_the_http_port() {
 fn an_empty_manifest_owns_no_port() {
     assert!(!InstallState::default().owns_the_http_port());
 }
+
+/// the refusal on a completed manifest must offer **all three** ways on.
+///
+/// the message lives in `main`, where no test can call it, so this reads the
+/// source — and the CI job that really re-installs asserts the same three on
+/// the real output. structural plus behavioural, as R9 requires: the grep sees
+/// the shape, the run sees what comes out.
+///
+/// `--instance` is the one that was missing, and it is the one most often
+/// wanted: whoever runs the installer on a machine that already has Odoo is
+/// usually adding a second instance, not undoing or overwriting the first. a
+/// refusal that fires correctly and names only the destructive halves is
+/// A-R9-1's shape — it sends the reader to fix the wrong thing.
+#[test]
+fn the_refusal_on_a_finished_manifest_offers_every_way_out() {
+    let main = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/main.rs"),
+    )
+    .expect("src/main.rs must be readable");
+
+    let arm = main
+        .split("StartDecision::RefuseFinished")
+        .nth(1)
+        .expect("the refusal on a completed manifest must exist");
+    let arm = arm
+        .split("StartDecision::")
+        .next()
+        .expect("the arm ends at the next decision");
+    // the ACTIVE lines, never the comment above them. R14 fell into exactly
+    // this: a check on `PermissionsStartOnly` fired on the prose explaining why
+    // the directive had been removed. here the comment names `--port` while
+    // explaining why the message must, so reading it would keep the guard green
+    // with the message stripped — and the mutation that proved it survived is
+    // what put this filter here.
+    let arm: String = arm
+        .lines()
+        .filter(|l| !l.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    for way_out in ["--instance", "rollback", "--force"] {
+        assert!(
+            arm.contains(way_out),
+            "the refusal does not offer '{way_out}': that way out does not exist for whoever \
+             reads it"
+        );
+    }
+    // and the port with it: without a free one the next attempt is refused too,
+    // by a different check, and a message that earns a second refusal has not
+    // done its job.
+    assert!(
+        arm.contains("--port"),
+        "naming --instance without --port sends the user into the port check"
+    );
+}

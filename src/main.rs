@@ -321,11 +321,22 @@ fn decide_start(ctx: &Context, force: bool) -> Result<Start> {
                     )
                 })
                 .unwrap_or_else(|| "configuration not recorded".to_string());
+            // the three ways out, and the ADDITIVE one first: whoever runs the
+            // installer on a machine that already has Odoo most often wants a
+            // second instance, not to undo or overwrite the first. listing only
+            // the two destructive ones — as this did until instances existed —
+            // is A-R9-1's shape: a refusal that fires correctly and sends the
+            // reader to fix the wrong thing.
+            //
+            // `--port` travels with it on purpose. without a free port the next
+            // attempt is refused too, by a different check, and a message that
+            // earns a second refusal has not done its job.
             bail!(
                 "a completed installation is already registered on this machine.\n\
                  \n  Manifest : {}\n  Instance : {}\n  Steps    : {} recorded\n\
                  \n\
-                 to remove it:                              sudo invok rollback\n\
+                 to add a SECOND instance beside it:        --instance <name> --port <free port>\n\
+                 to remove this one:                        sudo invok rollback\n\
                  to reinstall over it (manifest set aside): --force\n\
                  \n\
                  proceeding without an explicit choice would overwrite the manifest with \

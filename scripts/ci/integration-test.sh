@@ -539,12 +539,19 @@ installation, not the cause — the user is sent to stop Odoo (A-R9-1)"
     ok "no misleading diagnosis about the port"
   fi
 
-  if grep -q -e 'rollback' -e '--force' "$WORK/second-install.log"; then
-    ok "the refusal says how to proceed (rollback or --force)"
-  else
-    fail "the refusal does not tell the user what to do"
-    tail -n 20 "$WORK/second-install.log" || true
-  fi
+  # all THREE ways out, each asserted on its own: an `-e a -e b` grep passes on
+  # any one of them, so it would have stayed green while the message named two.
+  # and the one that matters most is the additive one — since instances exist,
+  # somebody re-running the installer here usually wants a second one, not to
+  # undo or overwrite what is already working.
+  for hint in 'rollback' '--force' '--instance'; do
+    if grep -q -- "$hint" "$WORK/second-install.log"; then
+      ok "the refusal offers '$hint'"
+    else
+      fail "the refusal does not mention '$hint': the user is left without that way out"
+      tail -n 20 "$WORK/second-install.log" || true
+    fi
+  done
 
   endgroup
 fi
