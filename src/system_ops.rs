@@ -8,10 +8,12 @@
 //! that is what makes the steps testable without changing
 //! [`crate::step::Step`].
 
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::time::Duration;
 
+use nix::sys::signal::Signal;
 use serde::{Deserialize, Serialize};
 
 use crate::distro::Distro;
@@ -124,6 +126,17 @@ fn drain_pipe<R: std::io::Read + Send + 'static>(
     })
 }
 
+/// SIGKILL to a whole process group, ignoring the outcome.
+///
+/// best-effort like every other kill here: the group may already be empty
+/// (`ESRCH`), which is the normal case on the success path.
+fn kill_group(pgid: u32) {
+    let Ok(pgid) = i32::try_from(pgid) else {
+        return;
+    };
+    let _ = nix::sys::signal::killpg(nix::unistd::Pid::from_raw(pgid), Signal::SIGKILL);
+}
+
 /// waits at most `limit` for the child, **killing** it on expiry.
 ///
 /// `std::process::Command` has no native timeout, and `wait-timeout` would
@@ -134,6 +147,31 @@ fn drain_pipe<R: std::io::Read + Send + 'static>(
 /// clone` writes progress to stderr and would otherwise fill the pipe buffer
 /// and block — a deadlock of **ours** that the timeout would disguise as a slow
 /// network.
+///
+/// # the child is not the worker (`A-V3-22`)
+///
+/// every network command runs through `sudo`, so the process we spawn is
+/// `sudo` and the one doing the work is its **child**. killing the child on
+/// expiry left `git` alive, reparented to init — and holding the write ends of
+/// our pipes, so the drainers never saw EOF, `join()` never returned, and the
+/// `Timeout` error already decided was **never reported**. an installation
+/// found in the field stuck for seven minutes with not one line of log: from
+/// the outside, indistinguishable from having no timeout at all.
+///
+/// two halves, and both are needed:
+///
+/// 1. the child is started in a **process group of its own**
+///    (`process_group(0)`), and expiry kills the *group*. without this the
+///    worker survives whatever is done with the pipes.
+/// 2. the error path **does not join** the drainers. even with (1) a descendant
+///    could escape — a daemon, a double fork — and reporting the failure must
+///    not depend on somebody else closing a pipe. the two threads are abandoned
+///    instead: a leaked thread is a smaller price than a run that never
+///    returns.
+///
+/// the group also means the terminal's Ctrl-C no longer reaches these commands,
+/// so the wait watches [`crate::interrupt::was_interrupted`] and kills the group
+/// itself. otherwise interrupting a slow clone would look like a freeze.
 ///
 /// # errors
 ///
@@ -147,28 +185,42 @@ fn output_with_timeout(
         .stdin(std::process::Stdio::null())
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
+        // a group of its own, so the expiry below has something to kill that
+        // includes the worker under `sudo`.
+        .process_group(0)
         .spawn()
         .map_err(|e| StepError::CommandFailed {
             command: rendered.to_string(),
             status: "spawn-failed".to_string(),
             stderr: e.to_string(),
         })?;
+    // `process_group(0)` makes the child a group leader, so its pid *is* the
+    // group id. read before any wait: after reaping, `id()` would name a pid
+    // that may have been reused.
+    let pgid = child.id();
 
     let out_reader = drain_pipe(child.stdout.take());
     let err_reader = drain_pipe(child.stderr.take());
+
+    // kills the whole group, reaps our own child so no zombie is left, and
+    // deliberately **abandons** the drainers: see the note above.
+    let abort = |child: &mut std::process::Child| {
+        kill_group(pgid);
+        let _ = child.kill();
+        let _ = child.wait();
+    };
 
     let deadline = std::time::Instant::now() + limit;
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) => {
+                if crate::interrupt::was_interrupted() {
+                    abort(&mut child);
+                    return Err(crate::interrupt::interrupted_error());
+                }
                 if std::time::Instant::now() >= deadline {
-                    // kill and **reap**, so no zombie is left. with the pipes
-                    // closed both readers see EOF and finish.
-                    let _ = child.kill();
-                    let _ = child.wait();
-                    let _ = out_reader.join();
-                    let _ = err_reader.join();
+                    abort(&mut child);
                     return Err(StepError::Timeout {
                         command: rendered.to_string(),
                         secs: limit.as_secs(),
@@ -177,10 +229,7 @@ fn output_with_timeout(
                 std::thread::sleep(POLL_INTERVAL);
             }
             Err(e) => {
-                let _ = child.kill();
-                let _ = child.wait();
-                let _ = out_reader.join();
-                let _ = err_reader.join();
+                abort(&mut child);
                 return Err(StepError::CommandFailed {
                     command: rendered.to_string(),
                     status: "wait-failed".to_string(),

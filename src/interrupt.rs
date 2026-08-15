@@ -2,11 +2,20 @@
 //!
 //! # why the handler is tiny
 //!
-//! the signal reaches the **whole process group**, so `apt`, `git` and `pip`
-//! die anyway; the child command comes back failed and the engine already
-//! rolls back for that case. we only need to *survive*, so the handler raises
-//! a flag and nothing else. before R18 the default action killed us outright
-//! and the in-process rollback never ran.
+//! the signal reaches the **whole process group**, so `apt` and `pip` die
+//! anyway; the child command comes back failed and the engine already rolls
+//! back for that case. we only need to *survive*, so the handler raises a flag
+//! and nothing else. before R18 the default action killed us outright and the
+//! in-process rollback never ran.
+//!
+//! **one exception, since `A-V3-22`**: commands with a network timeout — the
+//! clone, the tarball, the `.deb` — are started in a **process group of their
+//! own**, so that the timeout can kill the worker instead of the `sudo` in
+//! front of it. that group is not the terminal's foreground group, so a Ctrl-C
+//! does *not* reach them. which is why the flag is read in one more place than
+//! the engine: [`crate::system_ops`] watches it while it waits, and kills that
+//! group itself. without that, Ctrl-C during a `git clone` would look like a
+//! freeze for as long as the clone takes.
 //!
 //! no `unsafe`: `signal_hook` wraps the async-signal-safe part behind a safe
 //! API, and it was already in the tree as a transitive dependency of
@@ -58,6 +67,10 @@ const EXIT_SIGINT: i32 = 130;
 /// registered would be disproportionate.
 pub fn install() -> Arc<AtomicBool> {
     let flag = Arc::new(AtomicBool::new(false));
+    // published so the code that waits on a child in its own process group can
+    // read it too (`A-V3-22`). set once, and only here: a second `install`
+    // would mean two flags, and whoever read the stale one would wait forever.
+    let _ = INSTALLED.set(Arc::clone(&flag));
 
     for signal in [signal_hook::consts::SIGINT, signal_hook::consts::SIGTERM] {
         // order matters: the conditional exit first (it acts only once the flag
@@ -79,6 +92,19 @@ pub fn install() -> Arc<AtomicBool> {
     }
 
     flag
+}
+
+/// the flag [`install`] registered, for readers outside the engine.
+static INSTALLED: std::sync::OnceLock<Arc<AtomicBool>> = std::sync::OnceLock::new();
+
+/// has an interruption been requested?
+///
+/// `false` when no handler was ever installed — every test, and any embedding
+/// that does not want the behaviour — so nothing changes for them.
+pub fn was_interrupted() -> bool {
+    INSTALLED
+        .get()
+        .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::SeqCst))
 }
 
 /// the error used when a run stops on an interruption.

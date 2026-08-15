@@ -132,3 +132,84 @@ fn timeout_error_message_names_the_env_var() {
     );
     assert!(rendered.contains("300"), "it must say how long it waited");
 }
+
+// --- A-V3-22: the child is not the worker -----------------------------------
+
+/// the finding, reproduced with the same shape: a process whose **child** does
+/// the work, exactly as `sudo git clone` does.
+///
+/// killing only the direct child left `git` alive and holding the write ends of
+/// our pipes, so the drainers never saw EOF, `join()` never returned, and the
+/// `Timeout` already decided was never reported. found in the field as an
+/// installation stuck for seven minutes without a line of log — from the
+/// outside indistinguishable from having no timeout at all.
+///
+/// two assertions, and the second is the one that matters: the error comes
+/// back **and** the worker is dead.
+#[test]
+fn the_timeout_kills_the_worker_under_the_shell_not_just_the_shell() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let marker = dir.path().join("the-worker-survived");
+    // a grandchild that outlives its parent's death and, if left alone, proves
+    // it by creating the file.
+    let script = format!("(sleep 0.5; touch {}) & wait", marker.to_string_lossy());
+
+    let start = Instant::now();
+    let err = run_with_timeout("sh", &["-c", &script], Duration::from_millis(100))
+        .expect_err("the wait must end in a timeout");
+    assert!(matches!(err, StepError::Timeout { .. }), "{err}");
+    assert!(
+        start.elapsed() < Duration::from_secs(5),
+        "and it must end at the limit, not when the grandchild is done"
+    );
+
+    std::thread::sleep(Duration::from_millis(900));
+    assert!(
+        !marker.exists(),
+        "the worker under the shell went on working: killing the process we spawned is not \
+         killing the command"
+    );
+}
+
+/// the second half, and it is not redundant: even with the group killed a
+/// descendant can escape — `setsid`, a double fork, a daemon — and keep the
+/// pipes open forever.
+///
+/// reporting the failure must not depend on somebody else closing a pipe, so
+/// the drainers are **abandoned** rather than joined. without that this test
+/// does not fail: it hangs, which is precisely what the field saw.
+#[test]
+fn a_descendant_that_escapes_the_group_does_not_hold_the_error_hostage() {
+    assert!(
+        std::process::Command::new("sh")
+            .args(["-c", "command -v setsid"])
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false),
+        "this test needs `setsid` to build a descendant that escapes the process group"
+    );
+
+    let start = Instant::now();
+    let err = run_with_timeout(
+        "sh",
+        // its own session, so our SIGKILL to the group does not reach it, and
+        // it keeps our stdout/stderr open while it sleeps.
+        &["-c", "setsid sleep 5 & wait"],
+        Duration::from_millis(100),
+    )
+    .expect_err("the timeout must be reported anyway");
+
+    assert!(matches!(err, StepError::Timeout { .. }), "{err}");
+    assert!(
+        start.elapsed() < Duration::from_secs(3),
+        "the error must not wait for a pipe nobody is going to close"
+    );
+}
+
+/// with no handler installed — every test, and any embedding that does not want
+/// the behaviour — the flag reads false, so the wait behaves exactly as it did
+/// before it learned to watch for an interruption.
+#[test]
+fn without_a_handler_the_interruption_flag_is_simply_false() {
+    assert!(!invok::interrupt::was_interrupted());
+}
