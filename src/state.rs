@@ -516,8 +516,11 @@ impl InstallState {
     /// uninstall manifest, and clearing it left `invok rollback` answering
     /// "nothing to undo" on a working instance.
     ///
-    /// also removes [`DEFAULT_STATE_DIR`] when empty, restricted to that
-    /// constant so a `--state` elsewhere never removes somebody else's.
+    /// also removes [`DEFAULT_STATE_DIR`] and its `instances/` subdirectory
+    /// when they are empty, restricted to those constants so a `--state`
+    /// elsewhere never removes somebody else's directory. an instance still
+    /// installed leaves its manifest there, so the directories survive without
+    /// anyone having to ask whether they should.
     ///
     /// # errors
     ///
@@ -529,8 +532,17 @@ impl InstallState {
             Err(e) => return Err(StepError::io(path, e)),
         }
 
-        if path.parent() == Some(Path::new(DEFAULT_STATE_DIR)) {
-            // never forced: `remove_dir` fails by itself if anything is left.
+        // the empty shells, innermost first, and only the ones we own. never
+        // forced: `remove_dir` refuses by itself if anything is left, which is
+        // the whole safety of doing this — another instance's manifest in
+        // `instances/` keeps both directories alive without a check of ours.
+        let instances_dir = Path::new(DEFAULT_STATE_DIR).join(crate::manifests::INSTANCES_SUBDIR);
+        if path.parent() == Some(instances_dir.as_path()) {
+            let _ = fs::remove_dir(&instances_dir);
+        }
+        if path.parent() == Some(Path::new(DEFAULT_STATE_DIR))
+            || path.parent() == Some(instances_dir.as_path())
+        {
             let _ = fs::remove_dir(DEFAULT_STATE_DIR);
         }
 

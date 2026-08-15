@@ -27,6 +27,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     match &cli.command {
         Some(Command::Rollback(args)) => run_rollback(args),
+        Some(Command::List) => run_list(),
         // no subcommand: install, as it has always been.
         None => run_install(&cli),
     }
@@ -76,9 +77,10 @@ fn run_install(cli: &Cli) -> Result<()> {
         }
     }
 
-    // work on the manifest we **find**: the current path, or a historical one
-    // when that is the only one there.
-    let state_path = invok::state::resolve_state_path();
+    // the manifest of **this instance**: a file of its own for a named one, and
+    // for the unnamed one the historical path, or an older one when that is the
+    // only one there.
+    let state_path = invok::manifests::manifest_path_for(resolved.instance.as_deref());
     let mut ctx = Context::from_resolved(resolved, cli.dry_run, state_path);
     ctx.aggressive_rollback = cli.aggressive_rollback;
     ctx.sudo_user = std::env::var("SUDO_USER").ok().filter(|s| !s.is_empty());
@@ -156,6 +158,26 @@ fn run_install(cli: &Cli) -> Result<()> {
     // the port check is skipped when we are the ones holding it: in a resume
     // the manifest says whether `setup-systemd` had run, and without that
     // exception an installation interrupted after it could never be resumed.
+    // and whether another instance already claims this port. asked of the
+    // manifests before the system is asked at all: a stopped instance holds no
+    // socket, so its port looks free, and the collision would surface only when
+    // both are started — as a failure to bind, naming neither instance.
+    let chosen_id = match ctx.instance.as_deref() {
+        Some(name) => invok::manifests::InstanceId::Named(name.to_string()),
+        None => invok::manifests::InstanceId::Unnamed,
+    };
+    let discovery = invok::manifests::discover();
+    if let Some((other, port)) =
+        invok::manifests::port_conflict(&discovery.found, &chosen_id, ctx.port)
+    {
+        bail!(
+            "instance '{other}' already claims port {port}, even if nothing is listening on it \
+             right now.\n\
+             \n\
+             choose another one with --port, or remove that instance first."
+        );
+    }
+
     let port_is_ours = matches!(&start, Start::Resume(state) if state.owns_the_http_port());
     run_environment_checks(&ctx, port_is_ours, &make_ops)?;
     ctx.os_info = Some(os_info);
@@ -423,6 +445,9 @@ fn print_configuration(ctx: &Context) {
     println!("================================================================");
     println!("Final installation settings:");
     println!("  Odoo version : {}", ctx.odoo_version);
+    if let Some(instance) = &ctx.instance {
+        println!("  Instance     : {instance}");
+    }
     println!("  Odoo user    : {}", ctx.odoo_user);
     println!("  Database     : {}", ctx.db_name);
     println!("  DB user      : {}", ctx.db_user);
@@ -476,7 +501,10 @@ fn print_install_summary(ctx: &Context) {
     }
     println!();
     println!("  Management       {helper} start|stop|restart|status   (reopen the shell)");
-    println!("  Uninstall        sudo invok rollback");
+    match &ctx.instance {
+        Some(instance) => println!("  Uninstall        sudo invok rollback --instance {instance}"),
+        None => println!("  Uninstall        sudo invok rollback"),
+    }
     println!();
     println!(
         "the state in {} is the uninstall manifest: it says what was\n\
@@ -512,15 +540,134 @@ fn print_interrupt_notice(state_path: &Path) {
 
 // --- rollback from persisted state (R4) -------------------------------------
 
+// --- listing -----------------------------------------------------------------
+
+/// `invok list`: the instances this machine carries, as the manifests record
+/// them.
+///
+/// root is required and the refusal is deliberate. the manifests are `0600`
+/// root, so unprivileged this command would read nothing and print an empty
+/// table — a check that cannot fail, answering "no instances" to a machine that
+/// has three. the same reason problems are printed rather than swallowed: a
+/// manifest that cannot be read is *not knowing*, never *nothing there*.
+fn run_list() -> Result<()> {
+    checks::check_root().map_err(|e| anyhow!(e))?;
+
+    let discovery = invok::manifests::discover();
+
+    if discovery.found.is_empty() && discovery.problems.is_empty() {
+        println!("no Odoo instance installed by this installer on this machine.");
+        return Ok(());
+    }
+
+    if !discovery.found.is_empty() {
+        println!(
+            "{:<20} {:<7} {:<13} {:<22} DIRECTORY",
+            "INSTANCE", "ODOO", "STATE", "DATABASE"
+        );
+        for found in &discovery.found {
+            let state = match (&found.state.finished, found.owns_anything()) {
+                (true, _) => "installed",
+                (false, true) => "interrupted",
+                (false, false) => "empty",
+            };
+            match &found.state.config {
+                Some(config) => println!(
+                    "{:<20} {:<7} {:<13} {:<22} {}",
+                    found.id.to_string(),
+                    config.odoo_version,
+                    state,
+                    config.db_name,
+                    config.install_dir.display()
+                ),
+                // pre-R4 manifest: it records steps but not what they were
+                // applied to. said plainly, because `rollback` will refuse it
+                // for exactly that reason.
+                None => println!(
+                    "{:<20} {:<7} {:<13} {:<22} (not recorded)",
+                    found.id.to_string(),
+                    "?",
+                    state,
+                    "(not recorded)"
+                ),
+            }
+        }
+        println!();
+        for found in &discovery.found {
+            println!("  {:<20} {}", found.id.to_string(), found.path.display());
+        }
+    }
+
+    if !discovery.problems.is_empty() {
+        eprintln!();
+        eprintln!("manifests that exist but could not be read:");
+        for problem in &discovery.problems {
+            eprintln!("  {} — {}", problem.path.display(), problem.reason);
+        }
+        eprintln!(
+            "\nthis listing is therefore incomplete: an unreadable manifest describes an \n\
+             instance that is still on this machine."
+        );
+    }
+
+    Ok(())
+}
+
+// --- rollback ----------------------------------------------------------------
+
 fn run_rollback(args: &RollbackArgs) -> Result<()> {
     let _log_guard = invok::logging::init(args.dry_run);
 
-    // without `--state`, look where we write today and then where older
-    // versions did: an older instance must stay uninstallable.
-    let state_path = args
-        .state
-        .clone()
-        .unwrap_or_else(invok::state::resolve_state_path);
+    // every manifest on the machine, as one list whatever path each came from.
+    // needed even with `--state`: the guard below has to know who else is here.
+    let discovery = invok::manifests::discover();
+    for problem in &discovery.problems {
+        tracing::warn!(
+            path = %problem.path.display(),
+            reason = %problem.reason,
+            "a manifest exists but could not be read: this rollback cannot account for the \
+             instance it describes"
+        );
+    }
+
+    // `--state` is the escape hatch and skips the lookup: it accepts any path,
+    // including a manifest copied from elsewhere. otherwise the manifest is
+    // found from the instance — and with several on the machine and nothing
+    // said, the command lists them and stops. it does not guess, as it already
+    // refuses to guess a missing configuration.
+    let state_path = match &args.state {
+        Some(path) => path.clone(),
+        None => match invok::manifests::select(&discovery.found, args.instance.as_deref()) {
+            invok::manifests::Selection::One(i) => discovery.found[i].path.clone(),
+            invok::manifests::Selection::Nothing => {
+                println!("nothing to undo: no installation manifest on this machine.");
+                return Ok(());
+            }
+            invok::manifests::Selection::Ambiguous(names) => {
+                eprintln!("this machine carries more than one instance:");
+                for name in &names {
+                    eprintln!("  - {name}");
+                }
+                bail!(
+                    "say which one to undo: `invok rollback --instance <name>` \
+                     (`default` is the instance installed without --instance)"
+                );
+            }
+            invok::manifests::Selection::NotFound {
+                requested,
+                available,
+            } => {
+                if available.is_empty() {
+                    bail!("no instance '{requested}': this machine carries no manifest at all");
+                }
+                eprintln!("no instance '{requested}'. this machine carries:");
+                for name in &available {
+                    eprintln!("  - {name}");
+                }
+                bail!("nothing was undone");
+            }
+        },
+    };
 
     let state = InstallState::load(&state_path).map_err(|e| anyhow!(e))?;
 
@@ -532,6 +679,25 @@ fn run_rollback(args: &RollbackArgs) -> Result<()> {
             state_path.display()
         );
         return Ok(());
+    }
+
+    // the I1 stopgap that stands in for I2's per-artifact rule. the reasoning
+    // lives with the rule, in `manifests::shared_artifact_gate`.
+    if let invok::manifests::SharedArtifactVerdict::Refuse(others) =
+        invok::manifests::shared_artifact_gate(&discovery, &state_path, args.dry_run)
+    {
+        eprintln!("this machine also carries:");
+        for name in &others {
+            eprintln!("  - {name}");
+        }
+        bail!(
+            "removing one instance while another is installed is refused for now: the shared \
+             artifacts (/opt/odoo, the system packages, the PostgreSQL cluster) belong to \
+             whichever instance created them, and undoing them would break the others.\n\
+             \n\
+             remove the other instances first, or run with --dry-run to see what this \
+             rollback would do."
+        );
     }
 
     // without the persisted config we do not know *which* user, database or

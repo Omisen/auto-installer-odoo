@@ -221,8 +221,8 @@ Parameters resolve in this order: **CLI → `.env` → interactive prompt → de
 Also: `--install-dir`, `--logfile`, `--open-https-port` (opens 443 on the firewall ahead of TLS; it
 does **not** configure TLS — legacy alias `--enable-ssl`), `--aggressive-rollback`, and
 `-V`/`--installer-version` for the **installer** version (`--version` is Odoo's). `--help` and the
-wiki have them all. Subcommand: `invok rollback` (alias `uninstall`), below; with no subcommand, the
-command installs.
+wiki have them all. Subcommands: `invok rollback` (alias `uninstall`) and `invok list`, below; with no
+subcommand, the command installs.
 
 ```bash
 sudo invok --version 17 --with-nginx
@@ -259,10 +259,30 @@ authenticates by operating-system user and ignores the password. A role named di
 user would simply be refused. If you decouple them explicitly, the installer says so and lets you
 proceed: your `pg_hba.conf` may well be configured for it.
 
-> **Today one instance at a time.** Naming an installation is the whole of what `--instance` does so
-> far: the uninstall manifest is still a single file, so installing a *second* instance alongside the
-> first is still refused, exactly as reinstalling has always been. Running several Odoo instances on
-> one machine is being built on top of this and is not finished.
+Each instance gets its **own uninstall manifest**: `/var/lib/invok/instances/<name>.json` for a named
+one, and `/var/lib/invok/state.json` — where it has always been — for the unnamed one. So a second
+instance can be installed alongside the first, and each is undone on its own.
+
+```bash
+sudo invok --instance cliente-x --port 8169    # a second instance
+sudo invok list                                # what this machine carries
+sudo invok rollback --instance cliente-x       # undo just that one
+```
+
+`invok list` needs root, because the manifests are `0600 root` — a listing that silently came up
+empty for lack of privileges would be worse than a refusal. For the same reason a manifest that
+exists but cannot be read is reported as a problem rather than skipped.
+
+`rollback` with no `--instance` works when there is exactly one instance; with several it lists them
+and stops, rather than choose one for you. The unnamed instance is called `default` when you have to
+type it, and for that reason `default` is not accepted as an instance name.
+
+> **Removing one instance while another is installed is refused, for now.** `/opt/odoo`, the system
+> packages and the PostgreSQL cluster belong to whichever instance created them, and undoing them
+> would break the others. The rule that makes this safe artifact by artifact — *is anyone else still
+> using it?* — is the next piece of work; until it lands, the refusal stands in for it. It is
+> deliberately stricter than needed: remove the other instances first, or use `--dry-run` to see what
+> a rollback would do.
 
 ### The `.env` file
 

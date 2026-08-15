@@ -136,13 +136,41 @@ pub enum Command {
     /// interrupted run.
     #[command(alias = "uninstall")]
     Rollback(RollbackArgs),
+
+    /// list the instances installed on this machine.
+    ///
+    /// reads the manifests and prints what they record. it changes nothing, but
+    /// it does need root: the manifests are `0600` root, and a listing that
+    /// silently came up empty for lack of privileges would be worse than a
+    /// refusal.
+    List,
 }
 
 /// options for `invok rollback`.
 #[derive(Args, Debug)]
 pub struct RollbackArgs {
-    /// state file to consume; defaults to /var/lib/invok/state.json, falling
-    /// back to the historical /opt/odoo/.installer-state.json.
+    /// which instance to undo; `default` is the one installed without
+    /// `--instance`.
+    ///
+    /// with a single instance on the machine it can be omitted. with several,
+    /// the command lists them and stops rather than pick one.
+    ///
+    /// mutually exclusive with `--state`, which answers the same question a
+    /// different way. the exclusion is declared **here** and not on `--state`,
+    /// and that is not a matter of taste: `conflicts_with` naming an argument
+    /// that clap has not built yet is dropped **in silence**, so declared the
+    /// other way round it was a guard that could never fire. a test that gives
+    /// both flags at once is what says so.
+    #[arg(long, value_name = "NAME", conflicts_with = "state")]
+    pub instance: Option<String>,
+
+    /// state file to consume, bypassing the instance lookup entirely.
+    ///
+    /// the escape hatch: it accepts any path, including a manifest copied from
+    /// another machine (useful with `--dry-run`). without it the manifest is
+    /// found from the instance — `/var/lib/invok/instances/<name>.json`, or for
+    /// the unnamed instance `/var/lib/invok/state.json` and the historical
+    /// paths before it.
     #[arg(long, value_name = "FILE")]
     pub state: Option<PathBuf>,
 

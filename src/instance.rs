@@ -57,6 +57,16 @@ pub const INSTANCE_PREFIX: &str = "odoo-";
 /// unnamed instance.
 pub const PLAIN_NAME: &str = "odoo";
 
+/// how the **unnamed** instance is named when one has to be typed: to
+/// `rollback --instance`, and in `list`'s output.
+///
+/// it is therefore a **reserved word**: [`validate_instance`] refuses it, so a
+/// real instance can never take it. an instance actually called `default` would
+/// make a destructive command's selector ambiguous, and ambiguity there is not
+/// something to settle with a precedence rule — it is something to make
+/// impossible.
+pub const UNNAMED_ID: &str = "default";
+
 /// validates an instance name against the intersection of the five grammars it
 /// will end up in: `^[a-z][a-z0-9_-]{0,25}$`.
 ///
@@ -77,6 +87,11 @@ pub fn validate_instance(value: &str) -> Result<String, ConfigError> {
 
     if value.is_empty() {
         return Err(invalid("it is empty"));
+    }
+    if value == UNNAMED_ID {
+        return Err(invalid(
+            "'default' is reserved: it is how the instance installed without --instance is              named when one has to be typed, so an instance may not take it",
+        ));
     }
     if value.len() > MAX_INSTANCE_LEN {
         return Err(invalid(

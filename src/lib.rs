@@ -28,6 +28,7 @@ pub mod instance;
 pub mod interrupt;
 pub mod lockfile;
 pub mod logging;
+pub mod manifests;
 pub mod packaging;
 pub mod progress;
 pub mod prompt;
