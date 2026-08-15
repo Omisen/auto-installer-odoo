@@ -17,6 +17,7 @@ THE COMMAND
     invok             install Odoo, guided by prompts
     invok --dry-run   resolve the configuration and print the plan,
                       changing nothing on the system
+    invok list        the instances installed on this machine
     invok --help      every option
     invok -V          the installer's own version
 
@@ -31,6 +32,24 @@ Either the installation succeeds completely, or the system goes back to
 exactly what it was. There is no intermediate state left behind.
 
 
+MORE THAN ONE ODOO ON THE SAME MACHINE
+--------------------------------------
+
+An instance is created by NAMING it. Re-running the installer does not
+add one: without a name it targets the installation already there, and
+stops rather than overwrite it.
+
+    sudo invok --instance cliente-x --port 8169
+
+The name qualifies everything that instance owns — system user,
+PostgreSQL role, database, service unit, directory, config file — so
+two instances share nothing but the machine. --port moves the pair of
+ports it needs (HTTP, and longpolling three above it); a port another
+instance has recorded is refused even when nothing is listening on it.
+
+In a .env file the same choice is ODOO_INSTANCE.
+
+
 WHAT AN INSTALLATION LEAVES ON THE MACHINE
 ------------------------------------------
 
@@ -40,6 +59,13 @@ WHAT AN INSTALLATION LEAVES ON THE MACHINE
     /var/lib/invok/state.json      the uninstall manifest (root, 0600)
     /var/log/invok.log             the installer's own log
     /run/invok.lock                the lock, while a run is in progress
+
+A NAMED instance keeps the same shape under its own name:
+
+    /opt/odoo/odoo-<name>                     everything of its own,
+                                              filestore included
+    /etc/systemd/system/odoo-<name>.service   its unit
+    /var/lib/invok/instances/<name>.json      its manifest
 
 With --with-nginx, a virtual host and the firewall rules for it.
 
@@ -51,12 +77,20 @@ what makes the installation removable later.
 REMOVING AN INSTALLATION
 ------------------------
 
-    sudo invok rollback --dry-run    list what would be undone
-    sudo invok rollback              undo it
+    sudo invok rollback --dry-run          list what would be undone
+    sudo invok rollback                    undo it
+    sudo invok rollback --instance <name>  undo that one
+    sudo invok rollback --all              undo every instance
 
 Only what invok created is removed. A database, a package, a user or a
 configuration file that was already on the machine is left untouched —
 that distinction is the whole point of the manifest.
+
+With more than one instance installed, removing one leaves whatever the
+others are standing on: /opt/odoo, the system packages, the PostgreSQL
+cluster, nginx. The report names what it left and why, and that
+instance's manifest is kept as the record of who owns those — so the
+last removal can still take them away.
 
 If an installation is interrupted, the same command cleans up whatever
 that run had already done.

@@ -4,7 +4,7 @@ name = "invok"
 # artifacts (`invok_3.0.0-1_amd64.deb`), and for this project that name is part
 # of the contract with whoever installs — the README spells them out in full.
 # A change like that does not belong in a minor.
-version = "3.0.0"
+version = "3.1.0"
 edition = "2021"
 # "Odoo" stays in the text: it is nominative use, it says what the program
 # installs, and it is what makes the crate findable. Out of the NAME, inside the

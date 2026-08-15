@@ -103,7 +103,7 @@ musl binary with no dependencies; D and E build it on your machine.
 > `sha256`, and you update by downloading again. There is no `apt`/`dnf` repository to add to the
 > machine's sources.
 
-The commands below point at **v3.0.0**, the release this README describes. If a newer one exists, find
+The commands below point at **v3.1.0**, the release this README describes. If a newer one exists, find
 it on [Releases](../../releases/latest) and change the version in the URLs and file names.
 
 ### A — Any distro: prebuilt binary
@@ -112,8 +112,8 @@ Two Linux x86_64 variants: `…-musl.tar.gz` is **static** and runs anywhere (re
 `…-gnu.tar.gz` is dynamic, for systems with a recent glibc. Each archive ships a `.sha256`.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-x86_64-unknown-linux-musl.tar.gz
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-x86_64-unknown-linux-musl.tar.gz.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-x86_64-unknown-linux-musl.tar.gz.sha256
 
 sha256sum -c invok-x86_64-unknown-linux-musl.tar.gz.sha256   # must say: OK
 tar xzf invok-x86_64-unknown-linux-musl.tar.gz
@@ -129,11 +129,11 @@ Puts `invok` in `PATH`, removable with `apt remove invok`. It ships **only** the
 services, no system changes.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok_3.0.0-1_amd64.deb
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok_3.0.0-1_amd64.deb.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok_3.1.0-1_amd64.deb
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok_3.1.0-1_amd64.deb.sha256
 
-sha256sum -c invok_3.0.0-1_amd64.deb.sha256   # must say: OK
-sudo apt install ./invok_3.0.0-1_amd64.deb
+sha256sum -c invok_3.1.0-1_amd64.deb.sha256   # must say: OK
+sudo apt install ./invok_3.1.0-1_amd64.deb
 
 invok -V                # which version is installed
 sudo invok              # now on PATH — `sudo vok` is the same program
@@ -148,11 +148,11 @@ get overwritten.
 The same binary in the other wrapper. Removable with `sudo dnf remove invok`.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-3.0.0-1.x86_64.rpm
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.0.0/invok-3.0.0-1.x86_64.rpm.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-3.1.0-1.x86_64.rpm
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-3.1.0-1.x86_64.rpm.sha256
 
-sha256sum -c invok-3.0.0-1.x86_64.rpm.sha256   # must say: OK
-sudo dnf install ./invok-3.0.0-1.x86_64.rpm
+sha256sum -c invok-3.1.0-1.x86_64.rpm.sha256   # must say: OK
+sudo dnf install ./invok-3.1.0-1.x86_64.rpm
 
 invok -V
 sudo invok
@@ -437,10 +437,17 @@ could no longer tell the two cases apart.
 
 | Flag | Value | Default |
 |---|---|---|
+| `--instance <NAME>` | which instance to undo; `default` is the unnamed one | the only one installed, or a refusal listing them |
+| `--all` | every instance, own artifacts first and shared ones last | off |
 | `--state <FILE>` | state file to consume | `/var/lib/invok/state.json` (falls back to the historical `/opt/odoo/.installer-state.json`) |
 | `--dry-run` | list without mutating (no `sudo` needed) | off |
 | `--aggressive-rollback` | also purge PostgreSQL/Nginx installed by us, and the common utilities | off |
 | `--yes` / `-y` | skip the confirmation (required with no terminal) | off |
+
+With more than one instance installed, `rollback` on its own **lists them and stops**: it will not
+guess which one you meant when the choice is destructive. `--instance` and `--all` are the two ways
+to say it out loud, and `--state` cannot be combined with `--instance` — one names a file, the other
+names an instance.
 
 On a successful installation the state file **stays on disk**: it is the *uninstall manifest*, the only
 record of which artifacts that installation created and which it found already there. Without it
@@ -450,7 +457,9 @@ stays and the command can be re-run (undos are idempotent).
 
 Three files live **outside** `/opt/odoo`, which is the perimeter the rollback must be able to remove
 whole: the manifest `/var/lib/invok/state.json`, the lock `/run/invok.lock` (prevents two concurrent
-installations, gone after a reboot) and the log `/var/log/invok.log`.
+installations, gone after a reboot) and the log `/var/log/invok.log`. A **named** instance keeps its
+manifest in `/var/lib/invok/instances/<name>.json`, for the same reason: one file per instance, so
+each is undone on its own.
 
 ---
 
