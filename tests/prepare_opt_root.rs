@@ -416,7 +416,7 @@ fn with_another_instance_installed_only_the_instance_home_comes_off() {
     assert!(shared.exists() && home.exists());
 
     // somebody else is still installed.
-    c.shared_in_use = true;
+    c.other_instances = vec!["beta".to_string()];
     step.undo(&c).expect("undo");
 
     assert!(
@@ -430,7 +430,7 @@ fn with_another_instance_installed_only_the_instance_home_comes_off() {
 
     // and once it is alone, the same undo finishes the job: the undos are
     // idempotent, so the second run is not a special case.
-    c.shared_in_use = false;
+    c.other_instances.clear();
     step.undo(&c).expect("undo");
     assert!(
         !shared.exists(),
@@ -451,7 +451,7 @@ fn for_the_unnamed_instance_the_shared_root_is_the_home() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    c.shared_in_use = true;
+    c.other_instances = vec!["beta".to_string()];
     step.undo(&c).expect("undo");
     assert!(
         home.exists(),
@@ -532,7 +532,7 @@ fn the_widening_stays_while_another_instance_still_needs_it() {
     step.snapshot(&c).expect("snapshot");
     step.run(&c).expect("run");
 
-    c.shared_in_use = true;
+    c.other_instances = vec!["beta".to_string()];
     step.undo(&c).expect("undo");
     assert_eq!(
         mode_of(&shared),
@@ -633,5 +633,39 @@ fn a_mode_changed_by_somebody_else_is_not_overwritten() {
         mode_of(&shared),
         0o775,
         "their decision stands: our undo only takes back the mode it left"
+    );
+}
+
+/// the distinction the *names* exist for, and the common case: remove the added
+/// instance from a customer's machine and the historical one is all that is
+/// left — it **owns** `/opt/odoo`, so it never needed the `o+x`, and the
+/// customer gets the `0750` they had back.
+///
+/// a boolean "is anybody else installed" answers yes here and keeps a permission
+/// bit nobody uses: the same datum asked a question it was not written for.
+#[test]
+fn only_the_unnamed_instance_left_means_the_widening_comes_off() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let shared = dir.path().join("opt-odoo");
+    std::fs::create_dir(&shared).expect("mkdir");
+    std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o750)).expect("chmod");
+
+    let mut c = ctx_named(shared.clone(), "cliente-x");
+    let (mut step, _log) = step_on_real_fs();
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+    assert_eq!(mode_of(&shared), 0o751);
+
+    c.other_instances = vec!["default".to_string()];
+    step.undo(&c).expect("undo");
+
+    assert_eq!(
+        mode_of(&shared),
+        0o750,
+        "the historical instance is the root's owner: it walks in as itself"
+    );
+    assert!(
+        shared.exists(),
+        "and the directory stays: somebody is still installed on it"
     );
 }

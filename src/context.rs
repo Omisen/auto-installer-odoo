@@ -68,7 +68,8 @@ pub struct Context {
     /// when set, the rollback also purges what it would normally leave: common
     /// bootstrap utilities and PostgreSQL.
     pub aggressive_rollback: bool,
-    /// another instance is still installed on this machine (phase I2).
+    /// the **names** of the other instances still installed on this machine
+    /// (phase I2), `default` standing for the unnamed one.
     ///
     /// rollback-wide policy, like [`Self::aggressive_rollback`], and read by the
     /// two steps whose undo is **partly** shared: they do their own half and
@@ -76,9 +77,17 @@ pub struct Context {
     /// called at all — that decision is the rollback driver's, from
     /// [`crate::steps::artifact_scope`].
     ///
-    /// `false` by default, so every path that does not set it behaves exactly as
+    /// the names and not a flag, and that is the whole point: a boolean answers
+    /// *is anybody else here*, and once `A-V6-9` arrived the undo needed *does
+    /// anybody else have to walk through the shared root* — a different question
+    /// the same yes/no cannot tell apart. reusing it would have been A-R8-1
+    /// again: a datum answering the question it was not asked. the two readings
+    /// are derived from the names by [`Self::shared_in_use`] and
+    /// [`Self::shared_root_traversed_by_others`].
+    ///
+    /// empty by default, so every path that does not set it behaves exactly as
     /// it did before instances existed.
-    pub shared_in_use: bool,
+    pub other_instances: Vec<String>,
     /// path of the persisted state file; configurable for the tests.
     pub state_path: PathBuf,
     /// OS details from the preflight checks, filled in after `check_os`.
@@ -141,7 +150,7 @@ impl Context {
             nginx_open_https_port: config.nginx_open_https_port,
             dry_run,
             aggressive_rollback: false,
-            shared_in_use: false,
+            other_instances: Vec::new(),
             state_path,
             os_info: None,
             // both are filled in by `main` at preflight; before that no step
@@ -151,6 +160,29 @@ impl Context {
             db_created_by_us: Arc::new(AtomicBool::new(false)),
             python: PythonPlan::default(),
         }
+    }
+
+    /// is another instance still installed here?
+    ///
+    /// governs the artifacts that are shared **wholesale**: the shared root, the
+    /// nginx package, the enabling symlink. whoever created them owns them, and
+    /// while somebody else lives on them they stay.
+    pub fn shared_in_use(&self) -> bool {
+        !self.other_instances.is_empty()
+    }
+
+    /// does another instance still have to **traverse** the shared root
+    /// (`A-V6-9`)?
+    ///
+    /// only a **named** instance does: the unnamed one *is* the root's owner —
+    /// `/opt/odoo` is its home — so it walks in as itself and needs no `o+x`
+    /// from anybody. that is why removing a named instance from a machine that
+    /// keeps only the historical one gives the customer back the `0750` we
+    /// found, instead of leaving a bit nobody uses.
+    pub fn shared_root_traversed_by_others(&self) -> bool {
+        self.other_instances
+            .iter()
+            .any(|name| name != crate::instance::UNNAMED_ID)
     }
 
     /// overrides the state file path, for the tests and for the resume path.

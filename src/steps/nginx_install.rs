@@ -101,7 +101,7 @@ impl Step for NginxInstall {
         // another one installed it is neither stopped nor purged (phase I2).
         // the reload below still happens: our vhost is gone either way, and a
         // running nginx would go on serving the config it loaded (A1.4).
-        let shared_in_use = ctx.shared_in_use;
+        let shared_in_use = ctx.shared_in_use();
         if shared_in_use {
             info!(
                 "undo: nginx left running and installed — another instance is still \

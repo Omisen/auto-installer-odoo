@@ -115,7 +115,7 @@ fn rollback_with(
 ) -> RollbackReport {
     let others: Vec<String> = others.iter().map(|s| s.to_string()).collect();
     let mut ctx = ctx.clone();
-    ctx.shared_in_use = !others.is_empty();
+    ctx.other_instances = others.clone();
     let make_ops = || -> Box<dyn SystemOps> { model.boxed() };
     rollback::rollback_from_state_sharing_with(state, &ctx, &make_ops, &NoopReporter, &others)
 }

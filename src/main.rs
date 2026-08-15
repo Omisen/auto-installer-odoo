@@ -930,7 +930,7 @@ fn rollback_manifest(
     // the two steps whose undo is partly shared read this and leave the shared
     // half alone; the wholly shared ones are not called at all, which is the
     // driver's decision below.
-    ctx.shared_in_use = !others.is_empty();
+    ctx.other_instances = others.to_vec();
 
     let report = {
         let reporter: Box<dyn ProgressReporter> = if interactive && !args.dry_run {

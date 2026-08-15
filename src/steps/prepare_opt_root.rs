@@ -462,16 +462,20 @@ impl Step for PrepareOptRoot {
         // installed it stays, whoever created it: every one of them lives
         // underneath (phase I2). the record stays in the manifest too, so the
         // last instance to go still knows the directory is its to remove.
-        if ctx.shared_in_use {
+        // the widened bit comes back as soon as nobody else has to walk in —
+        // which is NOT the same question as "is anybody else installed". a
+        // machine left with only the historical instance gets its `0750` back:
+        // that instance owns the root and never needed the bit.
+        if !ctx.shared_root_traversed_by_others() {
+            self.restore_shared_root_mode(ctx);
+        }
+        if ctx.shared_in_use() {
             info!(
                 dir = %ctx.odoo_home.display(),
                 "undo NO-OP on the shared root: another instance still lives under it"
             );
             return Ok(());
         }
-        // the mode we widened comes back before the directory itself may go:
-        // both are the shared root, and both are only ours once we are alone.
-        self.restore_shared_root_mode(ctx);
         Self::undo_level(&self.snap.shared_root, &ctx.odoo_home, ctx.dry_run);
         Ok(())
     }
