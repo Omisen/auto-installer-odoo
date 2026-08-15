@@ -377,14 +377,14 @@ systemctl status odoo18                  # N = short version, e.g. 18
 journalctl -u odoo18 -n 50 --no-pager
 
 odoo status                              # helper command; after: source ~/.bashrc
-                                         # start | stop | restart | status | logs | dev
+                                         # start | stop | restart | status | list | logs | dev
 ```
 
 Each instance gets **its own** helper — `odoo`, `odoo-cliente-x` — and every verb that starts or
 stops acts on that instance alone: on a machine with two customers, a helper that could stop the
-other one would be a way to take a customer offline by accident. `status` is the exception, because
-reading is not touching — it shows this instance's service **and every Odoo service on the machine**,
-marking the one you are driving:
+other one would be a way to take a customer offline by accident. Reading is not touching, though, so
+`list` (and `status`, which prints it after its own state) answers from **any** helper: what is
+installed here, what is up, and which command drives each.
 
 ```
 Odoo services on this machine:

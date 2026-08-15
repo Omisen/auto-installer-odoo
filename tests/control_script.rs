@@ -330,3 +330,37 @@ fn logs_follows_this_instances_journal_only() {
         "the usage must say Ctrl-C does not stop Odoo — right after `dev`, which does stop it"
     );
 }
+
+/// `list` answers "what is on this machine" from **any** helper.
+///
+/// the discovery half of what a single shared controller would have given,
+/// without the ownership it would have cost: every instance keeps a
+/// self-sufficient tool — one that still works when another instance was
+/// removed badly or its manifest is unreadable — and the listing tells you
+/// which command drives what, so the action stays explicit.
+#[test]
+fn list_shows_the_machine_without_touching_it() {
+    let content = control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x");
+    let branch = content
+        .split("  list)")
+        .nth(1)
+        .expect("the list branch must exist")
+        .split("  logs)")
+        .next()
+        .expect("it ends where the next branch starts");
+
+    assert!(
+        branch.contains("list_instances"),
+        "list is the listing, and the listing lives in one function:\n{branch}"
+    );
+    assert!(
+        !branch.contains("systemctl start")
+            && !branch.contains("systemctl stop")
+            && !branch.contains("systemctl restart"),
+        "a listing must not be able to act:\n{branch}"
+    );
+    assert!(
+        content.contains("  list      "),
+        "and the usage has to offer it, or nobody finds it"
+    );
+}

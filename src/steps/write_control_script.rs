@@ -33,20 +33,21 @@ usage() {
   cat <<USAGE
 ${COMMAND_NAME} — controls the Odoo instance served by '${SERVICE_NAME}'
 
-Usage: ${COMMAND_NAME} {start|stop|restart|status|logs [N]|dev}
+Usage: ${COMMAND_NAME} {start|stop|restart|status|list|logs [N]|dev}
 
   start     start this instance's service
   stop      stop it
   restart   restart it — after changing its configuration file
   status    its state, followed by every Odoo service on this machine
+  list      just that listing: what is installed here and what is up
   logs      follow its log, from the last N lines (default 100).
             Ctrl-C stops reading; the service keeps running
   dev       stop it and open a shell as '${ODOO_OS_USER}', to run odoo-bin by
             hand. The service stays STOPPED when you leave: bring it back with
             '${COMMAND_NAME} start'
 
-Only this instance is ever touched. If the machine carries others, 'status'
-lists them with the command that drives each one.
+Only this instance is ever touched. 'list' (and 'status', which prints it too)
+shows the others, with the command that drives each one.
 USAGE
 }
 
@@ -105,6 +106,14 @@ case "${1:-}" in
     sudo su - "${ODOO_OS_USER}" -s /bin/bash
     echo
     echo "'${SERVICE_NAME}' is still STOPPED. Start it again with: ${COMMAND_NAME} start"
+    ;;
+  list)
+    # the listing on its own, without this instance's `systemctl status` above
+    # it. Every helper answers it, and answers the same thing: "what is on this
+    # machine, what is up, and which command drives each". From there you invoke
+    # the helper of the instance you actually meant — the action stays explicit,
+    # and no helper acquires the power to stop somebody else's service.
+    list_instances
     ;;
   logs)
     # this instance's journal and nobody else's, like every other verb here.
