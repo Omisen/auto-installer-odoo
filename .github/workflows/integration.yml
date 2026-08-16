@@ -427,6 +427,25 @@ jobs:
             env_file: configs/ci.env
             firewalld: "no"
             fw_required: ""
+          # the PGDATA precondition (A-MD-6), which until now lived only on
+          # mocks — the one piece of M12 no real execution had ever crossed.
+          #
+          # it needs a machine where PostgreSQL is **already installed** (so the
+          # unit exists and systemd can be asked) and a drop-in moving PGDATA
+          # somewhere else. Then the two answers to "where is the cluster"
+          # diverge: the constant that drives our removal says
+          # `/var/lib/pgsql/data`, the unit tells `postgresql-setup` otherwise —
+          # and the installer must refuse **before** creating a cluster it would
+          # later look for in the wrong place.
+          #
+          # this entry does not install anything, so it carries no `odoo` and no
+          # `env_file` beyond the base one: what it exercises is a refusal.
+          - image: "fedora:41"
+            scenario: pgdata-conflict
+            env_file: configs/ci.env
+            firewalld: "no"
+            fw_required: ""
+            pgdata_conflict: "yes"
 
     steps:
       - name: Checkout
@@ -715,7 +734,70 @@ jobs:
           docker exec fedora-test firewall-cmd --reload
           docker exec fedora-test firewall-cmd --permanent --list-ports
 
+      # the precondition's premise, built on purpose (A-MD-6).
+      #
+      # PostgreSQL installed FIRST, so the unit exists and systemd has something
+      # to answer about: with no unit `systemctl show -p Environment` exits 0 with
+      # an empty value, which the installer reads as "I do not know" and lets
+      # through — blindness is not conflict, and that branch is the common one.
+      # The conflict needs the other case.
+      - name: PostgreSQL already installed, with PGDATA moved by a drop-in
+        if: matrix.pgdata_conflict == 'yes'
+        run: |
+          set -eux
+          docker exec fedora-test dnf install -y postgresql-server
+          docker exec fedora-test mkdir -p /etc/systemd/system/postgresql.service.d
+          docker exec fedora-test sh -c \
+            'printf "[Service]\nEnvironment=PGDATA=/srv/pgdata\n" > /etc/systemd/system/postgresql.service.d/pgdata.conf'
+          docker exec fedora-test systemctl daemon-reload
+          # what systemd now reports is the input of the whole check: print it, so
+          # a failure here is read as "the premise did not hold" and not as "the
+          # installer did not refuse".
+          docker exec fedora-test systemctl show -p Environment postgresql.service
+
+      - name: The moved PGDATA is refused before a cluster is created
+        if: matrix.pgdata_conflict == 'yes'
+        run: |
+          # `set +e` around it, exactly as the pre-existing-user job does: the
+          # default shell runs with `-e`, so a refusal — which is the expected
+          # outcome here — would abort the step before its own exit code could
+          # be read.
+          set +e
+          docker exec -u tester -w /work fedora-test \
+            sudo -n ./bin/invok --config configs/ci.env > refuse.log 2>&1
+          rc=$?
+          set -e
+          echo "exit code: $rc"; cat refuse.log
+
+          [ "$rc" -ne 0 ] || { echo "::error::the installation should have been refused"; exit 1; }
+
+          # asserting the MESSAGE and not only the exit code, which is the whole
+          # lesson of A-R9-1: when a check's value is in its *why*, a non-zero
+          # exit proves nothing — this run could have failed for any of a dozen
+          # other reasons and looked identical.
+          grep -q "/srv/pgdata" refuse.log \
+            || { echo "::error::the message does not name the PGDATA this machine declares"; exit 1; }
+          grep -q "/var/lib/pgsql/data" refuse.log \
+            || { echo "::error::the message does not name the one we know how to remove"; exit 1; }
+          grep -q "postgresql.service" refuse.log \
+            || { echo "::error::the message does not say where the drop-in is to be removed"; exit 1; }
+
+          # and it must have stopped BEFORE the cluster: this is a precondition,
+          # not an undo, and the difference is a directory that either exists or
+          # does not.
+          docker exec fedora-test test ! -e /srv/pgdata \
+            || { echo "::error::it created a cluster at the declared PGDATA"; exit 1; }
+          [ -z "$(docker exec fedora-test ls -A /var/lib/pgsql/data)" ] \
+            || { echo "::error::it initialised the default PGDATA anyway"; exit 1; }
+          docker exec fedora-test test ! -d /opt/odoo \
+            || { echo "::error::the steps before it were not rolled back"; exit 1; }
+          docker exec fedora-test id odoo \
+            && { echo "::error::the system user survived the rollback"; exit 1; } || true
+
+          echo "✔ refused before initialising anything, naming both paths and the way out"
+
       - name: Real installation and rollback
+        if: matrix.pgdata_conflict != 'yes'
         run: |
           docker exec -u tester -w /work fedora-test \
             env MODE=full BIN=./bin/invok \
