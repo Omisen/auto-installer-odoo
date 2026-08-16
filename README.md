@@ -125,7 +125,7 @@ musl binary with no dependencies; D and E build it on your machine.
 > `sha256`, and you update by downloading again. There is no `apt`/`dnf` repository to add to the
 > machine's sources.
 
-The commands below point at **v3.1.0**, the release this README describes. If a newer one exists, find
+The commands below point at **v3.2.0**, the release this README describes. If a newer one exists, find
 it on [Releases](../../releases/latest) and change the version in the URLs and file names.
 
 ### A — Any distro: prebuilt binary
@@ -134,8 +134,8 @@ Two Linux x86_64 variants: `…-musl.tar.gz` is **static** and runs anywhere (re
 `…-gnu.tar.gz` is dynamic, for systems with a recent glibc. Each archive ships a `.sha256`.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-x86_64-unknown-linux-musl.tar.gz
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-x86_64-unknown-linux-musl.tar.gz.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.2.0/invok-x86_64-unknown-linux-musl.tar.gz
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.2.0/invok-x86_64-unknown-linux-musl.tar.gz.sha256
 
 sha256sum -c invok-x86_64-unknown-linux-musl.tar.gz.sha256   # must say: OK
 tar xzf invok-x86_64-unknown-linux-musl.tar.gz
@@ -151,11 +151,11 @@ Puts `invok` in `PATH`, removable with `apt remove invok`. It ships **only** the
 services, no system changes.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok_3.1.0-1_amd64.deb
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok_3.1.0-1_amd64.deb.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.2.0/invok_3.2.0-1_amd64.deb
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.2.0/invok_3.2.0-1_amd64.deb.sha256
 
-sha256sum -c invok_3.1.0-1_amd64.deb.sha256   # must say: OK
-sudo apt install ./invok_3.1.0-1_amd64.deb
+sha256sum -c invok_3.2.0-1_amd64.deb.sha256   # must say: OK
+sudo apt install ./invok_3.2.0-1_amd64.deb
 
 invok -V                # which version is installed
 sudo invok              # now on PATH — `sudo vok` is the same program
@@ -170,11 +170,11 @@ get overwritten.
 The same binary in the other wrapper. Removable with `sudo dnf remove invok`.
 
 ```bash
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-3.1.0-1.x86_64.rpm
-curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.1.0/invok-3.1.0-1.x86_64.rpm.sha256
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.2.0/invok-3.2.0-1.x86_64.rpm
+curl -fsSL -O https://github.com/Omisen/invok/releases/download/v3.2.0/invok-3.2.0-1.x86_64.rpm.sha256
 
-sha256sum -c invok-3.1.0-1.x86_64.rpm.sha256   # must say: OK
-sudo dnf install ./invok-3.1.0-1.x86_64.rpm
+sha256sum -c invok-3.2.0-1.x86_64.rpm.sha256   # must say: OK
+sudo dnf install ./invok-3.2.0-1.x86_64.rpm
 
 invok -V
 sudo invok

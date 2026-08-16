@@ -32,6 +32,23 @@ Either the installation succeeds completely, or the system goes back to
 exactly what it was. There is no intermediate state left behind.
 
 
+WHICH ODOO VERSIONS
+-------------------
+
+    sudo invok --version 16|17|18|19
+
+All four install on Ubuntu and Debian, and each is exercised by a job
+that installs it and rolls it back.
+
+On Fedora >= 41, only 17, 18 and 19. Odoo 16's newest gevent pin is
+written for Python >= 3.12 and selects a release with no prebuilt wheel
+for Python 3.13, which is the interpreter every current Fedora ends up
+on — so pip has to compile, and it does not survive. Trying it is not
+dangerous: the failure names the interpreter and prints the lines that
+Odoo version declares, instead of leaving you with the compiler's
+output. Odoo 16 on Ubuntu or Debian is unaffected.
+
+
 MORE THAN ONE ODOO ON THE SAME MACHINE
 --------------------------------------
 
