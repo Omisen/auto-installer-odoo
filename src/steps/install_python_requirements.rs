@@ -54,6 +54,24 @@
 //! a welcome side effect: with the right version a prebuilt wheel exists, so
 //! nothing is compiled and `--no-build-isolation` stays inert. the Cython<3
 //! workaround does its work where it is genuinely needed.
+//!
+//! # which setuptools: the newest is not a neutral choice (A-V3-26)
+//!
+//! the same lesson one level down. this step needs setuptools in the venv to
+//! have a build backend (A-R6-2), and asked for it with a bare `--upgrade`,
+//! which means *whatever PyPI has today*. what PyPI has today is 84, and
+//! **82.0.0 removed `pkg_resources`** — which Odoo 16 imports at the top of
+//! `odoo/modules/module.py`.
+//!
+//! so the installer walked into a venv that already worked — on Ubuntu 22.04
+//! `venv` seeds setuptools 59.6.0, `pkg_resources` included — replaced it with
+//! one missing the module, and Odoo 16 died on the first line of its own code
+//! that ever ran. "newest" was never the requirement: *present* was. see
+//! [`SETUPTOOLS_REQUIREMENT`].
+//!
+//! and the same trap sits one version lower: 81 keeps the module but warns on
+//! every import, twice per Odoo 16 start, in a branch that cannot filter it. a
+//! version chosen for us is worth checking on both sides.
 
 use tracing::info;
 
@@ -64,6 +82,39 @@ use crate::system_ops::SystemOps;
 
 const VENV_SUBDIR: &str = "sandbox";
 const REPO_SUBDIR: &str = "odoo";
+
+/// the setuptools the venv gets: the newest one that ships `pkg_resources`
+/// **without complaining about it** (A-V3-26).
+///
+/// setuptools **82.0.0 removed `pkg_resources`**, and Odoo 16 imports it bare
+/// at the top of `odoo/modules/module.py`. an unbounded `--upgrade setuptools`
+/// therefore took a working venv apart: on Ubuntu 22.04 `venv` seeds setuptools
+/// 59.6.0, which has `pkg_resources`, and we replaced it with one that does not
+/// — so `initialize-odoo-database` died on `ModuleNotFoundError` at the first
+/// line of Odoo it ever executed.
+///
+/// **two thresholds, and the bound sits under the lower one.** 82 is where the
+/// module disappears and the installation breaks. **81** is where setuptools
+/// starts printing `pkg_resources is deprecated as an API` on every import —
+/// twice in the journal at each Odoo 16 start, on a stable branch that (unlike
+/// 17 and 19) does not filter it, so nobody on that machine can turn it off.
+/// the extra step down is not our taste: setuptools' own message names the pin
+/// that stops it, so the number is read rather than picked.
+///
+/// **the bound is unconditional, and that is the decision**: the alternative
+/// was to apply it only where it is needed, and neither way of telling holds
+/// up. reading the cloned sources cannot distinguish *importing*
+/// `pkg_resources` from *mentioning* it — Odoo 17 names it inside a
+/// `try`/`except ImportError` with an `importlib.metadata` fallback, Odoo 19
+/// only inside warning filters, so a grep says "yes" for all three and caps
+/// two installations that never needed it. keying it on the Odoo version would
+/// be a second table of the kind that diverges in silence (A-MD-5, A-V3-16).
+/// with no discriminant there is nothing that can answer wrongly.
+///
+/// and it costs nothing elsewhere: this setuptools serves **our** build without
+/// isolation (A-R6-2) and nothing else — pip's isolated builds fetch their own,
+/// so the ceiling does not reach the wheels the requirements pull in.
+const SETUPTOOLS_REQUIREMENT: &str = "setuptools<81";
 /// pip's cache, **inside** the venv, so it goes with `CreateVirtualenv`'s undo
 /// instead of staying in the customer's home (A-R5-3).
 const PIP_CACHE_SUBDIR: &str = ".pip-cache";
@@ -149,6 +200,10 @@ impl Step for InstallPythonRequirements {
         // while the gevent step builds with what it finds in the venv. without
         // it the build backend does not exist. the system package is
         // irrelevant: the venv is isolated.
+        //
+        // it is **bounded**, and that is A-V3-26: what this step owes the venv
+        // is that setuptools *exists*, never that it is the newest one. see
+        // `SETUPTOOLS_REQUIREMENT`.
         self.ops.run_as_user(
             user,
             &pip,
@@ -160,7 +215,7 @@ impl Step for InstallPythonRequirements {
                 "--upgrade",
                 "pip",
                 "wheel",
-                "setuptools",
+                SETUPTOOLS_REQUIREMENT,
             ],
         )?;
 

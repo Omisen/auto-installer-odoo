@@ -120,6 +120,92 @@ jobs:
           if-no-files-found: ignore
 
   # ---------------------------------------------------------------------------
+  # the other three Odoo versions (A-V3-26).
+  #
+  # why it exists: `--version` accepts 16, 17, 18 and 19, the README promises all
+  # four on its first page, and until 2026-08-16 **every** CI config installed
+  # 18.0 — so three of the four were accepted by the parser and executed by
+  # nobody. one of them did not install at all, and the report came from a
+  # customer's machine. it is rule 7 of the multi-distro section applied to
+  # versions: a family nobody runs is a promise, not a feature.
+  #
+  # THE AXIS IS `Odoo version × Python`, not `Odoo version × every image`. Python
+  # comes from the distribution, and it is what the divergence actually rides on:
+  # Odoo pins gevent, greenlet, lxml and the rest **per interpreter version**, so
+  # Odoo 16 on 22.04 (3.10) and on 24.04 (3.12) are two genuinely different
+  # tests, while Odoo 16 on Debian 12 and on Ubuntu 22.04 are nearly the same
+  # one. hence six entries here which, with `native`'s two, make the complete
+  # 4 × 2 grid and no duplicate — instead of the 4 × 6 that would be twenty-four
+  # real installations per push. that is not a budget argument: a CI slow enough
+  # to be worked around stops being evidence.
+  #
+  # 18.0 is deliberately NOT here. it is `native`'s job, which is the reference
+  # cycle and carries the assertions this one does not repeat; duplicating it
+  # would make the same failure appear twice under two names.
+  #
+  # one config file for every version, and the version passed as `--version`:
+  # the CLI beats the `.env` by design, so there is no per-version copy of
+  # `ci.env` to keep in step. `VER_SHORT` inside the script is DERIVED from that
+  # same value and is not a second knob — see the comment there.
+  # ---------------------------------------------------------------------------
+  versions:
+    name: install + rollback (Odoo ${{ matrix.odoo }}, ${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60 # pip compiles gevent: that is the slow part
+    strategy:
+      fail-fast: false # one failing version must not hide the others
+      matrix:
+        os: [ubuntu-22.04, ubuntu-24.04]
+        odoo: ["16.0", "17.0", "19.0"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+
+      - name: Toolchain Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Build release
+        run: cargo build --release --locked
+
+      # same reason as in `native`: the runner's index is as old as the image,
+      # and this moves the network cost out of the installation's clock. the
+      # installer refreshes it by itself since R6-hotfix, so this is redundant
+      # for the product and deliberate for the test environment.
+      - name: Package index refreshed (explicit test environment)
+        run: sudo apt-get update
+
+      # the pair under test, printed before anything runs: when this job fails,
+      # the first question is which interpreter it was — and it is the axis, not
+      # a detail.
+      - name: The pair under test
+        run: |
+          . /etc/os-release && echo "OS: $PRETTY_NAME"
+          echo "System Python: $(python3 --version)"
+          echo "Odoo: ${{ matrix.odoo }}"
+
+      - name: Real installation and verified rollback
+        env:
+          MODE: full
+          ODOO_VERSION: ${{ matrix.odoo }}
+        run: bash scripts/ci/integration-test.sh
+
+      - name: The installer's log, if any
+        if: always()
+        run: sudo cp /var/log/invok.log "installer-odoo${{ matrix.odoo }}-${{ matrix.os }}.log" || true
+
+      - name: Upload the log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installer-log-odoo${{ matrix.odoo }}-${{ matrix.os }}
+          path: installer-*.log
+          if-no-files-found: ignore
+
+  # ---------------------------------------------------------------------------
   # a static binary for the container jobs: it runs on any distribution, so one
   # executable serves every image without compiling Rust inside each. it is also
   # the binary the release recommends to customers, so testing it here means

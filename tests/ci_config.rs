@@ -365,6 +365,52 @@ fn the_newest_tested_releases_match_the_ci_matrix() {
     }
 }
 
+/// every Odoo version the parser accepts is **executed** by a job (A-V3-26).
+///
+/// this is the guard the project did not have, and its absence is the whole
+/// finding: `--version` took 16, 17, 18 and 19, the README promised all four on
+/// its first page, and every CI config installed 18.0 — so three of them were
+/// accepted by the parser and run by nobody, until a customer found that one did
+/// not install at all. rule 7 of the multi-distro section, applied to versions:
+/// *a family nobody runs is a promise, not a feature*.
+///
+/// **neither list is written here.** the accepted versions are discovered by
+/// asking [`config::normalize_version`], which is the authority, and the
+/// executed ones are read from the workflow plus the version `ci.env` installs.
+/// a hand-copied list would be the second source this project keeps being bitten
+/// by — and it would go stale exactly when a fifth version is added, which is
+/// the moment it needs to speak.
+#[test]
+fn every_odoo_version_the_parser_accepts_is_executed_by_a_job() {
+    let wf = std::fs::read_to_string(WORKFLOW).expect("the integration workflow must exist");
+    // the version the reference job installs, from the config it is given, not
+    // from a constant here.
+    let reference = resolve_ci_env().version;
+
+    // ask the parser instead of listing: the range is wide enough to cover any
+    // plausible future release and costs nothing.
+    let accepted: Vec<String> = (10..=40)
+        .filter_map(|n| config::normalize_version(&n.to_string()).ok())
+        .map(|(full, _short)| full)
+        .collect();
+    assert!(
+        accepted.len() >= 2,
+        "the probe found {accepted:?}: it is not reading the parser any more"
+    );
+
+    for version in &accepted {
+        let executed = *version == reference || wf.contains(&format!("\"{version}\""));
+        assert!(
+            executed,
+            "the installer accepts Odoo {version} and no integration job installs it. \
+             either add it to the `versions` matrix, or stop accepting it in \
+             `config::normalize_version` — accepting a version nobody runs is how A-V3-26 \
+             reached a customer. versions executed today: {reference} (reference job) plus \
+             the `versions` matrix."
+        );
+    }
+}
+
 /// the workflow without the lines marked as a non-blocking probe.
 ///
 /// textual, like the rest of this guard: the file is read as it is, without a

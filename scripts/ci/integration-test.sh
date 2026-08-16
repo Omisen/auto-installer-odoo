@@ -52,7 +52,27 @@ DB_NAME="${DB_NAME:-citest}"
 DB_ROLE="${DB_ROLE:-odoo}"
 OS_USER="${OS_USER:-odoo}"
 PORT="${PORT:-8069}"
+
+# which Odoo, and the ONE place that decides it (A-V3-26).
+#
+# empty means "whatever the config file says", which is the historical
+# behaviour and stays byte-identical: no flag is added to the command line.
+# set, it is passed as `--version` — the CLI beats the `.env` by design, so one
+# config file serves every version and a per-version copy of `ci.env` never has
+# to be kept in step with the original.
+#
+# `VER_SHORT` is DERIVED from it and is not an input. it used to be its own
+# variable defaulting to 18, i.e. a second source for the same fact: a caller
+# asking for Odoo 16 and forgetting it would have had the whole script check
+# `odoo18` — the unit, the install dir, the vhost, the config file. that is the
+# shape of A-MD-5 and A-V3-16, in a shell script.
+ODOO_VERSION="${ODOO_VERSION:-}"
+VER_SHORT="${ODOO_VERSION%%.*}"
 VER_SHORT="${VER_SHORT:-18}"
+INSTALL_ARGS=()
+if [ -n "$ODOO_VERSION" ]; then
+  INSTALL_ARGS=(--version "$ODOO_VERSION")
+fi
 
 ODOO_HOME=/opt/odoo
 INSTALL_DIR="$ODOO_HOME/odoo${VER_SHORT}"
@@ -84,6 +104,35 @@ fail()   { echo "  ✖  $*"; FAILURES=$((FAILURES + 1)); FAILED_CHECKS+=("$*"); 
 
 # reads the state file, which is root-owned and 0600.
 state_json() { sudo cat "$STATE" 2>/dev/null || echo '{}'; }
+
+# `state_field <dotted.path>` — one value out of the manifest, or exit 1 when it
+# cannot be read at all (A-V3-27).
+#
+# python3 and not `jq`: the machine under test necessarily HAS python3 — it is
+# installing Odoo — while jq is an extra tool an image may or may not carry.
+# when it did not, `jq -r` printed nothing, the comparison failed, and this
+# script announced "the manifest is NOT marked finished" and "an A-R4-1
+# regression": a check that could not answer, accusing the product instead of
+# admitting it was blind. same shape as the defects it is here to catch.
+#
+# the exit code now separates the three outcomes the caller needs: the value,
+# a value that differs, and no answer at all.
+state_field() {
+  state_json | python3 -c '
+import json, sys
+try:
+    data = json.load(sys.stdin)
+except Exception:
+    sys.exit(1)
+for key in sys.argv[1].split("."):
+    if not isinstance(data, dict) or key not in data:
+        # a missing key is an ANSWER ("not there"), not a failure to read.
+        print("")
+        sys.exit(0)
+    data = data[key]
+print("true" if data is True else "false" if data is False else data)
+' "$1" 2>/dev/null
+}
 
 # `assert <description> <command...>` — true when the command exits zero.
 assert() {
@@ -261,7 +310,7 @@ fi
 # were reached, which packages added. the manifest does NOT serve this: it says
 # what remains, and after a rollback nothing does.
 set +e
-sudo "$BIN" --config "$ENV_FILE" 2>&1 | tee "$WORK/install.out"
+sudo "$BIN" --config "$ENV_FILE" "${INSTALL_ARGS[@]}" 2>&1 | tee "$WORK/install.out"
 INSTALL_RC=${PIPESTATUS[0]}
 set -e
 echo "installation exit code: $INSTALL_RC"
@@ -383,17 +432,27 @@ if [ "$MODE" = "full" ] && [ "$INSTALL_RC" -eq 0 ]; then
   # makes a later uninstall possible; if this fails, the rollback below would
   # have nothing to consume.
   assert "the uninstall manifest stayed on disk" sudo test -f "$STATE"
-  if [ "$(state_json | jq -r '.finished')" = "true" ]; then
-    ok "the manifest is marked 'finished'"
-  else
-    fail "the manifest is NOT marked 'finished': the rollback would read it as an \
+  if finished="$(state_field finished)"; then
+    if [ "$finished" = "true" ]; then
+      ok "the manifest is marked 'finished'"
+    else
+      fail "the manifest is NOT marked 'finished': the rollback would read it as an \
 interrupted installation"
-  fi
-  if [ "$(state_json | jq -r '.config.db_name')" = "$DB_NAME" ]; then
-    ok "the manifest carries the real configuration (db_name=$DB_NAME)"
+    fi
   else
-    fail "the manifest does not carry the real db_name: the rollback would not know what \
-to remove (an A-R4-1 regression)"
+    fail "the manifest could not be read as JSON: this check says nothing about the \
+installation, only that it could not run"
+  fi
+  if db_name="$(state_field config.db_name)"; then
+    if [ "$db_name" = "$DB_NAME" ]; then
+      ok "the manifest carries the real configuration (db_name=$DB_NAME)"
+    else
+      fail "the manifest carries db_name='$db_name' instead of '$DB_NAME': the rollback \
+would not know what to remove (an A-R4-1 regression)"
+    fi
+  else
+    fail "the manifest could not be read as JSON: this check says nothing about the \
+configuration, only that it could not run"
   fi
 
   endgroup

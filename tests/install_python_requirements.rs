@@ -119,7 +119,7 @@ fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
 
     let calls = pip_calls(&ops_of(&log));
     assert!(
-        calls[0].contains(&"setuptools".to_string()),
+        calls[0].iter().any(|a| a.starts_with("setuptools")),
         "the venv bootstrap must install setuptools: {:?}",
         calls[0]
     );
@@ -132,6 +132,62 @@ fn setuptools_is_seeded_in_the_venv_before_the_no_build_isolation_step() {
     assert!(
         no_isolation > 0,
         "setuptools must be seeded before the build without isolation: {calls:?}"
+    );
+}
+
+#[test]
+fn the_venv_setuptools_is_bounded_below_the_release_that_dropped_pkg_resources() {
+    // A-V3-26. setuptools 82.0.0 removed `pkg_resources`, which Odoo 16 imports
+    // bare — so an unbounded `--upgrade setuptools` replaced a working venv
+    // seed with one that makes `initialize-odoo-database` die. observed in the
+    // field on Ubuntu 22.04, where `venv` seeds 59.6.0 and we upgraded it to
+    // 84.
+    //
+    // the assertion is on the **bound**, not on the string: what must not come
+    // back is asking pip for whatever exists today.
+    let cfg = MockConfig {
+        requirements_content: Some(REQUIREMENTS.to_string()),
+        ..Default::default()
+    };
+    let (mock, log) = MockSystemOps::new(cfg);
+    let mut step = InstallPythonRequirements::with_ops(Box::new(mock));
+    let c = ctx();
+
+    step.snapshot(&c).expect("snapshot");
+    step.run(&c).expect("run");
+
+    let calls = pip_calls(&ops_of(&log));
+    let spec = calls[0]
+        .iter()
+        .find(|a| a.starts_with("setuptools"))
+        .unwrap_or_else(|| panic!("no setuptools in the venv bootstrap: {:?}", calls[0]));
+
+    assert_ne!(
+        spec, "setuptools",
+        "setuptools must carry an upper bound, or pip takes whatever PyPI has today \
+         — which since 82.0.0 has no pkg_resources"
+    );
+
+    let bound = spec
+        .strip_prefix("setuptools<")
+        .unwrap_or_else(|| panic!("expected an upper bound on setuptools, got {spec:?}"));
+    let major: u32 = bound
+        .split('.')
+        .next()
+        .and_then(|m| m.parse().ok())
+        .unwrap_or_else(|| panic!("unreadable setuptools bound: {bound:?}"));
+    // two thresholds, asserted apart because they fail differently and a single
+    // message would send the reader to the wrong one.
+    assert!(
+        major <= 82,
+        "setuptools 82 removed pkg_resources: above this bound Odoo 16 dies at \
+         initialize-odoo-database, which is the defect itself; got {spec:?}"
+    );
+    assert!(
+        major <= 81,
+        "setuptools 81 keeps pkg_resources but warns on every import — twice per Odoo 16 \
+         start, in a branch that does not filter it and on a machine where nobody can \
+         turn it off; got {spec:?}"
     );
 }
 
