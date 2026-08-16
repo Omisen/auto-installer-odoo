@@ -15,7 +15,7 @@ use common::{ops_of, MockConfig, MockSystemOps, Op};
 use invok::context::Context;
 use invok::state::PreState;
 use invok::step::Step;
-use invok::steps::prepare_opt_root::{OptRootSnapshot, PrepareOptRoot};
+use invok::steps::prepare_opt_root::{held_mode_notice, OptRootSnapshot, PrepareOptRoot};
 
 /// a minimal context: the step needs the home, the user and the dry-run flag.
 fn ctx(home: PathBuf, dry_run: bool) -> Context {
@@ -667,5 +667,97 @@ fn only_the_unnamed_instance_left_means_the_widening_comes_off() {
     assert!(
         shared.exists(),
         "and the directory stays: somebody is still installed on it"
+    );
+}
+
+// --- the bit that outlives its instance is accepted, but not silent ----------
+
+/// **A-V6-11-bis**: when the traversal bit is kept on purpose, the undo says so.
+///
+/// the residue itself is a decision, not a defect: closing it would mean a
+/// refcount on a permission, for one *traversal* bit on a directory whose
+/// contents stay `0750`. what was wrong is that the skipped restoration said
+/// **nothing at all** — the customer removed an instance, saw `/opt/odoo` at
+/// `0751`, and had no way to tell our artifact from their own configuration.
+///
+/// asserted on the returned text and not on a captured log, for the reason
+/// A-R9-1 taught: when the value of a message is its wording, checking that
+/// something happened checks nothing.
+#[test]
+fn a_traversal_bit_kept_on_purpose_says_so_and_names_who_needs_it() {
+    let notice = held_mode_notice(Some(0o750), &["beta".to_string(), "gamma".to_string()])
+        .expect("a widened root with named neighbours must be accounted for");
+
+    assert!(
+        notice.contains("751") && notice.contains("750"),
+        "both modes must appear, or the reader cannot tell what is held from what is owed: \
+         {notice}"
+    );
+    assert!(
+        notice.contains("beta") && notice.contains("gamma"),
+        "naming who still needs it is the difference between an explanation and an excuse: \
+         {notice}"
+    );
+    assert!(
+        notice.contains("restored when the last"),
+        "the reader must learn the bit is not permanent: {notice}"
+    );
+}
+
+/// and it stays quiet in the two cases where that sentence would be false.
+///
+/// nothing widened by us — there is no bit of ours to hold; and neighbours that
+/// are only the **unnamed** instance, which owns the root and never needed the
+/// bit, so it is not what keeps it (`A-V6-9`'s distinction, the one that
+/// A-R8-1 was repeated over).
+#[test]
+fn nothing_is_announced_when_there_is_nothing_being_held() {
+    assert!(
+        held_mode_notice(None, &["beta".to_string()]).is_none(),
+        "we widened nothing: there is no bit of ours to account for"
+    );
+    assert!(
+        held_mode_notice(Some(0o750), &[]).is_none(),
+        "nobody else is here at all"
+    );
+    assert!(
+        held_mode_notice(Some(0o750), &[invok::instance::UNNAMED_ID.to_string()]).is_none(),
+        "the unnamed instance owns the root and walks in as itself: claiming it keeps the bit \
+         would be the very confusion A-V6-9 was corrected for"
+    );
+}
+
+/// and the notice is **reached** from the undo.
+///
+/// the pure tests above prove the sentence is right; they cannot prove anybody
+/// says it. mutation showed exactly that: deleting the call from `undo` left
+/// every one of them green — which is the objection this project raises against
+/// its own diagnostics, *a correct message nobody invokes is indistinguishable
+/// from an absent one* (A-MD-7, A-R9-1), turned on the test that was supposed to
+/// guard it.
+///
+/// structural because there is nothing else to read: the notice goes to
+/// `tracing`, and this suite captures no logs. It is the pair R9 prescribes —
+/// the grep sees the shape of the code, the tests above see the value it
+/// produces — and neither alone would have caught the mutation.
+#[test]
+fn the_undo_actually_announces_the_bit_it_keeps() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/steps/prepare_opt_root.rs"),
+    )
+    .expect("src/steps/prepare_opt_root.rs must be readable");
+
+    let undo = source
+        .split_once("fn undo(&self, ctx: &Context)")
+        .expect("the step must still have an undo")
+        .1;
+    // up to the next method: enough to be sure the call is on this path and not
+    // somewhere else in the file.
+    let body = undo.split_once("\n    fn ").map(|(b, _)| b).unwrap_or(undo);
+
+    assert!(
+        body.contains("announce_mode_held"),
+        "the undo no longer accounts for a traversal bit it keeps: the customer is left with a \
+         0751 they cannot attribute. undo body was:\n{body}"
     );
 }

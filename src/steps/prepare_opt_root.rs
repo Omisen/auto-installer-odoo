@@ -66,6 +66,31 @@
 //! `o+x` and not `o+rx` because traversal is all that is needed: the contents
 //! stay unlistable to third parties, and each instance's own home keeps its
 //! `0750`.
+//!
+//! ## the bit can outlive the instance that set it, and that is **accepted**
+//!
+//! the annotation lives in the manifest of whoever widened. with **two** named
+//! instances, if the widener leaves first the bit has to stay — the other one
+//! still walks through it — and when that other one leaves, its own manifest
+//! has no mode to put back, because it found the root already traversable.
+//!
+//! **the record is not lost, though**, and the audit used to say otherwise: an
+//! undo that declines to restore keeps its step in the manifest, so the widener
+//! departs as a *tombstone* still carrying `shared_root_mode_before`. It is
+//! `rollback --all` that comes back for tombstones, and there the mode does go
+//! back. What remains is the narrower case: named instances removed one at a
+//! time on a machine that keeps the historical one.
+//!
+//! closing even that would mean a **refcount on a permission** — machinery with
+//! its own ambiguities (two tombstones recording different modes: which wins?)
+//! for a residue that is one *traversal* bit on a directory whose contents stay
+//! `0750`. Nothing is exposed by it: you cannot list, and you cannot read what
+//! you had no right to. So it is accepted.
+//!
+//! accepted, **not silent**. Until A-V6-11-bis the skipped restoration said
+//! nothing at all, which is the part that was actually wrong: the customer saw
+//! `0751` and had no way to tell our artifact from their own configuration. See
+//! [`PrepareOptRoot::announce_mode_held`].
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
@@ -91,6 +116,38 @@ const HANDED_OVER_MODE: u32 = 0o750;
 /// the one bit a named instance needs on the shared root: **traverse**, not
 /// list (`A-V6-9`).
 const TRAVERSE_BY_OTHERS: u32 = 0o001;
+
+/// what to say when the traversal bit is **kept on purpose**, or `None` when
+/// there is nothing to say.
+///
+/// pure and returning the text, for the reason A-R9-1 taught: when a check's
+/// value is in its **wording**, asserting its outcome asserts nothing — and a
+/// message only reachable by capturing logs is a message no test looks at. same
+/// shape as [`crate::checks::untested_release_warning`].
+///
+/// `None` in the two cases where the sentence would be false: we widened
+/// nothing, so there is no bit of ours to hold; or the only neighbours left are
+/// unnamed, and the unnamed instance **owns** the root — it never needed the
+/// bit, so it is not what is keeping it (`A-V6-9`).
+pub fn held_mode_notice(before: Option<u32>, others: &[String]) -> Option<String> {
+    let before = before?;
+    let traversers: Vec<&str> = others
+        .iter()
+        .map(String::as_str)
+        .filter(|name| *name != crate::instance::UNNAMED_ID)
+        .collect();
+    if traversers.is_empty() {
+        return None;
+    }
+    Some(format!(
+        "the shared root keeps its traversal bit ({:o} instead of {:o}): the named instances {} \
+         still have to walk through it to reach their own homes. the mode to put back stays \
+         recorded in this manifest and is restored when the last of them is removed.",
+        before | TRAVERSE_BY_OTHERS,
+        before,
+        traversers.join(", ")
+    ))
+}
 
 /// what this step created, level by level.
 #[derive(Debug, Default, Clone, PartialEq, Serialize, Deserialize)]
@@ -289,6 +346,27 @@ impl PrepareOptRoot {
     /// puts the shared root's mode back — only what we changed, and only if it
     /// is still what we left.
     ///
+    /// says that the widened bit is being **kept on purpose**, and why.
+    ///
+    /// the other branch of [`Self::restore_shared_root_mode`], and until
+    /// A-V6-11-bis it did not exist: with another **named** instance still
+    /// needing to walk in, the restoration was skipped in complete silence. the
+    /// customer removed an instance, found `/opt/odoo` at `0751`, and nothing
+    /// anywhere said whether that was ours, theirs, or a mistake — while the
+    /// mode we would put back was sitting in this very snapshot.
+    ///
+    /// the residue itself is accepted, not fixed (see the module docs): what is
+    /// not acceptable is an artifact of ours that no message accounts for. this
+    /// is the same reasoning as A-MD-2 — the *verdict* was wrong there, the
+    /// *silence* is wrong here.
+    fn announce_mode_held(&self, ctx: &Context) {
+        if let Some(notice) =
+            held_mode_notice(self.snap.shared_root_mode_before, &ctx.other_instances)
+        {
+            info!(dir = %ctx.odoo_home.display(), "{notice}");
+        }
+    }
+
     /// never fails the rollback: like every undo it is best-effort, and a mode
     /// left wide is a residue, not a loss.
     fn restore_shared_root_mode(&self, ctx: &Context) {
@@ -466,7 +544,9 @@ impl Step for PrepareOptRoot {
         // which is NOT the same question as "is anybody else installed". a
         // machine left with only the historical instance gets its `0750` back:
         // that instance owns the root and never needed the bit.
-        if !ctx.shared_root_traversed_by_others() {
+        if ctx.shared_root_traversed_by_others() {
+            self.announce_mode_held(ctx);
+        } else {
             self.restore_shared_root_mode(ctx);
         }
         if ctx.shared_in_use() {
