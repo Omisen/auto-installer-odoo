@@ -179,6 +179,22 @@ fn run_install(cli: &Cli) -> Result<()> {
         );
     }
 
+    // who else is installed here (A-V6-10). the same discovery the port check
+    // just used, so nothing is read twice and the two cannot disagree.
+    //
+    // it reaches the **in-process rollback**: the one that runs when an
+    // installation fails halfway. an instance that created the shared artifacts,
+    // was interrupted, and is resumed after a second instance appeared still
+    // holds a truthful `CreatedByUs` on `/opt/odoo`, the packages and the
+    // cluster — and without this would remove them from under the other one.
+    //
+    // it does **not** reach the installation: `shared_in_use` and
+    // `shared_root_traversed_by_others` are read inside `undo` only, in
+    // `prepare-opt-root` and `nginx-install`. a test holds that line, because a
+    // context field that quietly started steering `run` would be a different
+    // change wearing this one's clothes.
+    ctx.other_instances = discovery.live_others(&chosen_id);
+
     let port_is_ours = matches!(&start, Start::Resume(state) if state.owns_the_http_port());
     run_environment_checks(&ctx, port_is_ours, &make_ops)?;
     ctx.os_info = Some(os_info);

@@ -234,6 +234,34 @@ impl Installer {
 
     /// undoes the given steps in **reverse order** (invariant 2), best-effort
     /// (invariant 3), reporting to `reporter`.
+    ///
+    /// # the shared-artifact rule applies here too (A-V6-10)
+    ///
+    /// this is the rollback that runs when an installation fails **halfway**,
+    /// and until now it undid every completed step regardless of who else lives
+    /// on this machine. usually harmless: an instance added to a machine that
+    /// already has one finds every shared artifact `Preexisting`, so those undos
+    /// are no-ops and the `PreState` protects on its own.
+    ///
+    /// the scenario it did not cover is narrow and real. an instance that
+    /// **created** the shared artifacts is interrupted; a second instance is
+    /// installed; the first is then resumed and that attempt fails. there the
+    /// `PreState` still says `CreatedByUs` — truthfully — and this rollback
+    /// would take `/opt/odoo`, the packages and the cluster away from an
+    /// instance that is running.
+    ///
+    /// the rule is [`crate::steps::artifact_scope`], the same one
+    /// [`crate::rollback::rollback_from_state_sharing_with`] applies, and it
+    /// must be: two rollbacks with different opinions about what is safe to
+    /// remove would be a difference nobody can see until it costs a customer.
+    ///
+    /// **the list comes from the `Context`, not from a parameter of its own.**
+    /// The engine still does not read manifests — that is `main`'s job, as with
+    /// `state_path` — but taking it from `ctx.other_instances` means the driver's
+    /// decision (*whether to call the undo*) and the step's (*what to skip
+    /// inside*, via `Context::shared_in_use`) cannot disagree. The disk rollback
+    /// takes both and documents that the caller must keep them in step; here
+    /// there is nothing to keep in step.
     pub fn rollback_with_reporter(
         &mut self,
         steps: &[Box<dyn Step>],
@@ -249,12 +277,41 @@ impl Installer {
             "rollback in progress (reverse order)"
         );
         reporter.rollback_start(completed.len());
+        let others = &ctx.other_instances;
         for &idx in completed.iter().rev() {
             let step = &steps[idx];
             let name = step.name();
             reporter.undo_start(name);
+
+            // `unnamed` decides two of the scopes, and it is read from the same
+            // context the undos act through.
+            let scope = crate::steps::artifact_scope(name, ctx.instance.is_none());
+            if !others.is_empty() && scope == crate::steps::ArtifactScope::Shared {
+                info!(
+                    step = %name,
+                    in_use_by = ?others,
+                    "undo NOT run: it removes artifacts other instances are still using"
+                );
+                // the record stays: what it describes is still on the system,
+                // and the last instance to leave needs it to know the artifact
+                // is its to remove (A-R8-1 — the manifest says what is *still*
+                // there, not what was done).
+                reporter.undo_done(name);
+                continue;
+            }
+
             info!(step = %name, "undo");
             match step.undo(ctx) {
+                // a mixed step did its own half and left the shared one, so the
+                // record still describes something that exists: keep it, for
+                // the same reason as above.
+                Ok(()) if !others.is_empty() && scope == crate::steps::ArtifactScope::Mixed => {
+                    info!(
+                        step = %name,
+                        in_use_by = ?others,
+                        "undo did this instance's half only: the shared artifacts stay"
+                    );
+                }
                 // undone: the artifact is gone, and the manifest must stop
                 // saying otherwise (A-R8-1).
                 Ok(()) => self.state.forget(name),

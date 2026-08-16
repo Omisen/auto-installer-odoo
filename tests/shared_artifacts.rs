@@ -25,6 +25,7 @@ use invok::rollback::{self, RollbackReport, UndoOutcome};
 use invok::secret::Secret;
 use invok::state::{InstallConfig, InstallState, StepRecord};
 use invok::step::Step;
+use invok::steps::noop::NoopStep;
 use invok::steps::{self, ArtifactScope};
 use invok::system_ops::SystemOps;
 
@@ -372,6 +373,209 @@ fn with_another_instance_installed_the_shared_artifacts_survive() {
         !report.is_clean(),
         "something this manifest describes is still on the machine, so the manifest is kept"
     );
+}
+
+// --- 3. the same rule when an installation fails halfway (A-V6-10) ----------
+
+/// installs `names`, then fails on one more step, and returns what the model
+/// looks like afterwards.
+///
+/// the assertion on **which** step failed is not decoration: the first version
+/// of these tests used `expect_err` alone and was silently failing at step one,
+/// on a `prepare-opt-root` that reaches the real filesystem. a test that cannot
+/// tell the failure it wants from the failure it gets is not testing anything.
+fn install_then_fail(model: &SystemModel, names: &[&str], ctx: &Context) {
+    let mut steps_v = chain(model, names);
+    steps_v.push(Box::new(NoopStep::new("boom").fail_on_run()));
+    let mut installer = Installer::new();
+    let err = installer
+        .execute(&mut steps_v, ctx)
+        .expect_err("the chain must fail");
+    assert!(
+        err.to_string().contains("boom"),
+        "the chain had to reach the last step and fail there; it failed earlier: {err}"
+    );
+}
+
+/// **A-V6-10**: the rollback that runs when an installation fails *halfway*
+/// obeys the same rule.
+///
+/// the scenario is narrow and it is the only one that reaches this code: an
+/// instance **creates** the shared artifacts, is interrupted, a second instance
+/// is installed, and the first is then resumed and fails. every other case is
+/// already covered by the `PreState` — a latecomer finds those artifacts
+/// `Preexisting` and its undos are no-ops. here `CreatedByUs` is *true*, and
+/// truthful, which is exactly why the flag alone protects nothing.
+///
+/// exercised through `execute`, not by calling the rollback directly: a correct
+/// rollback nobody reaches is indistinguishable from an absent one.
+#[test]
+fn a_failure_halfway_leaves_the_other_instance_its_shared_artifacts() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let model = SystemModel::new(fresh_state());
+    let mut ctx = ctx_for(Some("cliente-x"), dir.path().join("state.json"));
+    // the second instance is already installed and running.
+    ctx.other_instances = vec!["default".to_string()];
+
+    install_then_fail(&model, CHAIN, &ctx);
+    let after = model.snapshot();
+
+    // its own artifacts are gone: a failed installation still cleans up.
+    assert!(
+        !after.pg_dbs.contains("odoo-cliente-x"),
+        "the failed instance's own database must go: {:?}",
+        after.pg_dbs
+    );
+    assert!(
+        !after.users.contains("odoo-cliente-x"),
+        "and so must its system user"
+    );
+
+    // what the other instance runs on does not move.
+    assert!(
+        after.svc_enabled.contains("postgresql"),
+        "stopping PostgreSQL would take the running instance's database away"
+    );
+    assert!(
+        after.paths.contains(&PathBuf::from(HOME)),
+        "/opt/odoo is where the other instance lives"
+    );
+
+    // and the manifest goes on naming what is still there, or the last instance
+    // to leave will not know the shared artifacts are its to remove (A-R8-1).
+    assert!(
+        ctx.state_path.exists(),
+        "the manifest is the only record of what was left behind"
+    );
+    let left = InstallState::load(&ctx.state_path).expect("the manifest must be readable");
+    let names: Vec<&str> = left.completed.iter().map(|r| r.name.as_str()).collect();
+    assert!(
+        names.contains(&"setup-postgres"),
+        "a step whose undo was held back must stay recorded: {names:?}"
+    );
+    assert!(
+        !names.contains(&"create-database"),
+        "an artifact really removed must stop being listed: {names:?}"
+    );
+}
+
+/// the control for the one above, and it is what makes it a test: alone on the
+/// machine, the same failure undoes **everything**.
+#[test]
+fn a_failure_halfway_with_nobody_else_here_undoes_everything() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let model = SystemModel::new(fresh_state());
+    let ctx = ctx_for(Some("cliente-x"), dir.path().join("state.json"));
+    assert!(ctx.other_instances.is_empty(), "the default is to be alone");
+
+    install_then_fail(&model, CHAIN, &ctx);
+    let after = model.snapshot();
+
+    assert!(
+        !after.svc_enabled.contains("postgresql"),
+        "with nobody else here PostgreSQL is ours to stop"
+    );
+    assert!(
+        !after.pg_dbs.contains("odoo-cliente-x"),
+        "and the database goes as it always did"
+    );
+    // nothing left on the system, so nothing left in the manifest either.
+    //
+    // the file and not `load`: on a missing path `load` deliberately answers
+    // with an empty state, so asking it could not have failed.
+    assert!(
+        !ctx.state_path.exists(),
+        "with no leftover the manifest must be removed, not left describing zero artifacts"
+    );
+}
+
+/// and the **mixed** step, which `CHAIN` does not contain.
+///
+/// found by mutation, not by reading: turning the `Mixed` arm into dead code
+/// left every other test green. `nginx-install` owns two things at once — the
+/// nginx installation, which the neighbour proxies through, and the realigning
+/// reload, which must happen whatever else does (A1.4). So its undo **is** run,
+/// does its own half, and what must not happen is what the surviving mutation
+/// did: count that as fully undone and drop the record, leaving the last
+/// instance on the machine unaware that nginx is still there and still recorded
+/// as ours.
+#[test]
+fn a_mixed_step_does_its_own_half_and_stays_in_the_manifest() {
+    assert_eq!(
+        steps::artifact_scope("nginx-install", /* unnamed */ false),
+        ArtifactScope::Mixed,
+        "this test is about the mixed arm: if the scope moved, it tests nothing"
+    );
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let mut initial = fresh_state();
+    initial.svc_active.insert("nginx".to_string());
+    let model = SystemModel::new(initial);
+    let mut ctx = ctx_for(Some("cliente-x"), dir.path().join("state.json"));
+    ctx.with_nginx = true;
+    ctx.other_instances = vec!["default".to_string()];
+
+    install_then_fail(&model, &["nginx-install"], &ctx);
+    let after = model.snapshot();
+
+    assert!(
+        after.packages.contains("nginx"),
+        "nginx serves the other instance too: purging it would take that instance offline"
+    );
+    assert!(
+        after.svc_active.contains("nginx"),
+        "and it must be left running, for the same reason"
+    );
+    assert_eq!(
+        after.nginx_loaded_sites,
+        Some(std::collections::HashSet::new()),
+        "the reload is the half that must happen anyway: otherwise nginx goes on serving a \
+         vhost whose files the rollback has just removed"
+    );
+
+    let left = InstallState::load(&ctx.state_path).expect("the manifest must be readable");
+    let names: Vec<&str> = left.completed.iter().map(|r| r.name.as_str()).collect();
+    assert!(
+        names.contains(&"nginx-install"),
+        "half undone is not undone: the record must stay, or nobody will know nginx is \
+         still installed and recorded as ours: {names:?}"
+    );
+}
+
+/// the other instances reach the **rollback** and nothing else.
+///
+/// `Context::other_instances` is read by `shared_in_use` and
+/// `shared_root_traversed_by_others`, and both live inside `undo`. a field that
+/// quietly began steering `run` would be a different change wearing this one's
+/// clothes — an installation that behaves one way alone and another way with a
+/// neighbour, which is the hardest kind of difference to notice. compares the
+/// modelled system after two installations differing in that field only.
+#[test]
+fn the_other_instances_do_not_change_what_an_installation_does() {
+    let install_with = |others: Vec<String>| {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let model = SystemModel::new(fresh_state());
+        let mut ctx = ctx_for(Some("cliente-x"), dir.path().join("state.json"));
+        ctx.other_instances = others;
+        let _ = install(&model, CHAIN, &ctx);
+        model.snapshot()
+    };
+
+    let alone = install_with(vec![]);
+    let with_neighbour = install_with(vec!["default".to_string()]);
+
+    assert_eq!(
+        alone.packages, with_neighbour.packages,
+        "the packages installed must not depend on who else is here"
+    );
+    assert_eq!(alone.users, with_neighbour.users, "nor the users created");
+    assert_eq!(alone.pg_dbs, with_neighbour.pg_dbs, "nor the databases");
+    assert_eq!(alone.pg_roles, with_neighbour.pg_roles, "nor the roles");
+    assert_eq!(
+        alone.svc_enabled, with_neighbour.svc_enabled,
+        "nor the services enabled"
+    );
+    assert_eq!(alone.paths, with_neighbour.paths, "nor the directories");
 }
 
 /// the control, and it is not a formality: without it the test above would pass
