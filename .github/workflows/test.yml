@@ -57,6 +57,25 @@ jobs:
       - name: Release build (checks the binary compiles)
         run: cargo build --release --locked
 
+      # the crate is on crates.io, so **docs.rs publishes this documentation at
+      # every release whether we look after it or not** — and a broken intra-doc
+      # link is a page that sends a reader nowhere.
+      #
+      # this is deliberately the cheap half of the docs.rs question. It keeps the
+      # published page from being *wrong*; it does not adopt docs.rs as a
+      # documentation channel, which would mean a third place describing the same
+      # invariants next to the wiki, with no CI able to tell when they diverge
+      # (A-V3-20: documentation is the one part of this project that ages without
+      # producing a red).
+      #
+      # it belongs to the FAST workflow because it costs seconds and catches the
+      # mistake at the moment it is written — the alternative is finding it on a
+      # published page, where it is already in front of whoever it misleads.
+      - name: Documentation (intra-doc links must resolve)
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --no-deps --lib --locked
+
       # the CI scripts read the installer's log format, and a pattern that does
       # not match is not an error: it is zero results, which in a cleanliness
       # check looks like a passing verification. a second here; a whole round in

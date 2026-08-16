@@ -90,7 +90,7 @@
 //! accepted, **not silent**. Until A-V6-11-bis the skipped restoration said
 //! nothing at all, which is the part that was actually wrong: the customer saw
 //! `0751` and had no way to tell our artifact from their own configuration. See
-//! [`PrepareOptRoot::announce_mode_held`].
+//! `PrepareOptRoot::announce_mode_held` (private to this module).
 
 use std::fs;
 use std::os::unix::fs::PermissionsExt;

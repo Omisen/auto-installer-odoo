@@ -10,7 +10,7 @@
 //! — lives in [`crate::rollback`] under the same contract.
 //!
 //! progress is reported through the
-//! [`ProgressReporter`](crate::progress::ProgressReporter) abstraction: the
+//! [`crate::progress::ProgressReporter`] abstraction: the
 //! engine does **not** depend on `indicatif`. `execute`/`rollback` delegate to
 //! a [`NoopReporter`]; the `*_with_reporter` variants take the observer.
 

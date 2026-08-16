@@ -1,13 +1,25 @@
 //! Invok — a reversible Odoo installer.
 //!
+//! **Looking for how to install Odoo?** This is the engine, not the guide: the
+//! program is `invok`, and the commands to get it and run it are in the
+//! [README](https://github.com/Omisen/invok#readme). The full technical
+//! documentation — engine, step-by-step reference, rollback model,
+//! multi-distribution support — is in the
+//! [wiki](https://github.com/Omisen/invok/wiki).
+//!
 //! this library holds the **engine**: the [`step::Step`] trait, the
 //! [`state::PreState`] pattern, the [`context::Context`] and the
 //! [`engine::Installer`] orchestrator (execute + rollback) with state persisted
 //! to disk. the real system steps live in [`steps`] and plug in without the
 //! engine changing.
 //!
-//! the invariants are described in `CLAUDE.md` and in the doc comments of
-//! [`step::Step`] and [`engine::Installer`].
+//! the invariants are described in the doc comments of [`step::Step`] and
+//! [`engine::Installer`], and at greater length in the
+//! [wiki](https://github.com/Omisen/invok/wiki).
+//!
+//! it is published as a library because the binary and the tests share it, not
+//! because it is meant to be depended on: the API carries no stability promise
+//! across releases.
 
 /// version of **this installer**, from the cargo manifest.
 ///

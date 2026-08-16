@@ -348,7 +348,7 @@ pub enum ArtifactScope {
     /// instance installed it is **not run at all**.
     Shared,
     /// the undo does both, so it is still run and the step itself leaves the
-    /// shared half alone, reading [`Context::shared_in_use`].
+    /// shared half alone, reading [`crate::context::Context::shared_in_use`].
     ///
     /// two steps only, and each for a reason worth knowing:
     /// - `prepare-opt-root` owns the shared root **and** this instance's own

@@ -75,7 +75,7 @@ pub struct Cli {
     pub db_name: Option<String>,
 
     /// install directory; must live under /opt/odoo, and defaults to
-    /// /opt/odoo/odoo<version>.
+    /// `/opt/odoo/odoo<version>`.
     #[arg(long, value_name = "DIR")]
     pub install_dir: Option<PathBuf>,
 

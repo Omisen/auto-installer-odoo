@@ -126,7 +126,7 @@ const PIN_BOOKWORM: &str = "98ba0d157b50d36f23bd0dedf4c0aa28c7b0c50fcdcdc54aa5b6
 /// the expected SHA-256 checksums, **keyed by package suffix**.
 ///
 /// the key is the suffix of the package we download, **not** the user's OS
-/// codename: [`map_codename`] translates one into the other.
+/// codename: `map_codename` translates one into the other.
 ///
 /// # the nature of the guarantee: TOFU pinning
 ///

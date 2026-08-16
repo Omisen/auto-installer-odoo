@@ -67,7 +67,7 @@
 //! `venv` seeds setuptools 59.6.0, `pkg_resources` included — replaced it with
 //! one missing the module, and Odoo 16 died on the first line of its own code
 //! that ever ran. "newest" was never the requirement: *present* was. see
-//! [`SETUPTOOLS_REQUIREMENT`].
+//! `SETUPTOOLS_REQUIREMENT` (private to this module).
 //!
 //! and the same trap sits one version lower: 81 keeps the module but warns on
 //! every import, twice per Odoo 16 start, in a branch that cannot filter it. a
@@ -368,7 +368,7 @@ pub fn filter_out_gevent_stack(requirements: &str) -> String {
 ///
 /// # why it used to say nothing, and what changed
 ///
-/// the first version spoke **only** above [`NEWEST_TESTED_PYTHON`], on the
+/// the first version spoke **only** above [`crate::checks::NEWEST_TESTED_PYTHON`], on the
 /// stated ground that "on a covered Python the cause is something else, and a
 /// wrong diagnosis is worse than none". the field falsified the premise: Odoo 16
 /// on Fedora builds its venv on Python **3.13** — *equal* to the constant, so
