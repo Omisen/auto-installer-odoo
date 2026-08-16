@@ -758,16 +758,23 @@ jobs:
       - name: The moved PGDATA is refused before a cluster is created
         if: matrix.pgdata_conflict == 'yes'
         run: |
+          # NOT into the workspace: `/work` is this same directory bind-mounted
+          # into the container, and an earlier step `chown -R tester` it — so the
+          # runner cannot write here any more. The redirect failed before the
+          # installer even ran, and the step died reporting nothing about its own
+          # subject. `$RUNNER_TEMP` belongs to the runner and to nobody else.
+          log="$RUNNER_TEMP/refuse.log"
+
           # `set +e` around it, exactly as the pre-existing-user job does: the
           # default shell runs with `-e`, so a refusal — which is the expected
           # outcome here — would abort the step before its own exit code could
           # be read.
           set +e
           docker exec -u tester -w /work fedora-test \
-            sudo -n ./bin/invok --config configs/ci.env > refuse.log 2>&1
+            sudo -n ./bin/invok --config configs/ci.env > "$log" 2>&1
           rc=$?
           set -e
-          echo "exit code: $rc"; cat refuse.log
+          echo "exit code: $rc"; cat "$log"
 
           [ "$rc" -ne 0 ] || { echo "::error::the installation should have been refused"; exit 1; }
 
@@ -775,11 +782,11 @@ jobs:
           # lesson of A-R9-1: when a check's value is in its *why*, a non-zero
           # exit proves nothing — this run could have failed for any of a dozen
           # other reasons and looked identical.
-          grep -q "/srv/pgdata" refuse.log \
+          grep -q "/srv/pgdata" "$log" \
             || { echo "::error::the message does not name the PGDATA this machine declares"; exit 1; }
-          grep -q "/var/lib/pgsql/data" refuse.log \
+          grep -q "/var/lib/pgsql/data" "$log" \
             || { echo "::error::the message does not name the one we know how to remove"; exit 1; }
-          grep -q "postgresql.service" refuse.log \
+          grep -q "postgresql.service" "$log" \
             || { echo "::error::the message does not say where the drop-in is to be removed"; exit 1; }
 
           # and it must have stopped BEFORE the cluster: this is a precondition,
@@ -806,18 +813,37 @@ jobs:
                 ODOO_VERSION='${{ matrix.odoo }}' \
             bash scripts/ci/integration-test.sh
 
+      # into `$RUNNER_TEMP`, and NOT into the workspace: `/work` is this directory
+      # bind-mounted into the container, and the step that hands it to `tester`
+      # chowns it — after which the runner cannot write here at all.
+      #
+      # this had been silently true for every Fedora job: the copy went to an
+      # unwritable path, `2>/dev/null || true` swallowed the error, and
+      # `if-no-files-found: ignore` swallowed the absence. So the whole family's
+      # post-mortem artifact has never contained anything, and the two layers of
+      # politeness are exactly what kept it invisible — R18's lesson, where a
+      # failing job did not print `install.log` and the diagnosis became a guess
+      # instead of a reading.
+      #
+      # a missing log is still not a failure (a job may legitimately never have
+      # produced one), but it is now **said**.
       - name: The installer's log, if any
         if: always()
         run: |
-          tag="$(echo '${{ matrix.image }}' | tr ':' '-')"
-          docker cp "fedora-test:/var/log/invok.log" "installer-$tag.log" 2>/dev/null || true
+          tag="$(echo '${{ matrix.image }}-${{ matrix.scenario }}' | tr ':' '-')"
+          dest="$RUNNER_TEMP/installer-$tag.log"
+          if docker cp "fedora-test:/var/log/invok.log" "$dest"; then
+            echo "installer log saved: $(wc -l < "$dest") lines"
+          else
+            echo "::warning::no installer log could be copied out of the container"
+          fi
 
       - name: Upload the log
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: installer-log-fedora-${{ matrix.scenario }}
-          path: installer-*.log
+          path: ${{ runner.temp }}/installer-*.log
           if-no-files-found: ignore
 
       - name: Stop the container
