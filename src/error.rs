@@ -54,15 +54,20 @@ pub enum StepError {
     #[error("precondition violated: {0}")]
     Precondition(String),
 
-    /// the gevent build failed on an interpreter newer than Odoo's pins
-    /// (A-MD-7).
+    /// the gevent build failed, whatever the interpreter (A-MD-7, A-V3-28).
     ///
     /// its own message cannot diagnose it: the reader sees three hundred lines
     /// of `gcc` about `_PyLong_AsByteArray`, and "this Odoo version has no pin
     /// for this Python" appears nowhere. the diagnosis precedes the original
     /// error, which is kept in full — explaining is not hiding the evidence.
+    ///
+    /// it was called `PythonTooNew` until A-V3-28, and the name was the bug in
+    /// miniature: it fired **only** above `NEWEST_TESTED_PYTHON`, so Odoo 16 on
+    /// Fedora — Python 3.13, exactly the tested one, and a gevent pin that
+    /// predates it — got the three hundred lines and nothing else. "too new for
+    /// us" and "not covered by *this* Odoo's pins" are different questions.
     #[error("{diagnosis}\n\n--- original error ---\n{original}")]
-    PythonTooNew { diagnosis: String, original: String },
+    GeventBuildFailed { diagnosis: String, original: String },
 }
 
 impl StepError {

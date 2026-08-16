@@ -355,49 +355,99 @@ pub fn filter_out_gevent_stack(requirements: &str) -> String {
     out
 }
 
-/// prepends the likely cause to a failed gevent build (A-MD-7).
+/// prepends what is known to a failed gevent build (A-MD-7, corrected by
+/// A-V3-28).
 ///
 /// "does Odoo pin a gevent for this Python?" **cannot be answered from the
 /// requirements file**: the markers are open upwards, so the applicable line
 /// *is* applicable and pip picks it correctly. that its wheel is missing for
 /// this interpreter is a fact about PyPI, not about the file — pretending to
 /// derive it from the lines would be a check answering a different question
-/// from the one it appears to ask.
+/// from the one it appears to ask. so nothing is prevented: it is **explained**,
+/// when the failure actually happens.
 ///
-/// so nothing is prevented: it is **explained**, when the failure actually
-/// happens. on a covered Python the error passes through untouched, because
-/// there the cause is something else and a wrong diagnosis is worse than none.
-/// an unknown version behaves like a covered one.
+/// # why it used to say nothing, and what changed
+///
+/// the first version spoke **only** above [`NEWEST_TESTED_PYTHON`], on the
+/// stated ground that "on a covered Python the cause is something else, and a
+/// wrong diagnosis is worse than none". the field falsified the premise: Odoo 16
+/// on Fedora builds its venv on Python **3.13** — *equal* to the constant, so
+/// covered by it — and dies on `_PyLong_AsByteArray`, because Odoo 16's newest
+/// gevent line is `>= '3.12'` and pins 24.2.1, which has no cp313 wheel. The
+/// case the message was written for, and the one it stayed silent on, were the
+/// same case.
+///
+/// the flaw was the *question*: "is this Python newer than the ones we test?" is
+/// about **us**, while what breaks the build is "does **this Odoo** pin a wheel
+/// for **this** interpreter?" — which varies per version, and the version is not
+/// an input of that constant.
+///
+/// # two registers, and the difference is not stylistic
+///
+/// - above the tested Python we **assert**: we know that combination fails, and
+///   why;
+/// - otherwise we **state facts** — the interpreter the venv is on, and the
+///   lines this Odoo declares — and let the reader conclude.
+///
+/// facts cannot be wrong. that is what keeps the original objection satisfied:
+/// if gevent failed for a missing compiler instead, nothing here has misled
+/// anyone, while three hundred lines of `gcc` with no interpreter named in them
+/// help nobody either way.
 pub fn explain_gevent_failure(
     error: StepError,
     python: Option<(u32, u32)>,
     gevent_lines: &str,
 ) -> StepError {
-    let Some(python) = python.filter(|v| crate::checks::python_is_newer_than_tested(*v)) else {
-        return error;
-    };
-    let version = crate::checks::format_python(python);
     let tested = crate::checks::format_python(crate::checks::NEWEST_TESTED_PYTHON);
-    let diagnosis = format!(
-        "the gevent build failed, and this system runs Python {version} — newer than \
-         Python {tested}, the latest one the installer is known to get through.\n\
-         Odoo pins gevent and greenlet per interpreter version, and for a Python newer than \
-         its pins there is no prebuilt wheel: pip has to build from source, and the C those \
-         versions generate does not survive a newer CPython's headers. this is not a compiler \
-         problem nor a missing system package: it is the version, and no build flag gets \
-         around it.\n\
-         the lines this Odoo version declares:\n{}\n\
-         there are two ways out, both beyond the installer's reach: a release with a Python \
-         those pins cover, or an Odoo version that pins this interpreter. installing a gevent \
-         other than the pinned one is not one of them — it would be a combination nobody has \
-         tried.",
-        gevent_lines
-            .lines()
-            .map(|l| format!("  {l}"))
-            .collect::<Vec<_>>()
-            .join("\n")
-    );
-    StepError::PythonTooNew {
+    let declared = gevent_lines
+        .lines()
+        .map(|l| format!("  {l}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+
+    let diagnosis = match python {
+        // known to fail, and known why: say so.
+        Some(v) if crate::checks::python_is_newer_than_tested(v) => format!(
+            "the gevent build failed, and this system runs Python {} — newer than \
+             Python {tested}, the latest one the installer is known to get through.\n\
+             Odoo pins gevent and greenlet per interpreter version, and for a Python newer than \
+             its pins there is no prebuilt wheel: pip has to build from source, and the C those \
+             versions generate does not survive a newer CPython's headers. this is not a compiler \
+             problem nor a missing system package: it is the version, and no build flag gets \
+             around it.\n\
+             the lines this Odoo version declares:\n{declared}\n\
+             there are two ways out, both beyond the installer's reach: a release with a Python \
+             those pins cover, or an Odoo version that pins this interpreter. installing a gevent \
+             other than the pinned one is not one of them — it would be a combination nobody has \
+             tried.",
+            crate::checks::format_python(v)
+        ),
+        // not known to fail: give the two facts that the wall of `gcc` does not
+        // contain, and draw no conclusion.
+        Some(v) => format!(
+            "the gevent build failed. this venv is built on Python {}, and Odoo pins gevent and \
+             greenlet **per interpreter version** — the lines this Odoo version declares are:\n\
+             {declared}\n\
+             if none of them names this interpreter, the applicable line is an older one written \
+             for an earlier Python: there is no prebuilt wheel for it, pip has to compile, and \
+             the C generated for an older CPython may not survive this one's headers. that is the \
+             first thing to check. if a line does cover it, the cause is elsewhere — a missing \
+             compiler or development headers — and the original error below says which.",
+            crate::checks::format_python(v)
+        ),
+        // the interpreter could not be read: from output we cannot read,
+        // nothing is concluded — but the declared lines are still worth having.
+        None => format!(
+            "the gevent build failed, and the venv's interpreter could not be determined.\n\
+             Odoo pins gevent and greenlet **per interpreter version**, and the lines this Odoo \
+             version declares are:\n{declared}\n\
+             comparing them with the Python this venv was built on is the first thing to check: \
+             a line written for an earlier Python has no prebuilt wheel here, so pip compiles, \
+             and that is where these builds usually break."
+        ),
+    };
+
+    StepError::GeventBuildFailed {
         diagnosis,
         original: error.to_string(),
     }

@@ -392,6 +392,41 @@ jobs:
             env_file: configs/ci.env
             firewalld: "no"
             fw_required: ""
+          # the other Odoo versions on this family (A-V3-26, A-V3-28). the README
+          # promises the distributions and the versions in two separate lists, so
+          # their cross product is promised as surely as either — and a promise
+          # nobody runs is the finding that started all this.
+          #
+          # ONE image and not both, because Fedora adds exactly **one** point on
+          # the `version × Python` axis: 41 uses the system 3.13, and 44 has 3.14
+          # so M11 picks `python3.13`. Both land on the same interpreter, and
+          # which of them gets there is a question about the choice (already
+          # covered by 18.0 above), not about the version. 41 is the one without
+          # the alternative-interpreter machinery in between.
+          #
+          # 18.0 is not repeated here: it is the two entries above.
+          #
+          # **16.0 is deliberately absent, and it is not an oversight.** It does
+          # not install on this family and we know exactly why: its newest gevent
+          # line is `>= '3.12'`, pinning 24.2.1, which has no cp313 wheel — so
+          # pip compiles and dies on `_PyLong_AsByteArray`, whose signature
+          # changed in CPython 3.13. Odoo 17 and 19 pin `gevent==24.11.1` for
+          # `>= '3.13'`, which ships one. Putting 16.0 here would be a permanent
+          # red, and an expected red teaches people to ignore reds (A-V3-10);
+          # the combination is declared in the README instead. See A-V3-28 for
+          # what the installer now says when someone tries it anyway.
+          - image: "fedora:41"
+            scenario: odoo17
+            odoo: "17.0"
+            env_file: configs/ci.env
+            firewalld: "no"
+            fw_required: ""
+          - image: "fedora:41"
+            scenario: odoo19
+            odoo: "19.0"
+            env_file: configs/ci.env
+            firewalld: "no"
+            fw_required: ""
 
     steps:
       - name: Checkout
@@ -686,6 +721,7 @@ jobs:
             env MODE=full BIN=./bin/invok \
                 ENV_FILE='${{ matrix.env_file }}' \
                 FW_REQUIRED='${{ matrix.fw_required }}' \
+                ODOO_VERSION='${{ matrix.odoo }}' \
             bash scripts/ci/integration-test.sh
 
       - name: The installer's log, if any
