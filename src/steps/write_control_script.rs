@@ -29,6 +29,11 @@ SERVICE_NAME="__SERVICE__"
 ODOO_OS_USER="__OSUSER__"
 COMMAND_NAME="__COMMAND__"
 
+# how long the question asked when leaving `dev` waits for an answer, in
+# seconds. It has to end: a question nobody answers holds the service down for
+# exactly as long as it is left on screen.
+DEV_ANSWER_TIMEOUT=30
+
 usage() {
   cat <<USAGE
 ${COMMAND_NAME} — controls the Odoo instance served by '${SERVICE_NAME}'
@@ -43,8 +48,9 @@ Usage: ${COMMAND_NAME} {start|stop|restart|status|list|logs [N]|dev}
   logs      follow its log, from the last N lines (default 100).
             Ctrl-C stops reading; the service keeps running
   dev       stop it and open a shell as '${ODOO_OS_USER}', to run odoo-bin by
-            hand. The service stays STOPPED when you leave: bring it back with
-            '${COMMAND_NAME} start'
+            hand. On the way out the service is put back the way you found it:
+            you are asked first, and the answer nobody types is always "as it
+            was"
 
 Only this instance is ever touched. 'list' (and 'status', which prints it too)
 shows the others, with the command that drives each one.
@@ -90,6 +96,71 @@ list_instances() {
   echo "this one only drives '${SERVICE_NAME}'."
 }
 
+# what `dev` owes you on the way out: the machine you walked in on.
+#
+# it is reached from a trap on EXIT **and** on HUP/INT/TERM, and that is the
+# whole point. The reason this exists is somebody who closes the window and
+# forgets — and a closed window is SIGHUP, with nobody left to answer anything.
+# So the question is an OFFER, never the mechanism: with no terminal, or when
+# the wait runs out, the same rule is applied in silence.
+#
+# The rule is the installer's own, the one the rollback follows: put back the
+# state you found. Which is also why the default is DERIVED from that state
+# instead of being a fixed "yes" — with a service found stopped, a fixed yes
+# would make Enter start what somebody switched off on purpose, and Enter is
+# precisely what a distracted person presses.
+restore_service() {
+  local rc=$?
+  # once only: the signal traps and the EXIT trap would otherwise both fire.
+  trap - EXIT HUP INT TERM
+
+  local now prompt default answer
+  # `is-active` is asked for its OUTPUT: it exits non-zero for a service that
+  # is simply not running, which is an answer and not a failure.
+  now="$(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true)"
+
+  # up when you leave: either you never let it stop, or you started it again
+  # yourself from inside the shell. Both are the state you want, so there is
+  # nothing to ask and nothing to do.
+  if [ "${now}" = "active" ]; then
+    exit "${rc}"
+  fi
+
+  echo
+  if [ "${dev_state_on_entry:-}" = "active" ]; then
+    prompt="Restart '${SERVICE_NAME}'? [Y/n] "
+    default="y"
+  else
+    echo "'${SERVICE_NAME}' was already stopped when you entered dev."
+    prompt="Start it now? [y/N] "
+    default="n"
+  fi
+
+  answer="${default}"
+  if [ -t 0 ]; then
+    printf '%s' "${prompt}"
+    # a read that fails is a timeout or a terminal that went away: both mean
+    # nobody answered, which is what the default is for.
+    if ! read -r -t "${DEV_ANSWER_TIMEOUT}" answer; then
+      echo
+      answer="${default}"
+    fi
+    [ -n "${answer}" ] || answer="${default}"
+  fi
+
+  case "${answer}" in
+    [yY]*)
+      if ! sudo systemctl start "${SERVICE_NAME}"; then
+        echo "'${SERVICE_NAME}' did not come back up. Look at: ${COMMAND_NAME} logs" >&2
+      fi
+      ;;
+    *)
+      echo "'${SERVICE_NAME}' is left STOPPED. Start it with: ${COMMAND_NAME} start"
+      ;;
+  esac
+  exit "${rc}"
+}
+
 case "${1:-}" in
   start)
     sudo systemctl start "${SERVICE_NAME}"
@@ -101,11 +172,15 @@ case "${1:-}" in
     sudo systemctl restart "${SERVICE_NAME}"
     ;;
   dev)
+    # the state is read BEFORE anything changes it, and the trap is armed
+    # before the stop rather than after: between those two lines is exactly
+    # where a kill would leave the service down with nobody remembering that
+    # it had been up.
+    dev_state_on_entry="$(systemctl is-active "${SERVICE_NAME}" 2>/dev/null || true)"
+    trap restore_service EXIT HUP INT TERM
     echo "stopping '${SERVICE_NAME}' — the other instances on this machine are left alone."
     sudo systemctl stop "${SERVICE_NAME}"
     sudo su - "${ODOO_OS_USER}" -s /bin/bash
-    echo
-    echo "'${SERVICE_NAME}' is still STOPPED. Start it again with: ${COMMAND_NAME} start"
     ;;
   list)
     # the listing on its own, without this instance's `systemctl status` above

@@ -417,7 +417,11 @@ Odoo services on this machine:
 `logs` follows this instance's journal (`logs 500` for more scrollback); Ctrl-C stops reading and
 leaves the service running — worth saying, because `dev` is the verb right next to it and that one
 does stop it. `dev` opens a shell as the instance's user to run `odoo-bin` by hand; when you leave,
-the service is still down and the helper says so, with the command to bring it back.
+it puts the service back the way it found it. You are asked first — and the answer you get by just
+pressing Enter is always "as it was", so an instance that was serving comes back up and one you had
+deliberately switched off stays off. If there is no terminal to ask — you closed the window, or the
+session was killed — the same rule is applied without asking, which is the case the behaviour exists
+for.
 
 ```bash
 sudo cat /var/log/invok.log              # installer log (post-mortem; survives rollback, by design)

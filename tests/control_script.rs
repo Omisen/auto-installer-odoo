@@ -190,11 +190,21 @@ fn only_this_instances_service_is_ever_started_or_stopped() {
         }
         // the mutating verbs only: `list-units` and `status` read, and they are
         // allowed — that is how the helper shows the machine without touching it.
+        //
+        // the invocation is looked for ANYWHERE in the line, not at its start:
+        // the restore wraps one in `if ! … ; then` to report a service that did
+        // not come back, and a guard anchored to the left margin would have
+        // stopped seeing it — a structural guard that quietly narrows its own
+        // reach is worse than none, because the green stays.
         for verb in ["systemctl start", "systemctl stop", "systemctl restart"] {
-            if let Some(rest) = line.strip_prefix(&format!("sudo {verb}")) {
+            if let Some((_, rest)) = line.split_once(&format!("sudo {verb}")) {
+                let target = rest
+                    .trim()
+                    .trim_end_matches("; then")
+                    .trim_end_matches(';')
+                    .trim();
                 assert_eq!(
-                    rest.trim(),
-                    "\"${SERVICE_NAME}\"",
+                    target, "\"${SERVICE_NAME}\"",
                     "a mutating systemctl must act on this instance's service and no other: {line}"
                 );
             }
@@ -220,31 +230,150 @@ fn only_this_instances_service_is_ever_started_or_stopped() {
     );
 }
 
-/// `dev` leaves the service stopped, and has to say so.
-///
-/// it stops the service on purpose — you are about to run `odoo-bin` by hand on
-/// the same port — but when the shell exits nothing starts it again, and until
-/// now nothing said that either. An instance quietly left down after a debugging
-/// session is a defect of the helper, not of whoever used it.
-#[test]
-fn dev_says_that_it_leaves_the_service_stopped() {
-    let content = control_script_content("odoo18", "odoo", "odoo");
-    let dev = content
+/// the `dev` branch on its own, without the verbs around it.
+fn dev_branch(content: &str) -> String {
+    content
         .split("  dev)")
         .nth(1)
         .expect("the dev branch must exist")
-        .split("  status)")
+        .split("  list)")
         .next()
-        .expect("it ends where the next branch starts");
+        .expect("it ends where the next branch starts")
+        .to_string()
+}
 
-    assert!(dev.contains("systemctl stop"), "dev stops the service");
+/// `dev` reads the state **before** touching it.
+///
+/// what it owes you on the way out is the machine you walked in on, and after
+/// its own `systemctl stop` that is no longer observable: a state read later
+/// would say "stopped" about an instance that was serving a customer a second
+/// earlier. Same rule as the installer's snapshot, for the same reason.
+#[test]
+fn dev_reads_the_state_before_stopping_and_arms_the_trap_first() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+    let dev = dev_branch(&content);
+
+    let read_at = dev
+        .find("dev_state_on_entry=")
+        .expect("dev must record the state it found");
+    let armed_at = dev
+        .find("trap restore_service")
+        .expect("dev must arm the restore before it mutates anything");
+    let stopped_at = dev
+        .find("systemctl stop")
+        .expect("dev stops the service: that has not changed");
+
     assert!(
-        dev.contains("STOPPED") && dev.contains("${COMMAND_NAME} start"),
-        "and it must say that it stays stopped, and how to bring it back:\n{dev}"
+        read_at < stopped_at,
+        "the state is read before the stop, or it reads our own stop:\n{dev}"
     );
     assert!(
-        !dev.contains("systemctl start"),
-        "dev must not restart it by itself: you may want to keep working by hand"
+        armed_at < stopped_at,
+        "the trap is armed before the stop: between those two lines a kill \
+         would leave the service down with nobody remembering it was up:\n{dev}"
+    );
+}
+
+/// every way out leads to the restore, not just the polite one.
+///
+/// the person this exists for is the one who closes the window and forgets —
+/// and a closed window is `SIGHUP`, with nobody left to answer a prompt. A
+/// restore that only ran on a normal exit would miss exactly the case that
+/// motivated it.
+#[test]
+fn dev_restores_on_every_way_out_and_only_once() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+
+    assert!(
+        content.contains("trap restore_service EXIT HUP INT TERM"),
+        "the restore must be reached by a closed window and a kill too, not \
+         only by a clean exit"
+    );
+    assert!(
+        content.contains("trap - EXIT HUP INT TERM"),
+        "and it must disarm itself: a signal trap and the EXIT trap would \
+         otherwise both fire, asking the same question twice"
+    );
+}
+
+/// the answer nobody types is the state that was found — in **both**
+/// directions.
+///
+/// not a fixed "yes": with a service found stopped, a fixed yes means Enter
+/// starts something somebody switched off on purpose, and Enter is precisely
+/// what a distracted person presses. Deriving the default from the state found
+/// keeps the choice free in both directions without giving up the project's
+/// own invariant — *put back what you found*.
+#[test]
+fn the_silent_answer_is_the_state_that_was_found() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+
+    let restore = content
+        .split("restore_service() {")
+        .nth(1)
+        .expect("the restore function must exist")
+        .split("\ncase \"${1:-}\" in")
+        .next()
+        .expect("it ends where the verbs start");
+
+    // found up: restoring is the silent answer.
+    let up = restore
+        .split(r#"if [ "${dev_state_on_entry:-}" = "active" ]; then"#)
+        .nth(1)
+        .expect("the branch for a service found active must exist")
+        .split("else")
+        .next()
+        .expect("it ends at the other branch");
+    assert!(
+        up.contains("[Y/n]") && up.contains(r#"default="y""#),
+        "found up, the default restarts it:\n{up}"
+    );
+
+    // found down: the offer stands, but Enter must not act on it.
+    let down = restore
+        .split("  else\n")
+        .nth(1)
+        .expect("the branch for a service found stopped must exist")
+        .split("  fi")
+        .next()
+        .expect("it ends at the end of the if");
+    assert!(
+        down.contains("[y/N]") && down.contains(r#"default="n""#),
+        "found stopped, the default leaves it alone:\n{down}"
+    );
+    assert!(
+        down.contains("was already stopped when you entered dev"),
+        "and it says why it is not restarting anything:\n{down}"
+    );
+}
+
+/// the prompt is an **offer**, never the mechanism.
+///
+/// a question needs a terminal and somebody watching it. Neither is guaranteed
+/// in the scenario this was written for, so the decision cannot depend on one:
+/// with no terminal the rule is applied straight away, and with a terminal
+/// nobody is watching it is applied when the wait runs out — otherwise the
+/// question holds the service down for as long as it stays on screen.
+#[test]
+fn the_restore_decides_without_a_terminal_and_never_waits_forever() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+
+    assert!(
+        content.contains("if [ -t 0 ]; then"),
+        "the prompt happens only when there is somebody to answer it"
+    );
+    assert!(
+        content.contains(r#"read -r -t "${DEV_ANSWER_TIMEOUT}""#),
+        "and it is bounded: an unanswered question must fall back to the default"
+    );
+    assert!(
+        content.contains("DEV_ANSWER_TIMEOUT="),
+        "the wait is a named constant, not a number buried in the read"
+    );
+    assert!(
+        content.contains(r#"  dev       stop it and open a shell"#)
+            && content.contains("the way you found it"),
+        "and the usage says what leaving dev now does"
     );
 }
 
@@ -286,6 +415,160 @@ fn the_generated_script_is_syntactically_valid() {
         out.status.success(),
         "the generated helper does not parse:\n{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// runs the rendered helper's `dev` verb for real, against a fake machine.
+///
+/// the structural guards above read the SHAPE of the template; this one reads
+/// the VALUE that comes out of it — the pairing this project asks for on every
+/// guard, and here it is worth more than usual: what is being asserted is
+/// **shell semantics** (a trap, `set -e`, a read with no terminal), which no
+/// amount of looking at the text proves.
+///
+/// nothing of the host is touched: `sudo`, `systemctl` and `su` are scripts in
+/// a temporary directory placed first on `PATH`, and the "machine state" is a
+/// file. `su` stands in for the dev shell — `dev_shell` is what it runs, so a
+/// test can act from *inside* the session.
+///
+/// returns `(final state, output, every systemctl invocation)`. The last one
+/// matters: without a terminal no prompt is ever printed, so "it asked nothing
+/// and did nothing" is only visible in what it *invoked*.
+fn run_dev_against_a_fake_machine(
+    initial_state: &str,
+    dev_shell: &str,
+) -> (String, String, Vec<String>) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let dir = tempfile::tempdir().expect("tempdir");
+    let bin = dir.path().join("bin");
+    std::fs::create_dir_all(&bin).expect("mkdir bin");
+    let state = dir.path().join("service-state");
+    std::fs::write(&state, format!("{initial_state}\n")).expect("state");
+    let calls = dir.path().join("systemctl-calls");
+    std::fs::write(&calls, "").expect("calls");
+
+    let write_exe = |name: &str, body: &str| {
+        let p = bin.join(name);
+        std::fs::write(&p, body).expect("write shim");
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).expect("chmod shim");
+    };
+
+    // `is-active` answers with its OUTPUT and exits non-zero when the service
+    // is down — the real one does exactly that, and the helper relies on it.
+    write_exe(
+        "systemctl",
+        r#"#!/usr/bin/env bash
+state_file="${FAKE_STATE}"
+echo "$*" >> "${FAKE_CALLS}"
+case "${1:-}" in
+  is-active)
+    s="$(cat "${state_file}")"
+    echo "${s}"
+    [ "${s}" = "active" ]
+    ;;
+  stop)  echo inactive > "${state_file}" ;;
+  start) echo active   > "${state_file}" ;;
+  *) ;;
+esac
+"#,
+    );
+    write_exe("sudo", "#!/usr/bin/env bash\nexec \"$@\"\n");
+    // the dev shell itself: whatever the test wants to happen inside it.
+    write_exe("su", &format!("#!/usr/bin/env bash\n{dev_shell}\n"));
+
+    let script = dir.path().join("helper.sh");
+    std::fs::write(&script, control_script_content("odoo18", "odoo", "odoo"))
+        .expect("write helper");
+
+    let out = std::process::Command::new("bash")
+        .arg(&script)
+        .arg("dev")
+        .env("FAKE_STATE", &state)
+        .env("FAKE_CALLS", &calls)
+        .env(
+            "PATH",
+            format!(
+                "{}:{}",
+                bin.display(),
+                std::env::var("PATH").unwrap_or_default()
+            ),
+        )
+        // no terminal: this is the silent path, and it is the one the voice
+        // exists for — a closed window has nobody to ask.
+        .stdin(std::process::Stdio::null())
+        .output()
+        .expect("bash must be available");
+
+    let final_state = std::fs::read_to_string(&state)
+        .expect("state")
+        .trim()
+        .to_string();
+    let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
+    text.push_str(&String::from_utf8_lossy(&out.stderr));
+    let calls = std::fs::read_to_string(&calls)
+        .expect("calls")
+        .lines()
+        .map(|l| l.to_string())
+        .collect();
+    (final_state, text, calls)
+}
+
+/// found up, left up — without anybody answering anything.
+#[test]
+fn dev_puts_back_a_service_it_found_running() {
+    let (state, out, calls) = run_dev_against_a_fake_machine("active", "exit 0");
+    assert_eq!(
+        state, "active",
+        "an instance that was serving must be serving again when you leave:\n{out}"
+    );
+    assert!(
+        calls.iter().any(|c| c.starts_with("start ")),
+        "and it is this helper that put it back, not the fake state drifting: {calls:?}"
+    );
+}
+
+/// found down, left down.
+///
+/// the other half of the same rule, and the one a fixed "yes" would have got
+/// wrong: nobody answered, so nothing gets started that somebody had switched
+/// off on purpose.
+#[test]
+fn dev_leaves_alone_a_service_it_found_stopped() {
+    let (state, out, calls) = run_dev_against_a_fake_machine("inactive", "exit 0");
+    assert_eq!(
+        state, "inactive",
+        "silence must not start what was already off:\n{out}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("start ")),
+        "and it must not even try: {calls:?}"
+    );
+    assert!(
+        out.contains("was already stopped when you entered dev"),
+        "and it must say why it is not starting it:\n{out}"
+    );
+}
+
+/// you started it yourself from inside: nothing to ask, nothing to do.
+///
+/// asserted on what was **invoked**, not on what was printed: with no terminal
+/// the question is never printed anyway, so an output that stays quiet proves
+/// nothing. A `start` issued at a service that is already up is the visible
+/// half of the same mistake.
+#[test]
+fn dev_says_nothing_when_you_brought_the_service_back_yourself() {
+    let (state, out, calls) = run_dev_against_a_fake_machine("active", "systemctl start odoo18");
+    assert_eq!(state, "active");
+    // the one the dev shell itself issued, and no other.
+    assert_eq!(
+        calls.iter().filter(|c| c.starts_with("start ")).count(),
+        1,
+        "the state is already the one wanted: there is nothing left to do: {calls:?}\n{out}"
+    );
+    assert!(
+        !out.contains("STOPPED") && !out.contains("Restart"),
+        "and nothing left to say either:\n{out}"
     );
 }
 
