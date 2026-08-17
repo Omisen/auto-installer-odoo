@@ -114,6 +114,20 @@ restore_service() {
   # once only: the signal traps and the EXIT trap would otherwise both fire.
   trap - EXIT HUP INT TERM
 
+  # from here on the shell is BEST-EFFORT, and it is not a shortcut: this is an
+  # undo, and the installer's third invariant says an undo reports and carries
+  # on instead of dying. The shell needs it spelled out because `set -e` makes
+  # the opposite the default — and that default cost the whole feature once.
+  #
+  # A closed window is the scenario this exists for, and it is also the one in
+  # which every write from here fails: the pty master is gone, so `echo` gets
+  # EIO. Under `set -e` that killed the restore before it reached the service,
+  # leaving a customer's Odoo down — the recovery path defeated by its own
+  # report, exactly where nobody is watching. The action must never be hostage
+  # to the telling of it; the one thing that MUST be noticed still is, by hand,
+  # where the service is started.
+  set +e
+
   local now prompt default answer
   # `is-active` is asked for its OUTPUT: it exits non-zero for a service that
   # is simply not running, which is an answer and not a failure.

@@ -370,6 +370,21 @@ fn the_restore_decides_without_a_terminal_and_never_waits_forever() {
         content.contains("DEV_ANSWER_TIMEOUT="),
         "the wait is a named constant, not a number buried in the read"
     );
+    // A-V6-20: the restore is an undo, and an undo carries on. `set -e` makes
+    // the opposite the default, and a closed window makes every write fail.
+    let restore = content
+        .split("restore_service() {")
+        .nth(1)
+        .expect("the restore function must exist");
+    assert!(
+        restore
+            .split("\ncase \"${1:-}\" in")
+            .next()
+            .expect("it ends where the verbs start")
+            .contains("\n  set +e\n"),
+        "the restore must be best-effort: under `set -e` its own first `echo` \
+         killed it whenever the terminal was gone"
+    );
     assert!(
         content.contains(r#"  dev       stop it and open a shell"#)
             && content.contains("the way you found it"),
@@ -438,6 +453,24 @@ fn run_dev_against_a_fake_machine(
     initial_state: &str,
     dev_shell: &str,
 ) -> (String, String, Vec<String>) {
+    run_dev_with_options(initial_state, dev_shell, None)
+}
+
+/// as above, but `broken_output_entry_state` runs the RESTORE on its own, with
+/// stdout and stderr already closed, as the state of a terminal that went away
+/// halfway through: every write from there fails, the way a write to a pty
+/// whose master is gone fails with EIO.
+///
+/// the helper is **sourced** (`-h` prints the usage and returns), so what runs
+/// is the real rendered function and not a copy of it. Breaking the output
+/// from the very start would prove nothing: `dev` would die at its own first
+/// `echo`, before stopping anything, and the machine would be untouched — the
+/// dangerous window opens only once the service is already down.
+fn run_dev_with_options(
+    initial_state: &str,
+    dev_shell: &str,
+    broken_output_entry_state: Option<&str>,
+) -> (String, String, Vec<String>) {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -481,9 +514,20 @@ esac
     std::fs::write(&script, control_script_content("odoo18", "odoo", "odoo"))
         .expect("write helper");
 
-    let out = std::process::Command::new("bash")
-        .arg(&script)
-        .arg("dev")
+    let mut cmd = std::process::Command::new("bash");
+    match broken_output_entry_state {
+        Some(entry) => {
+            cmd.arg("-c")
+                .arg(format!(
+                    r#"source "$0" -h >/dev/null 2>&1; dev_state_on_entry={entry}; exec 1>&- 2>&-; restore_service"#
+                ))
+                .arg(&script);
+        }
+        None => {
+            cmd.arg(&script).arg("dev");
+        }
+    }
+    let out = cmd
         .env("FAKE_STATE", &state)
         .env("FAKE_CALLS", &calls)
         .env(
@@ -547,6 +591,44 @@ fn dev_leaves_alone_a_service_it_found_stopped() {
     assert!(
         out.contains("was already stopped when you entered dev"),
         "and it must say why it is not starting it:\n{out}"
+    );
+}
+
+/// the restore must not be killed by its own output.
+///
+/// found on the VM, and it had defeated the whole feature (`A-V6-20`): with the
+/// window closed the pty master is gone, so the first `echo` of the restore
+/// gets EIO — and under `set -e` that ended the shell *before* it reached the
+/// service. The customer's Odoo stayed down, in precisely the scenario the
+/// behaviour was written for, with nobody watching and nothing printed.
+///
+/// this reproduces the CLASS rather than the pty: with stdout and stderr closed
+/// every write fails with EBADF, and the question is the same one — does the
+/// action survive the telling of it? A mock could not have found this, but once
+/// found it can be held.
+#[test]
+fn the_restore_survives_an_output_that_fails() {
+    // the service is down (dev stopped it) and it was up on the way in.
+    let (state, _out, calls) = run_dev_with_options("inactive", "exit 0", Some("active"));
+    assert_eq!(
+        state, "active",
+        "a write that fails must not stop the restore: {calls:?}"
+    );
+    assert!(
+        calls.iter().any(|c| c.starts_with("start ")),
+        "and it must have got all the way to the service: {calls:?}"
+    );
+}
+
+/// and the same when there is nothing to put back: a failing write must not
+/// turn "leave it alone" into an action either.
+#[test]
+fn an_output_that_fails_does_not_start_what_was_already_stopped() {
+    let (state, _out, calls) = run_dev_with_options("inactive", "exit 0", Some("inactive"));
+    assert_eq!(state, "inactive");
+    assert!(
+        !calls.iter().any(|c| c.starts_with("start ")),
+        "best-effort must not mean careless: {calls:?}"
     );
 }
 
