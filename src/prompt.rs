@@ -32,6 +32,60 @@ fn identifier_validator(
     }
 }
 
+/// the instance-name validator: **the same** rule as everywhere else.
+///
+/// `crate::instance::validate_instance` and nothing beside it — a second rule
+/// living in the prompt would accept here what the cascade refuses three lines
+/// later, which is the divergence this project keeps paying for. Empty is a
+/// real answer, and means the historical instance.
+fn instance_validator() -> impl Fn(&str) -> Result<Validation, CustomUserError> + Clone {
+    move |input: &str| {
+        if input.is_empty() {
+            return Ok(Validation::Valid);
+        }
+        match crate::instance::validate_instance(input) {
+            Ok(_) => Ok(Validation::Valid),
+            Err(e) => Ok(Validation::Invalid(e.to_string().into())),
+        }
+    }
+}
+
+/// which instance the prompts below should assume, given what is known so far.
+///
+/// the **same order as the cascade** in [`crate::config`] — CLI, then what was
+/// just answered, then the `.env` — and that is not a nicety: a suggestion
+/// resolved differently from the value the cascade will pick would invite
+/// somebody to accept a name the installer then ignores.
+pub fn instance_in_effect<'a>(
+    cli: Option<&'a str>,
+    answered: Option<&'a str>,
+    env: Option<&'a str>,
+) -> Option<&'a str> {
+    cli.or(answered).or(env).filter(|s: &&str| !s.is_empty())
+}
+
+/// what to suggest for a name the instance qualifies: the system user and the
+/// database.
+///
+/// an `.env` value wins, because it was written on purpose. Otherwise the name
+/// the installer itself would derive — `odoo` for the historical instance,
+/// `odoo-<name>` for a named one.
+///
+/// this is **why the instance is asked first**, and the reason is not tidiness.
+/// The form always fills these fields, even when the answer is the default, and
+/// the cascade falls back to the instance-derived name only when nothing was
+/// answered. Suggest `odoo` here and a second instance takes the first one's
+/// user, database and port — a collision on all three, produced by the very
+/// feature meant to make a second instance easy.
+///
+/// pure, and deliberately so: `collect` needs a terminal and no test reaches
+/// it, so whatever decides has to live outside it.
+pub fn suggested_qualified(env_value: Option<&str>, instance: Option<&str>) -> String {
+    env_value
+        .map(str::to_string)
+        .unwrap_or_else(|| crate::instance::qualified_name(instance))
+}
+
 fn port_validator() -> impl Fn(&str) -> Result<Validation, CustomUserError> + Clone {
     move |input: &str| match config::validate_port(input) {
         Ok(_) => Ok(Validation::Valid),
@@ -81,6 +135,43 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
 
     let mut out = RawConfig::default();
 
+    // ASKED FIRST, and the order is the feature (A-V6-15).
+    //
+    // an instance is created by NAMING it, and until now the only two places
+    // that could were `--instance` and `ODOO_INSTANCE`: whoever sat at the
+    // terminal was never told that a second Odoo was possible, and found out
+    // from a refusal after the fact.
+    //
+    // first, not last, because every name below is qualified by this one — see
+    // `suggested_qualified`. Asked at the end, where the flow would naturally
+    // put it, the answers already given for user, database and port would
+    // outrank the qualified defaults and the second instance would collide with
+    // the first on all three.
+    if cli.instance.is_some() {
+        info!("instance name taken from the CLI");
+    } else {
+        let suggested = env.instance.clone().unwrap_or_default();
+        let mut question = Text::new("Instance name (empty = the historical instance)")
+            .with_help_message(
+                "a second Odoo beside an existing one needs a name; leave empty for the first",
+            )
+            .with_validator(instance_validator());
+        if !suggested.is_empty() {
+            question = question.with_default(&suggested);
+        }
+        out.instance = Some(question.prompt()?);
+    }
+    // what the rest of this form is named after. read through `out` as well as
+    // the CLI and the `.env`, which is precisely what makes the answer above
+    // reach the questions below.
+    let instance = instance_in_effect(
+        cli.instance.as_deref(),
+        out.instance.as_deref(),
+        env.instance.as_deref(),
+    )
+    .map(str::to_string);
+    let instance = instance.as_deref();
+
     if cli.version.is_some() {
         info!("Odoo version taken from the CLI");
     } else {
@@ -98,7 +189,7 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     if cli.odoo_user.is_some() {
         info!("Odoo user taken from the CLI");
     } else {
-        let suggested = env.odoo_user.clone().unwrap_or_else(|| "odoo".to_string());
+        let suggested = suggested_qualified(env.odoo_user.as_deref(), instance);
         out.odoo_user = Some(
             Text::new("Odoo system user")
                 .with_default(&suggested)
@@ -110,7 +201,7 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
     if cli.db_name.is_some() {
         info!("Odoo database taken from the CLI");
     } else {
-        let suggested = env.db_name.clone().unwrap_or_else(|| "odoo".to_string());
+        let suggested = suggested_qualified(env.db_name.as_deref(), instance);
         out.db_name = Some(
             Text::new("Database name")
                 .with_default(&suggested)
@@ -141,9 +232,8 @@ pub fn collect(cli: &RawConfig, env: &RawConfig) -> Result<RawConfig> {
             .unwrap_or_else(|| "18.0".to_string());
         let short = version_for_dir.split('.').next().unwrap_or("18");
         // the suggestion follows the instance when there is one: proposing
-        // `odoo18` to somebody who passed `--instance cliente-x` would invite
-        // them to accept a directory named after the wrong thing.
-        let instance = cli.instance.as_deref().or(env.instance.as_deref());
+        // `odoo18` to somebody who named `cliente-x` would invite them to
+        // accept a directory named after the wrong thing.
         let suggested_subdir = crate::instance::artifact_base(instance, short);
         let home = config::ODOO_HOME;
         let subdir = Text::new(&format!("Install directory (under {home})"))

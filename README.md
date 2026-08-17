@@ -260,7 +260,23 @@ sources live in `/opt/odoo/odoo18`, the system user and the database are both `o
 every release so far has written on disk, and passing no `--instance` keeps every one of those names
 exactly as it is.
 
-`--instance <name>` names them after the **instance** instead. With `--instance cliente-x`:
+Run with no arguments and the form asks for it **first**, with an empty default:
+
+```
+── Odoo installation settings ──
+
+? Instance name (empty = the historical instance)
+  a second Odoo beside an existing one needs a name; leave empty for the first
+```
+
+Leaving it empty is a real answer and changes nothing. Naming one moves the suggestions that follow
+with it — the system user, the database and the install directory are proposed as `odoo-cliente-x`
+rather than `odoo` — which is why it is asked first: a name given at the end would arrive after
+those answers had already been given, and the second instance would take the first one's user,
+database and port.
+
+`--instance <name>` does the same from the command line, and then the question is not asked. With
+`--instance cliente-x`:
 
 | | Without `--instance` | `--instance cliente-x` |
 |---|---|---|
@@ -294,6 +310,7 @@ right now: an instance that is merely stopped holds no socket, and the collision
 surface at the first simultaneous start, naming neither of them.
 
 ```bash
+sudo invok                                     # the form asks for the name first
 sudo invok --instance cliente-x --port 8169    # a second instance (HTTP 8169, longpolling 8172)
 sudo invok list                                # what this machine carries
 sudo invok rollback --instance cliente-x       # undo just that one

@@ -620,3 +620,177 @@ fn the_refusal_messages_are_readable_sentences() {
         );
     }
 }
+
+// --- 3. the interactive form can name an instance (A-V6-15) -----------------
+//
+// until now an instance could be created in two places only — `--instance` and
+// `ODOO_INSTANCE` — and the interactive form never mentioned them: whoever sat
+// at the terminal learned that a second Odoo was possible from a refusal, after
+// the fact.
+//
+// `prompt::collect` needs a terminal and no test reaches it, so what is
+// defended here is everything that DECIDES, extracted on purpose: the third
+// source in the cascade, and the two pure functions the form asks.
+
+/// the prompted name reaches the resolution, and qualifies everything.
+///
+/// this is the constraint the audit put first: it is the only point where the
+/// cascade finally *uses* `prompted.instance`, so the name arrives from a third
+/// source and the precedence has to be written and tested — before, not after.
+#[test]
+fn an_instance_answered_at_the_prompt_qualifies_every_name() {
+    let prompted = RawConfig {
+        instance: Some("cliente-x".to_string()),
+        ..Default::default()
+    };
+    let resolved = ResolvedConfig::resolve(
+        &cli_base(),
+        &RawConfig::default(),
+        &prompted,
+        /* interactive */ false,
+    )
+    .expect("resolution");
+    let ctx = ctx_of(resolved);
+
+    assert_eq!(ctx.instance.as_deref(), Some("cliente-x"));
+    assert_eq!(ctx.odoo_user, "odoo-cliente-x");
+    assert_eq!(ctx.db_name, "odoo-cliente-x");
+    assert_eq!(ctx.artifact_base(), "odoo-cliente-x");
+}
+
+/// CLI, then prompt, then `.env` — the same order as every other field.
+///
+/// three sources for one name is the thing that had to be settled before a
+/// prompt could fill it. It is settled the way the cascade already settles
+/// everything else, and this test is what says so out loud.
+#[test]
+fn the_three_sources_of_an_instance_name_have_a_written_order() {
+    let named = |value: &str| RawConfig {
+        instance: Some(value.to_string()),
+        ..Default::default()
+    };
+    let resolve3 = |cli: RawConfig, prompted: RawConfig, env: RawConfig| {
+        let cli = RawConfig {
+            admin_passwd: Some("s3cret".to_string()),
+            ..cli
+        };
+        ctx_of(ResolvedConfig::resolve(&cli, &env, &prompted, false).expect("resolution")).instance
+    };
+
+    assert_eq!(
+        resolve3(named("da-cli"), named("da-prompt"), named("da-env")).as_deref(),
+        Some("da-cli"),
+        "the CLI wins over both"
+    );
+    assert_eq!(
+        resolve3(RawConfig::default(), named("da-prompt"), named("da-env")).as_deref(),
+        Some("da-prompt"),
+        "an answer wins over the .env: the person at the terminal has the last word"
+    );
+    assert_eq!(
+        resolve3(RawConfig::default(), RawConfig::default(), named("da-env")).as_deref(),
+        Some("da-env"),
+        "and the .env is still there when nobody was asked"
+    );
+    // an empty answer is a real answer, and it means the historical instance.
+    assert_eq!(
+        resolve3(RawConfig::default(), named(""), named("da-env")).as_deref(),
+        None,
+        "clearing the field means the unnamed instance, not 'fall back to the .env'"
+    );
+}
+
+/// the suggestion the form makes for the user and the database.
+///
+/// this tiny function is the whole reason the instance is asked FIRST. The form
+/// always fills those fields — even when the answer is the default — and the
+/// cascade falls back to the instance-derived name only when nothing was
+/// answered. Suggest `odoo` to somebody naming a second instance and they
+/// accept the first one's user, database and port: a collision on all three,
+/// produced by the very feature meant to make a second instance easy.
+#[test]
+fn the_form_suggests_names_qualified_by_the_instance() {
+    use invok::prompt::suggested_qualified;
+
+    assert_eq!(suggested_qualified(None, None), "odoo");
+    assert_eq!(
+        suggested_qualified(None, Some("cliente-x")),
+        "odoo-cliente-x",
+        "naming an instance must move the suggestion with it, or the second \
+         installation collides with the first"
+    );
+    assert_eq!(
+        suggested_qualified(Some("scelto-a-mano"), Some("cliente-x")),
+        "scelto-a-mano",
+        "an .env value was written on purpose and stays"
+    );
+}
+
+/// what the form assumes while it is still being filled in.
+///
+/// the same order as the cascade, and not by coincidence: a suggestion resolved
+/// differently from the value the cascade will pick would invite somebody to
+/// accept a name the installer then ignores.
+#[test]
+fn the_form_assumes_the_same_instance_the_cascade_will_resolve() {
+    use invok::prompt::instance_in_effect;
+
+    assert_eq!(
+        instance_in_effect(Some("da-cli"), Some("risposta"), Some("da-env")),
+        Some("da-cli")
+    );
+    assert_eq!(
+        instance_in_effect(None, Some("risposta"), Some("da-env")),
+        Some("risposta")
+    );
+    assert_eq!(
+        instance_in_effect(None, None, Some("da-env")),
+        Some("da-env")
+    );
+    assert_eq!(
+        instance_in_effect(None, Some(""), Some("da-env")),
+        None,
+        "an empty answer means the historical instance here too, exactly as in \
+         the cascade — two answers to the same question would be one too many"
+    );
+}
+
+/// the instance question comes **before** the ones it names.
+///
+/// a structural guard, and it earns its place: get this wrong and nothing goes
+/// red. `collect` would simply read an `out.instance` that is still empty, the
+/// suggestions would quietly fall back to `odoo`, and the second instance would
+/// take the first one's user and database — the exact defect this feature
+/// exists to prevent, reintroduced by moving one block.
+///
+/// it pairs with the behavioural half above (`suggested_qualified`,
+/// `instance_in_effect`), which sees the values but cannot see the order: the
+/// form needs a terminal, and no test reaches it.
+#[test]
+fn the_form_asks_for_the_instance_before_the_names_it_qualifies() {
+    let source = std::fs::read_to_string(
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/prompt.rs"),
+    )
+    .expect("src/prompt.rs");
+    let body = source
+        .split("pub fn collect(")
+        .nth(1)
+        .expect("collect must exist");
+
+    let asked = body
+        .find("Instance name")
+        .expect("the form must ask for the instance");
+    let derived = body
+        .find("let instance = instance_in_effect(")
+        .expect("and then settle which instance the rest is named after");
+
+    for later in ["Odoo system user", "Database name", "Install directory"] {
+        let at = body
+            .find(later)
+            .unwrap_or_else(|| panic!("the form must still ask '{later}'"));
+        assert!(
+            asked < at && derived < at,
+            "'{later}' is named after the instance, so it must be asked AFTER it"
+        );
+    }
+}
