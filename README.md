@@ -399,7 +399,8 @@ systemctl status odoo18                  # N = short version, e.g. 18
 journalctl -u odoo18 -n 50 --no-pager
 
 odoo status                              # helper command; after: source ~/.bashrc
-                                         # start | stop | restart | status | list | logs | dev
+                                         # start | stop | restart | list
+                                         # status [NAME] | logs [NAME] [N] | dev [NAME]
 ```
 
 Each instance gets **its own** helper — `odoo`, `odoo-cliente-x` — and every verb that starts or
@@ -414,26 +415,37 @@ Odoo services on this machine:
 -> odoo18.service                   active   (this one: odoo)
 ```
 
-`logs` follows this instance's journal (`logs 500` for more scrollback); Ctrl-C stops reading and
-leaves the service running — worth saying, because `dev` is the verb right next to it and that one
-does stop it. `dev` opens a shell as the instance's user to run `odoo-bin` by hand; when you leave,
+`logs` follows a journal (`logs 500` for more scrollback); Ctrl-C stops reading and leaves the
+service running — worth saying, because `dev` is the verb right next to it and that one does stop
+it. `dev` opens a shell as the instance's user to run `odoo-bin` by hand; when you leave,
 it puts the service back the way it found it. You are asked first — and the answer you get by just
 pressing Enter is always "as it was", so an instance that was serving comes back up and one you had
 deliberately switched off stays off. If there is no terminal to ask — you closed the window, or the
 session was killed — the same rule is applied without asking, which is the case the behaviour exists
 for.
 
-`dev` also takes an instance: `odoo dev cliente-x` opens a shell as **that** instance's user, which
-is how you reach its files. Each instance's home is `0750` and its config `0640` on purpose — the
-database password and the customer's attachments are in there — so the way in is `sudo`, not a
-loosened permission: whoever can `sudo` can already become any user, and you simply stop having to
-remember somebody else's helper name. Name it `cliente-x`, `odoo-cliente-x` or `odoo-cliente-x.service`
-— whatever `list` printed — or `default` for the unnamed installation.
+**The three verbs that only look can name another instance**, so you can go from `list` straight to
+what you meant without first remembering somebody else's helper name:
 
-**With an instance, `dev` only opens a shell: it does not stop that service.** Only an instance's own
-helper starts or stops it, which is what keeps one customer from going offline while somebody fixes
-another one's problem. If that instance is running, `odoo-bin` on its port will fail, and `dev` says
-so on the way in rather than letting you find out.
+```bash
+odoo list                 # what is installed here, what is up, what drives each
+odoo status cliente-x     # that instance's state
+odoo logs cliente-x 500   # its journal, last 500 lines
+odoo dev cliente-x        # a shell as its user, to reach its files
+```
+
+Name it `cliente-x`, `odoo-cliente-x` or `odoo-cliente-x.service` — whatever `list` printed — or
+`default` for the unnamed installation. An unknown name is refused with the listing; a name matching
+two installations is refused rather than guessed.
+
+**`start`, `stop` and `restart` never take an instance.** They drive this helper's service and no
+other, which is what keeps one customer from going offline while somebody fixes another's problem —
+to act on a named instance, use its own helper, which `list` tells you. For the same reason `dev
+cliente-x` only opens a shell: it does not stop that service. Its home is `0750` and its config
+`0640` on purpose — the database password and the customer's attachments are in there — so the way
+in is `sudo`, not a loosened permission: whoever can `sudo` can already become any user. If that
+instance is running, `odoo-bin` on its port will fail, and `dev` says so on the way in rather than
+letting you find out.
 
 ```bash
 sudo cat /var/log/invok.log              # installer log (post-mortem; survives rollback, by design)

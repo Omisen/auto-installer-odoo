@@ -590,6 +590,13 @@ esac
 "#,
     );
     write_exe("sudo", "#!/usr/bin/env bash\nexec \"$@\"\n");
+    // the real one follows the journal and never returns; here it records what
+    // it was asked for and gets out of the way. Same log as systemctl, with a
+    // prefix, so the assertions that look for `start `/`stop ` are unaffected.
+    write_exe(
+        "journalctl",
+        "#!/usr/bin/env bash\necho \"journalctl $*\" >> \"${FAKE_CALLS}\"\n",
+    );
     // the dev shell itself: whatever the test wants to happen inside it. It
     // records its own argv, which is how "who did it become" is observed.
     write_exe(
@@ -917,6 +924,202 @@ fn a_unit_whose_user_is_unknown_is_refused() {
     );
 }
 
+/// the instance argument goes to the verbs that LOOK, and to no other.
+///
+/// `A-V6-17`, ratified as its useful half. A single shared helper driving every
+/// instance was the proposal; what was taken is the part that costs nothing —
+/// `status`, `logs` and `dev` can name another instance, because looking at
+/// somebody else's instance is not the hazard. Starting it is.
+///
+/// so this is the line, and it is the same one the header has always declared:
+/// a mutating `systemctl` names `${SERVICE_NAME}` and nothing else. The
+/// resolver's answer must never reach one.
+#[test]
+fn only_the_read_only_verbs_take_an_instance() {
+    let content = control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x");
+
+    for (verb, next) in [
+        ("  start)", "  stop)"),
+        ("  stop)", "  restart)"),
+        ("  restart)", "  dev)"),
+    ] {
+        let branch = content
+            .split(verb)
+            .nth(1)
+            .unwrap_or_else(|| panic!("the {verb} branch must exist"))
+            .split(next)
+            .next()
+            .expect("it ends where the next branch starts");
+        assert!(
+            !branch.contains("resolve_instance_unit") && !branch.contains("RESOLVED_UNIT"),
+            "a mutating verb must not be able to name another instance:\n{branch}"
+        );
+        assert!(
+            !branch.contains("${2"),
+            "and it must not read an argument at all — silence is the guard:\n{branch}"
+        );
+    }
+
+    // the resolver's answer is only ever read, never mutated through.
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        if line.contains("RESOLVED_UNIT") {
+            assert!(
+                !line.contains("systemctl start")
+                    && !line.contains("systemctl stop")
+                    && !line.contains("systemctl restart"),
+                "the resolved unit must never reach a mutating verb: {line}"
+            );
+        }
+    }
+}
+
+/// one resolver, not three.
+///
+/// `dev`, `status` and `logs` must agree on what a name means and on how a bad
+/// one is refused. Three copies would be three chances to drift — the shape of
+/// duplication this project has paid for repeatedly, and the reason `A-V6-17`
+/// was cut down instead of taken whole.
+#[test]
+fn the_instance_resolver_exists_once() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+    assert_eq!(
+        content.matches("resolve_instance_unit() {").count(),
+        1,
+        "the resolution lives in one function"
+    );
+    assert_eq!(
+        content.matches("systemctl list-unit-files").count(),
+        2,
+        "and it is asked of systemd in two places only: the listing, and the resolver"
+    );
+    for caller in ["dev_into_another_instance", "logs_unit=", "status_unit="] {
+        assert!(
+            content.contains(caller),
+            "'{caller}' must be there to use it"
+        );
+    }
+}
+
+/// `status <instance>` reports on that one, and still lists the machine.
+#[test]
+fn status_can_report_on_another_instance() {
+    let content = control_script_content("odoo18", "odoo", "odoo");
+    let branch = content
+        .split("  status)")
+        .nth(1)
+        .expect("the status branch must exist")
+        .split("  -h|--help|help)")
+        .next()
+        .expect("it ends where the next branch starts");
+
+    assert!(
+        branch.contains(r#"status_unit="${SERVICE_NAME}""#),
+        "with no name it is still this instance:\n{branch}"
+    );
+    assert!(
+        branch.contains(r#"systemctl status "${status_unit}""#),
+        "and the named one otherwise:\n{branch}"
+    );
+    assert!(
+        branch.contains("list_instances"),
+        "the listing stays: that is what makes the next command obvious:\n{branch}"
+    );
+}
+
+/// `logs <instance>` follows the other one's journal, and `logs 500` still
+/// means five hundred lines of ours.
+#[test]
+fn logs_tells_an_instance_from_a_line_count() {
+    let journal = |argv: &[&str]| -> String {
+        let (_, out, calls, _) = run_helper("active", "exit 0", None, argv, FAKE_UNITS);
+        calls
+            .iter()
+            .find(|c| c.starts_with("journalctl "))
+            .unwrap_or_else(|| panic!("no journal was opened for {argv:?}:\n{out}\n{calls:?}"))
+            .clone()
+    };
+
+    // a name: the other instance's journal, and the count moves along one.
+    let named = journal(&["logs", "cliente-x", "5"]);
+    assert!(
+        named.contains("-u odoo-cliente-x.service") && named.contains("-n 5"),
+        "'logs cliente-x 5' must follow that instance, 5 lines: {named}"
+    );
+
+    // a number: still five hundred lines of OUR log. This is the compatibility
+    // that the digits rule exists to keep.
+    let counted = journal(&["logs", "500"]);
+    assert!(
+        counted.contains("-u odoo18") && counted.contains("-n 500"),
+        "'logs 500' must stay 500 lines of this instance: {counted}"
+    );
+
+    // and nothing: ours, with the historical default.
+    let bare = journal(&["logs"]);
+    assert!(
+        bare.contains("-u odoo18") && bare.contains("-n 100"),
+        "'logs' alone must not have changed at all: {bare}"
+    );
+}
+
+/// `status <instance>` really asks about **that** unit.
+///
+/// the structural guard above reads the shape — `systemctl status
+/// "${status_unit}"` — and a shape is not a value: assigning the wrong thing to
+/// `status_unit` leaves the shape intact. A mutation proved exactly that, so
+/// the value gets its own guard.
+#[test]
+fn status_with_an_instance_asks_about_that_unit() {
+    let (_, out, calls, _) = run_helper(
+        "active",
+        "exit 0",
+        None,
+        &["status", "cliente-x"],
+        FAKE_UNITS,
+    );
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("status odoo-cliente-x.service")),
+        "it must ask systemd about the named instance: {calls:?}\n{out}"
+    );
+    assert!(
+        !calls.iter().any(|c| c.starts_with("status odoo18")),
+        "and not about its own: {calls:?}"
+    );
+
+    // and with no name, nothing changed.
+    let (_, _, calls, _) = run_helper("active", "exit 0", None, &["status"], FAKE_UNITS);
+    assert!(
+        calls.iter().any(|c| c.starts_with("status odoo18")),
+        "bare `status` is still this instance: {calls:?}"
+    );
+}
+
+/// a bad name is refused the same way from every verb that takes one.
+///
+/// the point of a single resolver: `dev`, `logs` and `status` cannot disagree
+/// about what does not exist.
+#[test]
+fn every_verb_that_takes_an_instance_refuses_a_bad_one_alike() {
+    for verb in ["dev", "logs", "status"] {
+        let (_, out, calls, su) =
+            run_helper("active", "exit 0", None, &[verb, "non-esiste"], FAKE_UNITS);
+        assert!(
+            out.contains("no Odoo instance on this machine answers to 'non-esiste'"),
+            "'{verb} non-esiste' must refuse in the same words:\n{out}"
+        );
+        assert!(
+            su.is_empty() && !calls.iter().any(|c| c.starts_with("journalctl ")),
+            "'{verb}' must not act on anything after refusing: {calls:?} {su:?}"
+        );
+    }
+}
+
 /// prints the rendered helper, to look at it: `cargo test --test control_script
 /// -- --ignored --nocapture show_the_helper`.
 #[test]
@@ -928,13 +1131,13 @@ fn show_the_helper() {
     );
 }
 
-/// `logs` follows **this** instance's journal, and takes an optional count.
+/// `logs` follows **one** journal: this instance's, or the one it was told.
 ///
-/// read-only, so it is allowed to exist next to the verbs that mutate — but it
-/// is still scoped to one unit: on a machine with two customers, a log that
-/// mixed both would be worse than no log.
+/// read-only, which is the whole reason an instance is allowed here at all
+/// (`A-V6-17`) — but it is still scoped to a single unit: on a machine with two
+/// customers, a log that mixed both would be worse than no log.
 #[test]
-fn logs_follows_this_instances_journal_only() {
+fn logs_follows_one_instances_journal_only() {
     let content = control_script_content("odoo-cliente-x", "odoo-cliente-x", "odoo-cliente-x");
     let branch = content
         .split("  logs)")
@@ -945,13 +1148,25 @@ fn logs_follows_this_instances_journal_only() {
         .expect("it ends where the next branch starts");
 
     assert!(
-        branch.contains(r#"journalctl -u "${SERVICE_NAME}""#),
-        "the journal must be this instance's:\n{branch}"
+        branch.contains(r#"logs_unit="${SERVICE_NAME}""#),
+        "with no name it is still this instance's journal:\n{branch}"
+    );
+    assert!(
+        branch.contains(r#"journalctl -u "${logs_unit}""#),
+        "and exactly one unit is followed, never a glob:\n{branch}"
     );
     assert!(branch.contains("-f"), "it follows: that is what it is for");
     assert!(
-        branch.contains(r#""${2:-100}""#),
-        "the number of lines is an optional argument, with a default"
+        branch.contains(r#"logs_lines="${2:-100}""#) && branch.contains(r#""${3:-100}""#),
+        "the count stays optional, and moves along when a name is given:\n{branch}"
+    );
+    // `logs 500` meant "500 lines" long before an instance could be named, and
+    // it has to keep meaning that. The discriminator is not a convention
+    // invented here: an instance name must begin with a letter, so a run of
+    // digits can never be one.
+    assert!(
+        branch.contains("is_line_count"),
+        "a number must still be read as a count, not looked up as an instance:\n{branch}"
     );
     assert!(
         content.contains("Ctrl-C stops reading; the service keeps running"),

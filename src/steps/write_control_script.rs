@@ -38,27 +38,29 @@ usage() {
   cat <<USAGE
 ${COMMAND_NAME} — controls the Odoo instance served by '${SERVICE_NAME}'
 
-Usage: ${COMMAND_NAME} {start|stop|restart|status|list|logs [N]|dev [instance]}
+Usage: ${COMMAND_NAME} {start|stop|restart|list|status [NAME]|logs [NAME] [N]|dev [NAME]}
 
   start     start this instance's service
   stop      stop it
   restart   restart it — after changing its configuration file
-  status    its state, followed by every Odoo service on this machine
-  list      just that listing: what is installed here and what is up
+  list      what is installed on this machine, what is up, and what drives each
+  status    its state, followed by that listing
   logs      follow its log, from the last N lines (default 100).
             Ctrl-C stops reading; the service keeps running
   dev       stop it and open a shell as '${ODOO_OS_USER}', to run odoo-bin by
             hand. On the way out the service is put back the way you found it:
             you are asked first, and the answer nobody types is always "as it
             was"
-  dev NAME  a shell as ANOTHER instance's user, to reach its files — its
-            service is NOT stopped, because only its own helper drives it.
-            NAME can be 'cliente-x', 'odoo-cliente-x', or 'default' for the
-            historical instance; 'list' shows what is here.
 
-No service other than '${SERVICE_NAME}' is ever started or stopped from here.
-'list' (and 'status', which prints it too) shows the others, with the command
-that drives each one.
+NAME reaches ANOTHER instance, and only the three verbs above that just LOOK
+take one: 'status NAME', 'logs NAME [N]' and 'dev NAME' — which opens a shell
+as that instance's user without stopping its service. NAME can be 'cliente-x',
+'odoo-cliente-x', or 'default' for the historical instance; 'list' shows what
+is here.
+
+No service other than '${SERVICE_NAME}' is ever started, stopped or restarted
+from here — for that, use the named instance's own helper, which 'list' tells
+you.
 USAGE
 }
 
@@ -101,25 +103,22 @@ list_instances() {
   echo "this one only drives '${SERVICE_NAME}'."
 }
 
-# `dev <instance>`: a shell as ANOTHER instance's user, and nothing else.
+# turns an instance argument into a unit name, in ONE place.
 #
-# what it answers is a real need — reaching another instance's files as whoever
-# owns them. Its home is 0750 and its config 0640 on purpose: inside there are
-# `admin_passwd`, `db_password` and the customer's attachments, and that
-# isolation is what makes a PostgreSQL role per instance mean anything. So the
-# way in is NOT a loosened permission, it is `sudo` — already the gate for
-# everything else here. Whoever can `sudo` can become any user anyway, so
-# nothing new is granted; one only stops having to remember somebody else's
-# helper name.
+# `dev`, `logs` and `status` all take an instance, and they must agree on what a
+# name means and on how a bad one is refused — three copies of this would be
+# three chances to drift apart. The answer lands in RESOLVED_UNIT rather than on
+# stdout, so the refusals can talk to stderr and the exit code stays the
+# caller's to propagate.
 #
-# AND IT DOES NOT STOP THAT SERVICE, which is the whole difference from the
-# argument-less `dev`. A helper able to stop another instance would be a way to
-# take one customer offline while fixing another's problem — the hazard that
-# one-helper-per-instance exists to prevent, walking back in through the front
-# door. The port therefore stays busy, and the message says so instead of
-# letting `odoo-bin` fail with a puzzle.
-dev_into_another_instance() {
-  local want="$1" unit="" candidate base user state matches=0
+# WHAT MAY USE IT: read-only verbs only. `logs`, `status` and `dev` name another
+# instance to LOOK at it or to become its user; nothing that starts, stops or
+# restarts ever takes an instance, because a helper able to do that is a way to
+# take one customer offline while fixing another's problem. Its own service is
+# the only thing this helper ever mutates, and that is checked.
+RESOLVED_UNIT=""
+resolve_instance_unit() {
+  local want="$1" unit="" candidate base matches=0
 
   # `list` prints unit names, so accept what it prints as well as the bare
   # instance name: whoever just read that listing must not have to translate.
@@ -150,14 +149,50 @@ dev_into_another_instance() {
     return 2
   fi
   # ambiguity is refused, not settled by a precedence rule: the answer decides
-  # which user you become, and guessing that is not a thing to be clever about.
+  # which instance you act on, and guessing that is not a thing to be clever
+  # about — the same way `invok rollback` refuses and lists.
   if [ "${matches}" -gt 1 ]; then
     echo "'$1' matches more than one instance here. Name one exactly:" >&2
     list_instances >&2
     return 2
   fi
 
+  RESOLVED_UNIT="${unit}"
+}
+
+# is this argument a line count rather than an instance name?
+#
+# `logs` took a number long before it took an instance, and both are optional,
+# so `logs 500` has to keep meaning "500 lines of MY log". The rule is not a
+# convention invented here: an instance name must begin with a letter
+# (`instance::validate_instance`), so a run of digits can never be one.
+is_line_count() {
+  case "$1" in
+    '' | *[!0-9]*) return 1 ;;
+  esac
+}
+
+# `dev <instance>`: a shell as ANOTHER instance's user, and nothing else.
+#
+# what it answers is a real need — reaching another instance's files as whoever
+# owns them. Its home is 0750 and its config 0640 on purpose: inside there are
+# `admin_passwd`, `db_password` and the customer's attachments, and that
+# isolation is what makes a PostgreSQL role per instance mean anything. So the
+# way in is NOT a loosened permission, it is `sudo` — already the gate for
+# everything else here. Whoever can `sudo` can become any user anyway, so
+# nothing new is granted; one only stops having to remember somebody else's
+# helper name.
+#
+# AND IT DOES NOT STOP THAT SERVICE, which is the whole difference from the
+# argument-less `dev`. The port therefore stays busy, and the message says so
+# instead of letting `odoo-bin` fail with a puzzle.
+dev_into_another_instance() {
+  local unit base user state
+
+  resolve_instance_unit "$1" || return $?
+  unit="${RESOLVED_UNIT}"
   base="${unit%.service}"
+
   # the user is READ from the unit, never rebuilt from the name. `odoo-<name>`
   # is only the DEFAULT the installer derives; the CLI/.env cascade can override
   # `ODOO_USER`, so a name is a guess and the unit is the record — the same rule
@@ -296,21 +331,38 @@ case "${1:-}" in
     list_instances
     ;;
   logs)
-    # this instance's journal and nobody else's, like every other verb here.
+    # this instance's journal by default, or another's when one is named —
+    # reading, which is why an instance is allowed here at all.
     #
     # it follows, because that is what a log is opened for while something is
     # wrong; `-n` gives the lines before the tail. Ctrl-C ends `journalctl` and
     # with it this script — the service is untouched, which the usage says out
     # loud: right after `dev`, somebody may reasonably fear that Ctrl-C stops
     # Odoo.
-    sudo journalctl -u "${SERVICE_NAME}" -n "${2:-100}" -f
+    logs_unit="${SERVICE_NAME}"
+    logs_lines="${2:-100}"
+    if [ -n "${2:-}" ] && ! is_line_count "$2"; then
+      resolve_instance_unit "$2" || exit $?
+      logs_unit="${RESOLVED_UNIT}"
+      logs_lines="${3:-100}"
+    fi
+    sudo journalctl -u "${logs_unit}" -n "${logs_lines}" -f
     ;;
   status)
+    # this instance's state by default, another's when one is named. Reading
+    # again — `status` is the verb people reach for before deciding what to do,
+    # and having to know somebody else's helper name first is friction with no
+    # safety in it.
+    status_unit="${SERVICE_NAME}"
+    if [ -n "${2:-}" ]; then
+      resolve_instance_unit "$2" || exit $?
+      status_unit="${RESOLVED_UNIT}"
+    fi
     # systemctl exits non-zero for a service that is not running, and under
     # `set -e` that would take the listing with it — precisely when it is most
     # wanted. The code is kept and handed on at the end.
     rc=0
-    sudo systemctl status "${SERVICE_NAME}" --no-pager || rc=$?
+    sudo systemctl status "${status_unit}" --no-pager || rc=$?
     list_instances
     exit "${rc}"
     ;;
