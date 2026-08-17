@@ -456,6 +456,22 @@ fn run_dev_against_a_fake_machine(
     run_dev_with_options(initial_state, dev_shell, None)
 }
 
+/// the other instances the fake machine carries: `(unit, the user it runs as)`,
+/// answered the way `systemctl list-unit-files` and `systemctl show -p User`
+/// answer. An empty user is systemd saying nothing, which the helper must treat
+/// as "I do not know" rather than as root.
+const FAKE_UNITS: &[(&str, &str)] = &[
+    ("odoo18.service", "odoo"),
+    ("odoo-cliente-x.service", "odoo-cliente-x"),
+    // its user is deliberately NOT `odoo-altro`: the cascade can override
+    // ODOO_USER, so anything that rebuilds the name instead of reading it gets
+    // this one wrong.
+    ("odoo-altro.service", "un-altro-utente"),
+    // systemd has no answer for this one, which must mean "I do not know"
+    // rather than "root".
+    ("odoo-senza-utente.service", ""),
+];
+
 /// as above, but `broken_output_entry_state` runs the RESTORE on its own, with
 /// stdout and stderr already closed, as the state of a terminal that went away
 /// halfway through: every write from there fails, the way a write to a pty
@@ -471,6 +487,41 @@ fn run_dev_with_options(
     dev_shell: &str,
     broken_output_entry_state: Option<&str>,
 ) -> (String, String, Vec<String>) {
+    let (state, out, calls, _) = run_helper(
+        initial_state,
+        dev_shell,
+        broken_output_entry_state,
+        &[],
+        FAKE_UNITS,
+    );
+    (state, out, calls)
+}
+
+/// `dev <instance>` against the same fake machine.
+///
+/// returns `(state of THIS instance, output, systemctl invocations, `su`
+/// invocations)`. The last one is the point: what has to be proved is *which
+/// user* it became, and that comes from what `su` was called with.
+fn run_dev_into(instance: &str) -> (String, String, Vec<String>, Vec<String>) {
+    run_helper("active", "exit 0", None, &["dev", instance], FAKE_UNITS)
+}
+
+/// the same, on a machine laid out differently — for the cases the default
+/// layout cannot express, like two unnamed installations.
+fn run_dev_into_machine(
+    instance: &str,
+    units: &[(&str, &str)],
+) -> (String, String, Vec<String>, Vec<String>) {
+    run_helper("active", "exit 0", None, &["dev", instance], units)
+}
+
+fn run_helper(
+    initial_state: &str,
+    dev_shell: &str,
+    broken_output_entry_state: Option<&str>,
+    argv: &[&str],
+    machine: &[(&str, &str)],
+) -> (String, String, Vec<String>, Vec<String>) {
     use std::os::unix::fs::PermissionsExt;
 
     let dir = tempfile::tempdir().expect("tempdir");
@@ -480,6 +531,18 @@ fn run_dev_with_options(
     std::fs::write(&state, format!("{initial_state}\n")).expect("state");
     let calls = dir.path().join("systemctl-calls");
     std::fs::write(&calls, "").expect("calls");
+    let su_calls = dir.path().join("su-calls");
+    std::fs::write(&su_calls, "").expect("su calls");
+    // the machine's other instances, as a table the shim reads.
+    let units = dir.path().join("units");
+    std::fs::write(
+        &units,
+        machine
+            .iter()
+            .map(|(u, who)| format!("{u} {who}\n"))
+            .collect::<String>(),
+    )
+    .expect("units");
 
     let write_exe = |name: &str, body: &str| {
         let p = bin.join(name);
@@ -496,19 +559,43 @@ state_file="${FAKE_STATE}"
 echo "$*" >> "${FAKE_CALLS}"
 case "${1:-}" in
   is-active)
-    s="$(cat "${state_file}")"
+    # only this helper's own service has a state file; the others are up.
+    if [ "${2:-}" = "odoo18" ] || [ "${2:-}" = "odoo18.service" ]; then
+      s="$(cat "${state_file}")"
+    else
+      s=active
+    fi
     echo "${s}"
     [ "${s}" = "active" ]
     ;;
   stop)  echo inactive > "${state_file}" ;;
   start) echo active   > "${state_file}" ;;
+  list-unit-files)
+    # the real one prints "<unit> <state>"; the helper reads the first field.
+    while read -r u _who; do
+      [ -n "${u}" ] && echo "${u} enabled"
+    done < "${FAKE_UNITS}"
+    ;;
+  show)
+    # `show -p User --value <unit>`: prints nothing when systemd has no answer.
+    unit="${!#}"
+    while read -r u who; do
+      if [ "${u}" = "${unit}" ] || [ "${u}" = "${unit}.service" ]; then
+        echo "${who}"
+      fi
+    done < "${FAKE_UNITS}"
+    ;;
   *) ;;
 esac
 "#,
     );
     write_exe("sudo", "#!/usr/bin/env bash\nexec \"$@\"\n");
-    // the dev shell itself: whatever the test wants to happen inside it.
-    write_exe("su", &format!("#!/usr/bin/env bash\n{dev_shell}\n"));
+    // the dev shell itself: whatever the test wants to happen inside it. It
+    // records its own argv, which is how "who did it become" is observed.
+    write_exe(
+        "su",
+        &format!("#!/usr/bin/env bash\necho \"$*\" >> \"${{FAKE_SU_CALLS}}\"\n{dev_shell}\n"),
+    );
 
     let script = dir.path().join("helper.sh");
     std::fs::write(&script, control_script_content("odoo18", "odoo", "odoo"))
@@ -524,12 +611,19 @@ esac
                 .arg(&script);
         }
         None => {
-            cmd.arg(&script).arg("dev");
+            cmd.arg(&script);
+            if argv.is_empty() {
+                cmd.arg("dev");
+            } else {
+                cmd.args(argv);
+            }
         }
     }
     let out = cmd
         .env("FAKE_STATE", &state)
         .env("FAKE_CALLS", &calls)
+        .env("FAKE_SU_CALLS", &su_calls)
+        .env("FAKE_UNITS", &units)
         .env(
             "PATH",
             format!(
@@ -550,12 +644,14 @@ esac
         .to_string();
     let mut text = String::from_utf8_lossy(&out.stdout).into_owned();
     text.push_str(&String::from_utf8_lossy(&out.stderr));
-    let calls = std::fs::read_to_string(&calls)
-        .expect("calls")
-        .lines()
-        .map(|l| l.to_string())
-        .collect();
-    (final_state, text, calls)
+    let read_lines = |p: &std::path::Path| -> Vec<String> {
+        std::fs::read_to_string(p)
+            .expect("call log")
+            .lines()
+            .map(|l| l.to_string())
+            .collect()
+    };
+    (final_state, text, read_lines(&calls), read_lines(&su_calls))
 }
 
 /// found up, left up — without anybody answering anything.
@@ -651,6 +747,173 @@ fn dev_says_nothing_when_you_brought_the_service_back_yourself() {
     assert!(
         !out.contains("STOPPED") && !out.contains("Restart"),
         "and nothing left to say either:\n{out}"
+    );
+}
+
+/// `dev <instance>` becomes that instance's user — and touches nothing else.
+///
+/// `A-V6-18`. The need was reaching another instance's files as whoever owns
+/// them; the answer is `sudo`, not a loosened permission, because its home is
+/// `0750` and its config `0640` on purpose — the password and the attachments
+/// are in there.
+///
+/// what this test guards is the line the feature must not cross: it opens a
+/// shell, it does not stop anybody's service. A helper able to stop another
+/// instance is the hazard one-helper-per-instance exists to prevent, and an
+/// argument would have let it in through the front door.
+#[test]
+fn dev_with_an_instance_opens_a_shell_and_stops_nothing() {
+    let (state, out, systemctl, su) = run_dev_into("cliente-x");
+
+    assert_eq!(
+        su.len(),
+        1,
+        "it must enter exactly one shell: {su:?}\n{out}"
+    );
+    assert!(
+        su[0].contains("odoo-cliente-x"),
+        "and as that instance's user: {su:?}\n{out}"
+    );
+    assert!(
+        !systemctl
+            .iter()
+            .any(|c| c.starts_with("stop ") || c.starts_with("start ")),
+        "nothing is stopped or started, not even this helper's own service: {systemctl:?}"
+    );
+    assert_eq!(
+        state, "active",
+        "and the helper's own service is untouched too"
+    );
+    assert!(
+        out.contains("its service is left alone"),
+        "it has to say that it did not stop anything:\n{out}"
+    );
+}
+
+/// the same instance, named the three ways `list` makes plausible.
+///
+/// whoever just read `list` sees `odoo-cliente-x.service`; whoever read the
+/// README types `cliente-x`. Making them translate would be a papercut in the
+/// one command whose whole purpose is convenience.
+#[test]
+fn an_instance_can_be_named_the_way_list_prints_it() {
+    for name in ["cliente-x", "odoo-cliente-x", "odoo-cliente-x.service"] {
+        let (_, out, _, su) = run_dev_into(name);
+        assert!(
+            su.len() == 1 && su[0].contains("odoo-cliente-x"),
+            "'{name}' must reach the same instance: {su:?}\n{out}"
+        );
+    }
+}
+
+/// `default` is the historical instance, whose unit carries the version.
+///
+/// the same reserved word `rollback --instance` and `list` already use: an
+/// instance cannot be called `default`, so it can safely mean "the unnamed
+/// one" — and the unnamed one's unit is `odoo18`, a version rather than an
+/// identity, which is exactly why it needs a name that is not its unit's.
+#[test]
+fn default_names_the_historical_instance() {
+    let (_, out, _, su) = run_dev_into("default");
+    assert!(
+        su.len() == 1 && su[0].contains("odoo") && !su[0].contains("cliente-x"),
+        "'default' must reach the unprefixed unit's user: {su:?}\n{out}"
+    );
+}
+
+/// two unnamed installations make `default` ambiguous, and ambiguity is
+/// **refused**, not settled.
+///
+/// the unnamed instance's unit carries the Odoo **version**, so a machine can
+/// carry `odoo17` and `odoo18` at once — a migration in progress is exactly
+/// that. Picking one by a precedence rule would decide *which user you become*
+/// on a coin toss, and this project settles that class of question by making it
+/// impossible rather than clever: the same reason `rollback` without arguments
+/// refuses and lists.
+#[test]
+fn two_unnamed_installations_make_default_ambiguous_and_it_is_refused() {
+    let machine: &[(&str, &str)] = &[("odoo17.service", "odoo"), ("odoo18.service", "odoo")];
+    let (_, out, _, su) = run_dev_into_machine("default", machine);
+
+    assert!(su.is_empty(), "it must not pick one of them: {su:?}\n{out}");
+    assert!(
+        out.contains("matches more than one instance"),
+        "and it must say the name was ambiguous:\n{out}"
+    );
+    assert!(
+        out.contains("Odoo services on this machine:"),
+        "listing them, so the exact name is one copy away:\n{out}"
+    );
+}
+
+/// and naming one of the two exactly does work — the refusal above is about
+/// ambiguity, not about the unnamed instance being unreachable.
+#[test]
+fn naming_an_unnamed_installation_exactly_still_works() {
+    let machine: &[(&str, &str)] = &[("odoo17.service", "vecchio"), ("odoo18.service", "nuovo")];
+    let (_, out, _, su) = run_dev_into_machine("odoo17", machine);
+    assert!(
+        su.len() == 1 && su[0].contains("vecchio"),
+        "'odoo17' names one of them without ambiguity: {su:?}\n{out}"
+    );
+}
+
+/// the user is READ from systemd, never rebuilt from the instance name.
+///
+/// `odoo-<name>` is only the DEFAULT the installer derives: the CLI/.env
+/// cascade can override `ODOO_USER`, so the name is a guess and the unit is the
+/// record. It is the project's standing rule about ownership — it gets reread,
+/// not re-derived — and the fake machine is built to punish the other choice:
+/// `odoo-altro` runs as `un-altro-utente`.
+#[test]
+fn the_user_is_read_from_the_unit_not_rebuilt_from_the_name() {
+    let (_, out, systemctl, su) = run_dev_into("altro");
+    assert!(
+        su.len() == 1 && su[0].contains("un-altro-utente"),
+        "rebuilding `odoo-<name>` would have become the wrong user: {su:?}\n{out}"
+    );
+    assert!(
+        systemctl.iter().any(|c| c.starts_with("show ")),
+        "and the answer must come from systemd: {systemctl:?}"
+    );
+}
+
+/// an instance nobody has is an error that shows what there is.
+#[test]
+fn an_unknown_instance_fails_and_shows_what_exists() {
+    let (_, out, _, su) = run_dev_into("non-esiste");
+    assert!(su.is_empty(), "it must not enter anything: {su:?}");
+    assert!(
+        out.contains("no Odoo instance on this machine answers to 'non-esiste'"),
+        "and it must say so:\n{out}"
+    );
+    assert!(
+        out.contains("Odoo services on this machine:"),
+        "showing what is actually here, rather than leaving you to guess:\n{out}"
+    );
+}
+
+/// when systemd will not say who a unit runs as, we do not enter it.
+///
+/// an empty `User=` means "no answer", and the tempting fallback — root — turns
+/// a convenience into a privilege surprise. Fail closed, like every other
+/// unreadable answer in this project.
+#[test]
+fn a_unit_whose_user_is_unknown_is_refused() {
+    let (_, out, systemctl, su) = run_dev_into("senza-utente");
+    assert!(
+        su.is_empty(),
+        "with no answer it must not become anybody — least of all root: {su:?}\n{out}"
+    );
+    assert!(
+        out.contains("cannot tell which user"),
+        "and it must say why it stopped:\n{out}"
+    );
+    assert!(
+        !systemctl
+            .iter()
+            .any(|c| c.starts_with("stop ") || c.starts_with("start ")),
+        "and it must not have touched anything on the way: {systemctl:?}"
     );
 }
 

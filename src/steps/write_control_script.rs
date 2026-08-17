@@ -38,7 +38,7 @@ usage() {
   cat <<USAGE
 ${COMMAND_NAME} — controls the Odoo instance served by '${SERVICE_NAME}'
 
-Usage: ${COMMAND_NAME} {start|stop|restart|status|list|logs [N]|dev}
+Usage: ${COMMAND_NAME} {start|stop|restart|status|list|logs [N]|dev [instance]}
 
   start     start this instance's service
   stop      stop it
@@ -51,9 +51,14 @@ Usage: ${COMMAND_NAME} {start|stop|restart|status|list|logs [N]|dev}
             hand. On the way out the service is put back the way you found it:
             you are asked first, and the answer nobody types is always "as it
             was"
+  dev NAME  a shell as ANOTHER instance's user, to reach its files — its
+            service is NOT stopped, because only its own helper drives it.
+            NAME can be 'cliente-x', 'odoo-cliente-x', or 'default' for the
+            historical instance; 'list' shows what is here.
 
-Only this instance is ever touched. 'list' (and 'status', which prints it too)
-shows the others, with the command that drives each one.
+No service other than '${SERVICE_NAME}' is ever started or stopped from here.
+'list' (and 'status', which prints it too) shows the others, with the command
+that drives each one.
 USAGE
 }
 
@@ -94,6 +99,86 @@ list_instances() {
   echo "Each instance has a helper of its own: 'odoo' for the historical one,"
   echo "'odoo-<name>' for a named one. Use that helper to start or stop it —"
   echo "this one only drives '${SERVICE_NAME}'."
+}
+
+# `dev <instance>`: a shell as ANOTHER instance's user, and nothing else.
+#
+# what it answers is a real need — reaching another instance's files as whoever
+# owns them. Its home is 0750 and its config 0640 on purpose: inside there are
+# `admin_passwd`, `db_password` and the customer's attachments, and that
+# isolation is what makes a PostgreSQL role per instance mean anything. So the
+# way in is NOT a loosened permission, it is `sudo` — already the gate for
+# everything else here. Whoever can `sudo` can become any user anyway, so
+# nothing new is granted; one only stops having to remember somebody else's
+# helper name.
+#
+# AND IT DOES NOT STOP THAT SERVICE, which is the whole difference from the
+# argument-less `dev`. A helper able to stop another instance would be a way to
+# take one customer offline while fixing another's problem — the hazard that
+# one-helper-per-instance exists to prevent, walking back in through the front
+# door. The port therefore stays busy, and the message says so instead of
+# letting `odoo-bin` fail with a puzzle.
+dev_into_another_instance() {
+  local want="$1" unit="" candidate base user state matches=0
+
+  # `list` prints unit names, so accept what it prints as well as the bare
+  # instance name: whoever just read that listing must not have to translate.
+  want="${want%.service}"
+
+  while read -r candidate _rest; do
+    [ -n "${candidate:-}" ] || continue
+    base="${candidate%.service}"
+    if [ "${want}" = "default" ]; then
+      # the unnamed instance is the one whose unit is NOT prefixed: it carries
+      # the Odoo version instead of a name. There can be more than one of those
+      # (an installation per version), and then the choice is not ours to make.
+      case "${base}" in
+        odoo-*) continue ;;
+      esac
+    else
+      if [ "${base}" != "${want}" ] && [ "${base}" != "odoo-${want}" ]; then
+        continue
+      fi
+    fi
+    unit="${candidate}"
+    matches=$((matches + 1))
+  done < <(systemctl list-unit-files --no-pager --no-legend 'odoo*.service' 2>/dev/null || true)
+
+  if [ "${matches}" -eq 0 ]; then
+    echo "no Odoo instance on this machine answers to '$1'." >&2
+    list_instances >&2
+    return 2
+  fi
+  # ambiguity is refused, not settled by a precedence rule: the answer decides
+  # which user you become, and guessing that is not a thing to be clever about.
+  if [ "${matches}" -gt 1 ]; then
+    echo "'$1' matches more than one instance here. Name one exactly:" >&2
+    list_instances >&2
+    return 2
+  fi
+
+  base="${unit%.service}"
+  # the user is READ from the unit, never rebuilt from the name. `odoo-<name>`
+  # is only the DEFAULT the installer derives; the CLI/.env cascade can override
+  # `ODOO_USER`, so a name is a guess and the unit is the record — the same rule
+  # the rollback follows about who owns an artifact.
+  user="$(systemctl show -p User --value "${unit}" 2>/dev/null || true)"
+  if [ -z "${user}" ]; then
+    # empty means "systemd did not say", and falling back to root would turn a
+    # convenience into a privilege surprise. Fail closed.
+    echo "cannot tell which user '${unit}' runs as: not entering it." >&2
+    return 2
+  fi
+
+  echo "entering '${base}' as '${user}' — its service is left alone."
+  state="$(systemctl is-active "${unit}" 2>/dev/null || true)"
+  if [ "${state}" = "active" ]; then
+    # said out loud because the alternative is `odoo-bin` failing on a busy
+    # port, which reads like a broken instance rather than a running one.
+    echo "'${unit}' is RUNNING: odoo-bin on its port would fail. Its own helper"
+    echo "can stop it — '${COMMAND_NAME} list' says which one that is."
+  fi
+  sudo su - "${user}" -s /bin/bash
 }
 
 # what `dev` owes you on the way out: the machine you walked in on.
@@ -186,6 +271,12 @@ case "${1:-}" in
     sudo systemctl restart "${SERVICE_NAME}"
     ;;
   dev)
+    if [ -n "${2:-}" ]; then
+      # a named instance is a shell and NOTHING else: nothing is stopped, so
+      # there is no trap and nothing to put back afterwards.
+      dev_into_another_instance "$2"
+      exit
+    fi
     # the state is read BEFORE anything changes it, and the trap is armed
     # before the stop rather than after: between those two lines is exactly
     # where a kill would leave the service down with nobody remembering that

@@ -423,6 +423,18 @@ deliberately switched off stays off. If there is no terminal to ask — you clos
 session was killed — the same rule is applied without asking, which is the case the behaviour exists
 for.
 
+`dev` also takes an instance: `odoo dev cliente-x` opens a shell as **that** instance's user, which
+is how you reach its files. Each instance's home is `0750` and its config `0640` on purpose — the
+database password and the customer's attachments are in there — so the way in is `sudo`, not a
+loosened permission: whoever can `sudo` can already become any user, and you simply stop having to
+remember somebody else's helper name. Name it `cliente-x`, `odoo-cliente-x` or `odoo-cliente-x.service`
+— whatever `list` printed — or `default` for the unnamed installation.
+
+**With an instance, `dev` only opens a shell: it does not stop that service.** Only an instance's own
+helper starts or stops it, which is what keeps one customer from going offline while somebody fixes
+another one's problem. If that instance is running, `odoo-bin` on its port will fail, and `dev` says
+so on the way in rather than letting you find out.
+
 ```bash
 sudo cat /var/log/invok.log              # installer log (post-mortem; survives rollback, by design)
 ```
