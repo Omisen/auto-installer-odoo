@@ -22,7 +22,14 @@ readme = "README.md"
 # invisible locally — it shows up when `cargo publish` rejects it, i.e. after the
 # tag, which is the worst possible moment. Hence a test that counts and measures
 # them beforehand.
-keywords = ["odoo", "installer", "cli", "devops", "rollback"]
+#
+# `cli` used to hold the third slot and was dropped in 3.3.0: the description
+# already says "CLI installer" and `categories` below puts the crate in exactly
+# that facet, so as a keyword it competed with thousands of crates and added
+# nothing. `erp` took it because it is the one thing NO other field says —
+# what Odoo *is*. Somebody who does not know the product name has no other way
+# in.
+keywords = ["odoo", "installer", "erp", "devops", "rollback"]
 # From the CLOSED list at https://crates.io/categories: an invented value is
 # rejected at publish time.
 categories = ["command-line-utilities"]
