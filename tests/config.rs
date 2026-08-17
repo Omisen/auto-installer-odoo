@@ -438,3 +438,103 @@ fn the_two_ports_may_not_be_the_same() {
         "the message must name the port and the way out:\n{message}"
     );
 }
+
+/// the cascade the documentation states is the cascade the code runs.
+///
+/// `A-V3-30`, found while preparing the 3.3.0 release. Three documents — the
+/// README, `Non-interactive-use-and-CI` and `0.1-Config` — all said
+/// `CLI → .env → prompt → default`, agreed with each other, and disagreed with
+/// `ResolvedConfig::resolve`, which puts the **prompt above the file**. Two of
+/// them also claimed a value in the `.env` is never asked for; it is, as the
+/// prompt's suggested default, which is precisely how somebody at a terminal
+/// gets the last word over a file written earlier.
+///
+/// documents agreeing with each other and not with the code is the divergence
+/// no CI catches (`A-V3-20`) — so this one does. It asserts the **behaviour**
+/// and then that the prose matches it, which is the only way round that cannot
+/// be satisfied by editing one of the two.
+#[test]
+fn the_documented_cascade_is_the_one_that_runs() {
+    let named = |value: &str| RawConfig {
+        instance: Some(value.to_string()),
+        admin_passwd: Some("s3cret".to_string()),
+        ..Default::default()
+    };
+    let bare = |value: &str| RawConfig {
+        instance: Some(value.to_string()),
+        ..Default::default()
+    };
+
+    // the behaviour: an answer beats the file.
+    let resolved = ResolvedConfig::resolve(
+        &RawConfig {
+            admin_passwd: Some("s3cret".to_string()),
+            ..Default::default()
+        },
+        /* env */ &bare("da-env"),
+        /* prompted */ &bare("da-prompt"),
+        false,
+    )
+    .expect("resolution");
+    assert_eq!(
+        resolved.instance.as_deref(),
+        Some("da-prompt"),
+        "the prompt sits above the .env: a person deciding now beats a file written earlier"
+    );
+    // and the CLI beats both.
+    let resolved =
+        ResolvedConfig::resolve(&named("da-cli"), &bare("da-env"), &bare("da-prompt"), false)
+            .expect("resolution");
+    assert_eq!(resolved.instance.as_deref(), Some("da-cli"));
+
+    // the prose: every document that spells the order out must spell out that
+    // one. Read as an ARROW CHAIN rather than as scattered words — a page also
+    // states the no-TTY cascade, `CLI -> .env -> default`, which is correct and
+    // must not be flagged. What is checked is the relative position of the
+    // steps **inside one chain**.
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    for page in [
+        "README.md",
+        "wiki/Non-interactive-use-and-CI.md",
+        "wiki/0.1-Config-|-CLI,-declarative-.env,-cascade.md",
+    ] {
+        // the wiki is not versioned in every checkout: absent is not a failure,
+        // wrong is.
+        let Ok(text) = std::fs::read_to_string(root.join(page)) else {
+            continue;
+        };
+        for line in text.lines() {
+            let chain: Vec<&str> = line.split(['\u{2192}', '>']).collect();
+            if chain.len() < 3 {
+                continue;
+            }
+            let step_of = |segment: &str| {
+                let lower = segment.to_lowercase();
+                if lower.contains("prompt") {
+                    Some("prompt")
+                } else if lower.contains(".env") || lower.contains("env file") {
+                    Some("env")
+                } else if lower.contains("cli") {
+                    Some("cli")
+                } else {
+                    None
+                }
+            };
+            let steps: Vec<&str> = chain.iter().filter_map(|seg| step_of(seg)).collect();
+            let at = |name: &str| steps.iter().position(|s| *s == name);
+            if let (Some(prompt), Some(env)) = (at("prompt"), at("env")) {
+                assert!(
+                    prompt < env,
+                    "{page} puts the .env above the prompt, and the code does the \
+                     opposite — a person deciding now beats a file written earlier:\n  {line}"
+                );
+            }
+            if let (Some(cli), Some(prompt)) = (at("cli"), at("prompt")) {
+                assert!(
+                    cli < prompt,
+                    "{page} puts the prompt above the CLI:\n  {line}"
+                );
+            }
+        }
+    }
+}
