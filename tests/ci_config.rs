@@ -997,3 +997,53 @@ fn every_release_job_declares_which_event_it_belongs_to() {
         }
     }
 }
+
+/// an Odoo version with a **ceiling of its own** must be run on the family
+/// where that ceiling changes the outcome.
+///
+/// `A-V3-29`. The ceiling is no longer one number: `newest_tested_python` says
+/// 3.12 for Odoo 16 and 3.13 for the rest, which makes a claim — *"this branch
+/// completes on that interpreter"* — and a claim nobody executes is a promise,
+/// which is the finding that started `A-V3-26`.
+///
+/// only **Fedora** can answer it: on Ubuntu and Debian the system Python is
+/// already below every ceiling, so the exception never fires and a job there
+/// would prove nothing about it.
+///
+/// like its sibling above, this test **writes neither list**: it asks the
+/// function which versions are exceptional, and reads the workflow for a Fedora
+/// job that installs them.
+#[test]
+fn an_odoo_version_with_its_own_python_ceiling_is_executed_on_fedora() {
+    use invok::checks::{newest_tested_python, NEWEST_TESTED_PYTHON};
+
+    let wf = std::fs::read_to_string(WORKFLOW).expect("the integration workflow must exist");
+
+    let exceptional: Vec<String> = (10..=40)
+        .filter_map(|n| config::normalize_version(&n.to_string()).ok())
+        .filter(|(_full, short)| newest_tested_python(short) != NEWEST_TESTED_PYTHON)
+        .map(|(full, _short)| full)
+        .collect();
+    assert!(
+        !exceptional.is_empty(),
+        "no version has a ceiling of its own any more: if the exception was removed on \
+         purpose, remove this guard with it — but if it was removed by accident, Odoo 16 \
+         has silently gone back to building its venv on an interpreter with no wheel"
+    );
+
+    // the Fedora job's block, so a version named only in the Ubuntu matrix does
+    // not count as covered.
+    let fedora_block = wf
+        .split("\n  fedora:")
+        .nth(1)
+        .expect("the fedora job must exist");
+    for version in &exceptional {
+        assert!(
+            fedora_block.contains(&format!("\"{version}\"")),
+            "Odoo {version} has a Python ceiling of its own, and no Fedora job installs it. \
+             That ceiling is the whole reason the version works there at all: without a job \
+             crossing it, it is a promise — and on Ubuntu or Debian the exception never fires, \
+             so a job there would prove nothing."
+        );
+    }
+}

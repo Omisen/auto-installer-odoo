@@ -86,22 +86,27 @@ lives in the **[wiki](https://github.com/Omisen/invok/wiki)**.
 | Requirement | Detail |
 |---|---|
 | OS | **Ubuntu ≥ 22.04**, **Debian ≥ 11** or **Fedora ≥ 40** — exercised in CI up to Ubuntu 24.04, Debian 12 and Fedora 44 (full cycle: install, service up, rollback). A newer release is accepted with a warning, not refused |
-| Odoo version × OS | 16, 17, 18 and 19 all install on **Ubuntu and Debian**. On **Fedora ≥ 41**, only 17, 18 and 19: see the note below |
+| Odoo version × OS | 16, 17, 18 and 19 install on **all three families**. On Fedora, Odoo 16 needs an interpreter of its own — the installer picks it: see the note below |
 | Python | the installer **picks the interpreter**: the system one when Odoo's pins cover it, otherwise the newest interpreter packaged by the distribution that they do cover. On **Fedora ≥ 43** the venv is built on `python3.13`, installed for the occasion and removed by the rollback |
 | Privileges | a normal user with `sudo` (not a direct root login) |
 | Disk | ≥ 5 GB free (override with `MIN_DISK_GB`) |
 | Ports | 8069 free; 80/443 too when using Nginx — unless it is Nginx itself holding them, which is not a conflict |
 
-> **Odoo 16 does not install on Fedora ≥ 41**, and the reason is upstream rather than here. Odoo 16's
-> newest `gevent` pin is written for `python_version >= '3.12'` and selects `gevent==24.2.1`, for
-> which no prebuilt wheel exists for Python 3.13 — the interpreter every current Fedora ends up on,
-> either as the system one (41, 42) or as the one the installer picks (≥ 43). pip then has to compile,
-> and the C generated for an older CPython does not survive 3.13's headers. Odoo 17, 18 and 19 pin
-> `gevent==24.11.1` for `>= '3.13'`, which does ship a wheel, and install normally.
+> **Odoo 16 on Fedora builds its virtualenv on Python 3.12**, and the reason is upstream rather than
+> here. Odoo 16's newest `gevent` pin is written for `python_version >= '3.12'` with nothing above
+> it, so past 3.12 pip keeps selecting `gevent==24.2.1`, whose newest prebuilt wheel is `cp312`: it
+> would have to compile, and the C generated for an older CPython does not survive 3.13's headers.
+> Odoo 17, 18 and 19 pin `gevent==24.11.1` for `>= '3.13'`, which ships a wheel for the interpreter
+> every current Fedora uses.
 >
-> The installer does not pretend otherwise: if you try, the failure names the interpreter and prints
-> the lines that Odoo version declares, instead of leaving you with the compiler's output alone.
-> Odoo 16 on **Ubuntu or Debian** is unaffected — it is exercised in CI on both.
+> So the ceiling the installer applies is **per Odoo version**, not one number for all of them: 3.12
+> for 16, 3.13 for the rest. On Fedora it installs `python3.12` for the occasion — packaged by 41
+> through 44 — builds the venv on it, and the rollback takes it back with the rest of the delta. On
+> Ubuntu and Debian nothing changes: their system Python is already below both ceilings.
+>
+> If a combination ever falls outside what the pins cover, the installer does not pretend otherwise:
+> the failure names the interpreter and prints the lines that Odoo version declares, instead of
+> leaving you with the compiler's output alone.
 
 `ODOO_HOME` is the **constant** `/opt/odoo` and cannot be overridden.
 

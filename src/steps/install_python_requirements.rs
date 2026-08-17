@@ -262,6 +262,7 @@ impl Step for InstallPythonRequirements {
                     e,
                     self.ops.python_version(&ctx.python.command),
                     &gevent_lines,
+                    &ctx.odoo_version_short,
                 )
             })?;
         }
@@ -368,7 +369,8 @@ pub fn filter_out_gevent_stack(requirements: &str) -> String {
 ///
 /// # why it used to say nothing, and what changed
 ///
-/// the first version spoke **only** above [`crate::checks::NEWEST_TESTED_PYTHON`], on the
+/// the first version spoke **only** above [`crate::checks::NEWEST_TESTED_PYTHON`] — a
+/// single number, before `A-V3-29` gave it the Odoo dimension — on the
 /// stated ground that "on a covered Python the cause is something else, and a
 /// wrong diagnosis is worse than none". the field falsified the premise: Odoo 16
 /// on Fedora builds its venv on Python **3.13** — *equal* to the constant, so
@@ -397,8 +399,13 @@ pub fn explain_gevent_failure(
     error: StepError,
     python: Option<(u32, u32)>,
     gevent_lines: &str,
+    odoo_version_short: &str,
 ) -> StepError {
-    let tested = crate::checks::format_python(crate::checks::NEWEST_TESTED_PYTHON);
+    // the ceiling **of this Odoo** (A-V3-29): the message that used to cite a
+    // single number was citing one that did not apply to the branch it was
+    // explaining — the very mismatch the doc above describes.
+    let tested =
+        crate::checks::format_python(crate::checks::newest_tested_python(odoo_version_short));
     let declared = gevent_lines
         .lines()
         .map(|l| format!("  {l}"))
@@ -407,7 +414,7 @@ pub fn explain_gevent_failure(
 
     let diagnosis = match python {
         // known to fail, and known why: say so.
-        Some(v) if crate::checks::python_is_newer_than_tested(v) => format!(
+        Some(v) if crate::checks::python_is_newer_than_tested(v, odoo_version_short) => format!(
             "the gevent build failed, and this system runs Python {} — newer than \
              Python {tested}, the latest one the installer is known to get through.\n\
              Odoo pins gevent and greenlet per interpreter version, and for a Python newer than \

@@ -40,13 +40,14 @@ WHICH ODOO VERSIONS
 All four install on Ubuntu and Debian, and each is exercised by a job
 that installs it and rolls it back.
 
-On Fedora >= 41, only 17, 18 and 19. Odoo 16's newest gevent pin is
-written for Python >= 3.12 and selects a release with no prebuilt wheel
-for Python 3.13, which is the interpreter every current Fedora ends up
-on — so pip has to compile, and it does not survive. Trying it is not
-dangerous: the failure names the interpreter and prints the lines that
-Odoo version declares, instead of leaving you with the compiler's
-output. Odoo 16 on Ubuntu or Debian is unaffected.
+All four install on all three families. On Fedora, Odoo 16 needs an
+interpreter of its own and the installer picks it: its newest gevent pin
+is written for Python >= 3.12 with nothing above it, so past 3.12 pip
+would select a release whose newest wheel is cp312 and have to compile.
+The ceiling is therefore per Odoo version — 3.12 for 16, 3.13 for the
+rest — and on Fedora python3.12 is installed for the occasion and taken
+back by the rollback. On Ubuntu and Debian nothing changes: their system
+Python is already below both.
 
 
 MORE THAN ONE ODOO ON THE SAME MACHINE

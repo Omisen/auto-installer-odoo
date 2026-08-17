@@ -393,16 +393,16 @@ fn an_unreadable_version_is_not_a_version() {
 #[test]
 fn only_an_interpreter_newer_than_the_tested_one_is_flagged() {
     assert!(
-        python_is_newer_than_tested((3, 14)),
+        python_is_newer_than_tested((3, 14), "18"),
         "3.14 is past the threshold: the case the check exists for"
     );
-    assert!(python_is_newer_than_tested((4, 0)));
+    assert!(python_is_newer_than_tested((4, 0), "18"));
     assert!(
-        !python_is_newer_than_tested(NEWEST_TESTED_PYTHON),
+        !python_is_newer_than_tested(NEWEST_TESTED_PYTHON, "18"),
         "on the tested version there is nothing to flag"
     );
-    assert!(!python_is_newer_than_tested((3, 12)));
-    assert!(!python_is_newer_than_tested((3, 10)));
+    assert!(!python_is_newer_than_tested((3, 12), "18"));
+    assert!(!python_is_newer_than_tested((3, 10), "18"));
 }
 
 /// the warning names **the Python found and the one exercised**, and says what
@@ -413,7 +413,7 @@ fn only_an_interpreter_newer_than_the_tested_one_is_flagged() {
 /// (A-R9-1).
 #[test]
 fn the_python_warning_names_both_versions_and_what_will_break() {
-    let warning = untested_python_warning((3, 14)).expect("3.14 va segnalato");
+    let warning = untested_python_warning((3, 14), "18").expect("3.14 va segnalato");
     assert!(
         warning.contains("3.14"),
         "the warning does not say which Python it found: {warning}"
@@ -431,7 +431,7 @@ fn the_python_warning_names_both_versions_and_what_will_break() {
         "the warning does not say where it will stop: {warning}"
     );
     assert_eq!(
-        untested_python_warning(NEWEST_TESTED_PYTHON),
+        untested_python_warning(NEWEST_TESTED_PYTHON, "18"),
         None,
         "on the tested version there is no warning to emit"
     );

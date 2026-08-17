@@ -337,16 +337,62 @@ pub fn untested_release_warning(id: &str, version: &str) -> Option<String> {
 
 // --- the Python interpreter (A-MD-7) ----------------------------------------
 
-/// the newest CPython an installation **reaches the end** on.
+/// the newest CPython an installation **reaches the end** on, for the Odoo
+/// versions that have no exception.
 ///
 /// not the newest that exists, nor the one that "should work": the one the
 /// integration CI completes a full cycle on. **revisit it when the matrix
-/// moves** — this is the only place the number lives.
+/// moves.**
 ///
 /// unlike [`NEWEST_TESTED_FEDORA`] no test ties it to the workflow: the CI file
 /// names the *image*, not the Python inside it, and inventing an image→Python
 /// table would be a second source of truth that can diverge in silence.
 pub const NEWEST_TESTED_PYTHON: (u32, u32) = (3, 13);
+
+/// the ceiling **for a given Odoo** — the same number, gaining the dimension it
+/// always implicitly had (A-V3-29).
+///
+/// what an installation completes is a **pair**, `Odoo version × Python`: that
+/// is what `A-V3-26` established when it built the grid, and a single number
+/// silently claimed every branch shared one ceiling. `A-V3-28` had already
+/// named the flaw while fixing only the message — *"what breaks the build is
+/// «does **this Odoo** pin a wheel for **this** interpreter?», and the version
+/// is not an input of that constant"*. Here it becomes one.
+///
+/// it is still **one source for two uses** — the warning and the choice — so
+/// there is no second table to diverge (A-MD-5).
+///
+/// # where these numbers come from, and how to redo them
+///
+/// **read from Odoo's own `requirements.txt`**, not inferred from release
+/// dates. Every branch pins `gevent` in brackets keyed on `python_version`, and
+/// what decides is whether the **newest bracket has an upper bound**:
+///
+/// ```text
+/// curl -fsSL https://raw.githubusercontent.com/odoo/odoo/<branch>/requirements.txt \
+///   | grep -E '^gevent'
+/// ```
+///
+/// - **17, 18, 19** — `gevent==24.11.1 ; python_version >= '3.13'`: a release
+///   whose wheels include cp313. Ceiling [`NEWEST_TESTED_PYTHON`].
+/// - **16** — `gevent==24.2.1 ; python_version >= '3.12'`, and **nothing above
+///   it**. Past 3.12 pip keeps choosing 24.2.1, whose newest wheel is cp312, so
+///   it must build from source — and the C those versions generate does not
+///   survive a newer CPython's headers. Ceiling **3.12**.
+///
+/// so the exception exists because 16 is the only branch whose newest bracket
+/// is **unbounded**, not because it is old. Measured 2026-08-17 on Fedora 44:
+/// `gevent-24.2.1-cp312-…-manylinux…whl` installs from a wheel, no compiler
+/// involved.
+///
+/// the day Odoo adds a bracket above, this table is **re-read** with the
+/// command above — not deduced.
+pub fn newest_tested_python(odoo_version_short: &str) -> (u32, u32) {
+    match odoo_version_short {
+        "16" => (3, 12),
+        _ => NEWEST_TESTED_PYTHON,
+    }
+}
 
 /// `Python 3.14.0` → `(3, 14)`.
 ///
@@ -371,14 +417,15 @@ pub fn parse_python_version(output: &str) -> Option<(u32, u32)> {
 ///
 /// same shape as [`release_to_flag`], and for the same reason: two tables can
 /// diverge in silence.
-fn python_to_flag(python: (u32, u32)) -> Option<(u32, u32)> {
-    (python > NEWEST_TESTED_PYTHON).then_some(NEWEST_TESTED_PYTHON)
+fn python_to_flag(python: (u32, u32), odoo_version_short: &str) -> Option<(u32, u32)> {
+    let tested = newest_tested_python(odoo_version_short);
+    (python > tested).then_some(tested)
 }
 
 /// `true` when this interpreter is newer than the last one the installer
 /// reaches the end on. pure: the interesting case needs no such Python.
-pub fn python_is_newer_than_tested(python: (u32, u32)) -> bool {
-    python_to_flag(python).is_some()
+pub fn python_is_newer_than_tested(python: (u32, u32), odoo_version_short: &str) -> bool {
+    python_to_flag(python, odoo_version_short).is_some()
 }
 
 /// how a Python version is written: `3.14`, never `3.140`.
@@ -395,8 +442,8 @@ pub fn format_python((major, minor): (u32, u32)) -> String {
 ///
 /// a warning and **not** a refusal (A5.1-bis): the day Odoo raises the pin, a
 /// refusal would block a working installation.
-pub fn untested_python_warning(python: (u32, u32)) -> Option<String> {
-    let tested = python_to_flag(python)?;
+pub fn untested_python_warning(python: (u32, u32), odoo_version_short: &str) -> Option<String> {
+    let tested = python_to_flag(python, odoo_version_short)?;
     Some(format!(
         "this system has Python {}, newer than Python {} — the latest one the installer \
          completes an installation on. Odoo pins gevent and greenlet per interpreter version: \
@@ -508,16 +555,17 @@ pub fn choose_python(
     system: Option<(u32, u32)>,
     available: &[AlternatePython],
     system_dev_names: &[String],
+    odoo_version_short: &str,
 ) -> PythonPlan {
     let Some(version) = system else {
         return PythonPlan::default();
     };
-    if !python_is_newer_than_tested(version) {
+    if !python_is_newer_than_tested(version, odoo_version_short) {
         return PythonPlan::default();
     }
     let scelto = available
         .iter()
-        .filter(|alt| !python_is_newer_than_tested(alt.version))
+        .filter(|alt| !python_is_newer_than_tested(alt.version, odoo_version_short))
         .max_by_key(|alt| alt.version);
     match scelto {
         None => PythonPlan::default(),
@@ -538,13 +586,13 @@ pub fn choose_python(
 /// blindness is not absence: with an unqueryable index, "not available" does
 /// not mean "does not exist", so we carry on with the system interpreter
 /// **saying the probe was blind** (A5.1-bis).
-pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
+pub fn plan_python(ops: &dyn crate::system_ops::SystemOps, odoo_version_short: &str) -> PythonPlan {
     let system = ops.python_version("python3");
     let catalog = ops.packages().catalog();
     let candidates: Vec<AlternatePython> = catalog
         .alternate_pythons
         .iter()
-        .filter(|alt| !python_is_newer_than_tested(alt.version))
+        .filter(|alt| !python_is_newer_than_tested(alt.version, odoo_version_short))
         .cloned()
         .collect();
 
@@ -563,8 +611,13 @@ pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
             .collect()
     };
 
-    let plan = choose_python(system, &available, &catalog.names_for(DepId::PythonDev));
-    announce_python_plan(system, &plan);
+    let plan = choose_python(
+        system,
+        &available,
+        &catalog.names_for(DepId::PythonDev),
+        odoo_version_short,
+    );
+    announce_python_plan(system, &plan, odoo_version_short);
     plan
 }
 
@@ -573,10 +626,10 @@ pub fn plan_python(ops: &dyn crate::system_ops::SystemOps) -> PythonPlan {
 ///
 /// separate from [`plan_python`] because a message only checkable by capturing
 /// logs is a message no test looks at (A-R9-1).
-fn announce_python_plan(system: Option<(u32, u32)>, plan: &PythonPlan) {
+fn announce_python_plan(system: Option<(u32, u32)>, plan: &PythonPlan, odoo_version_short: &str) {
     match (system, plan.is_system()) {
         (None, _) => info!("ℹ the Python version cannot be determined at this stage: proceeding"),
-        (Some(v), true) => match untested_python_warning(v) {
+        (Some(v), true) => match untested_python_warning(v, odoo_version_short) {
             // not covered and no alternative: the M10 case, where the warning
             // already says what will break and where.
             Some(warning) => warn!(python = %format_python(v), "{warning}"),

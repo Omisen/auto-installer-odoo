@@ -111,7 +111,7 @@ fn run_install(cli: &Cli) -> Result<()> {
     // the venv's interpreter (M11). the order matters: after `check_os`, which
     // supplies the family, and before any step, because two of them must read
     // the same answer. a query, not a mutation.
-    ctx.python = checks::plan_python(make_ops().as_ref());
+    ctx.python = checks::plan_python(make_ops().as_ref(), &ctx.odoo_version_short);
 
     let mut steps = steps::build_steps(&make_ops);
 

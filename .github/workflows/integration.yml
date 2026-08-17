@@ -406,15 +406,31 @@ jobs:
           #
           # 18.0 is not repeated here: it is the two entries above.
           #
-          # **16.0 is deliberately absent, and it is not an oversight.** It does
-          # not install on this family and we know exactly why: its newest gevent
-          # line is `>= '3.12'`, pinning 24.2.1, which has no cp313 wheel — so
-          # pip compiles and dies on `_PyLong_AsByteArray`, whose signature
-          # changed in CPython 3.13. Odoo 17 and 19 pin `gevent==24.11.1` for
-          # `>= '3.13'`, which ships one. Putting 16.0 here would be a permanent
-          # red, and an expected red teaches people to ignore reds (A-V3-10);
-          # the combination is declared in the README instead. See A-V3-28 for
-          # what the installer now says when someone tries it anyway.
+          # **16.0 used to be deliberately absent here, and now it is the point
+          # of this entry** (A-V3-29). What kept it out was true and is still
+          # true: its newest gevent line is `>= '3.12'` with *nothing above it*,
+          # so it pins 24.2.1 — whose newest wheel is cp312 — and past 3.12 pip
+          # compiles and dies on `_PyLong_AsByteArray`, whose signature changed
+          # in CPython 3.13.
+          #
+          # what changed is not Odoo: it is that the ceiling now knows **which
+          # Odoo** it is deciding for. `choose_python` reads 3.12 for this branch
+          # and 3.13 for the others, so on this image the venv is built on
+          # `python3.12` — packaged by Fedora 41 through 44 — instead of on the
+          # system 3.13.
+          #
+          # this entry is the difference between a feature and a promise (rule 7
+          # of multi-distro), and it is **blocking** like every other: proven on
+          # a real Fedora 44 before it was added — venv on 3.12.13, gevent
+          # 24.2.1 from a wheel, HTTP 200, and a rollback that took the
+          # interpreter back with the rest. 41 is the entry here because 44 is
+          # the one already proven by hand; between them the family is covered.
+          - image: "fedora:41"
+            scenario: odoo16
+            odoo: "16.0"
+            env_file: configs/ci.env
+            firewalld: "no"
+            fw_required: ""
           - image: "fedora:41"
             scenario: odoo17
             odoo: "17.0"
