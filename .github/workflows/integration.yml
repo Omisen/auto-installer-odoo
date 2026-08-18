@@ -29,6 +29,31 @@ on:
   # minutes each, and fast feedback is test.yml's job.
   push:
     branches: [main, dev]
+    # documentation and community files cannot change what an installation does:
+    # none of them is read by the installer, by `scripts/ci/**`, or by the
+    # `configs/*.env` these jobs install with. without this list a docs-only push
+    # starts the whole matrix — tens of minutes of real installations — to prove
+    # something no file in it can affect.
+    #
+    # what is deliberately NOT here, because it does reach an installation:
+    # `configs/**`, `scripts/**`, `templates/**`, `src/**`, `tests/**`,
+    # `Cargo.toml`, `Cargo.lock`, the packaging under `debian/` and `rpm/`, and
+    # this workflow itself.
+    #
+    # three limits, so this is not read as a hole:
+    #   - it relaxes the PUSH trigger only. `workflow_dispatch` still runs
+    #     everything on request, which is how a release is validated.
+    #   - a commit that touches one ignored file AND one other file runs
+    #     normally: the filter is per push, not per file.
+    #   - nothing that guards the documentation lives here. the checks that tie
+    #     the README to `Cargo.toml` are in test.yml, which has no path filter
+    #     and runs on every push.
+    paths-ignore:
+      - '**.md'
+      - 'PACKAGE-README'
+      - 'LICENSE'
+      - '.github/ISSUE_TEMPLATE/**'
+      - '.github/workflows/cla.yml'
 
 permissions:
   contents: read
