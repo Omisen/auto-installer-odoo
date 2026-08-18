@@ -634,6 +634,9 @@ project takes seriously:
 If the change affects behaviour on one distribution, say so in the PR: the integration CI is where that
 shows up.
 
+Participation in issues, pull requests and reviews is governed by the
+[Code of Conduct](CODE_OF_CONDUCT.md).
+
 ---
 
 ## History and licence
