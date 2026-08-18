@@ -1,0 +1,71 @@
+name: Documentation problem
+description: The README, the packaged guide or the wiki says something the program does not do.
+labels: ["documentation"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Worth its own form, because documentation is the one part of this project that **ages without
+        producing a red**: nothing fails when a page falls behind, and the reader finds out by doing
+        what it said. It has happened — three documents once agreed with each other about the
+        configuration cascade and disagreed with the code.
+
+        So the useful report has two halves: what the document claims, and what the program actually
+        does.
+
+  - type: dropdown
+    id: where
+    attributes:
+      label: Where
+      options:
+        - README.md
+        - PACKAGE-README (the guide inside the .deb / .rpm, at /usr/share/doc/invok/README)
+        - The wiki
+        - The command's own --help
+        - docs.rs / API documentation
+        - CONTRIBUTING.md, SECURITY.md or the Code of Conduct
+    validations:
+      required: true
+
+  - type: input
+    id: which
+    attributes:
+      label: Which page or section
+      placeholder: "README → Installation → Fedora, or wiki → Rollback model"
+    validations:
+      required: true
+
+  - type: textarea
+    id: says
+    attributes:
+      label: What it says
+      description: Quote it, so there is no doubt which sentence is meant.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: does
+    attributes:
+      label: What actually happens
+      description: >
+        The command you ran and what came back. If this is about a download command that 404s, paste
+        the URL — a README left behind after a release keeps working against the *previous* files,
+        which is exactly why nothing goes red.
+      render: shell
+    validations:
+      required: true
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Which of the two is wrong
+      description: >
+        If the answer is "the code", this is a bug report wearing a documentation hat — say so and it
+        will be treated as one.
+      options:
+        - The documentation is out of date or wrong
+        - The behaviour is wrong; the documentation describes what it should do
+        - Not sure
+    validations:
+      required: true

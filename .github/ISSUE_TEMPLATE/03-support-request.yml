@@ -1,0 +1,72 @@
+name: Support for a distribution or an Odoo version
+description: A system or an Odoo release the installer does not cover yet.
+labels: ["enhancement", "platform"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Covered today: **Ubuntu ≥ 22.04, Debian ≥ 11, Fedora ≥ 40**, with **Odoo 16, 17, 18 and 19** —
+        the whole combination, since 3.3.0. Releases newer than the ones actually tested are accepted
+        and warn rather than refuse, so try first: the installer may already work and only be
+        unproven.
+
+        What makes this its own form is the last question. A family or a version that no CI job
+        installs is a **promise, not a feature**, and this project does not make that trade — so the
+        answer to "which job would exercise it" is part of the proposal, not an afterthought.
+
+  - type: input
+    id: target
+    attributes:
+      label: What you want supported
+      placeholder: "Rocky Linux 9 / openSUSE Leap 15.6 / Odoo 20"
+    validations:
+      required: true
+
+  - type: textarea
+    id: tried
+    attributes:
+      label: What happened when you tried
+      description: >
+        The refusal message, or how far it got before something broke. If you did not try, say so —
+        that is useful too.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: family
+    attributes:
+      label: For a distribution — which package manager
+      description: >
+        A new family means new backends behind both boundaries: `ops.packages()` and `ops.distro()`.
+        A distribution that is *apt* or *dnf* underneath is a much smaller change than a third
+        family.
+      options:
+        - apt (Debian family)
+        - dnf / rpm (Fedora family)
+        - Something else (zypper, pacman, apk, …)
+        - Not applicable — this is about an Odoo version
+    validations:
+      required: true
+
+  - type: textarea
+    id: differences
+    attributes:
+      label: What is different there
+      description: >
+        As much as you know: package names that differ, where Nginx keeps its sites, whether the
+        PostgreSQL cluster is initialised by the package or by hand, which firewall governs, whether
+        SELinux is enforcing, which Python the system ships. For an Odoo version: what its
+        `requirements.txt` pins, especially the `gevent` bounds on `python_version`.
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Testing it
+      description: >
+        This is the part that decides whether it can ship. The integration CI installs for real on
+        throwaway runners and containers; a target nobody can run there needs somebody who can run
+        it somewhere.
+      options:
+        - label: I can test on a throwaway machine of that kind and report back
+        - label: I would be willing to add the CI job
+        - label: I am asking only — I cannot test it

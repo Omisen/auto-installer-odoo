@@ -1,0 +1,24 @@
+# the forms are offered first, but a blank issue stays available: something that
+# fits no category is not a reason to have nowhere to put it.
+blank_issues_enabled: true
+
+contact_links:
+  - name: Report a security vulnerability (private)
+    url: https://github.com/Omisen/invok/security/advisories/new
+    about: >
+      Never in a public issue. Unsafe handling of secrets, wrong permissions on
+      what the installer creates, injection through CLI or configuration — see
+      SECURITY.md.
+
+  - name: Technical documentation (wiki)
+    url: https://github.com/Omisen/invok/wiki
+    about: >
+      Engine and the Step trait, step-by-step reference, the rollback model,
+      multi-distribution support. Read this before filing a "why does it do
+      that" issue — it may already say why.
+
+  - name: Contributing guide
+    url: https://github.com/Omisen/invok/blob/main/CONTRIBUTING.md
+    about: >
+      Setting up, the checklist for a new step, how the distributions diverge,
+      and the commit and PR conventions.

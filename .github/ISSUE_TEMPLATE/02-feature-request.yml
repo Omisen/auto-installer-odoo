@@ -1,0 +1,74 @@
+name: Feature request
+description: Something the installer should do and does not.
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Two questions decide most proposals here, so they are asked up front rather than in the
+        review: **what does it create on the machine**, and **how does the rollback take it back
+        out**. Anything the installer causes to exist has to be removable, or the project's one
+        promise stops being true.
+
+        A partial answer is fine — say what you know and leave the rest.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: The problem
+      description: What are you trying to do today, and where does it stop working?
+      placeholder: >
+        Describe the situation, not the solution — the fix that fits may not be the one you had
+        in mind.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What you would like it to do
+      description: If it means a new flag or a new `.env` key, name it here.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reversibility
+    attributes:
+      label: What it would create, and how the rollback would remove it
+      description: >
+        Files, users, packages, services, firewall rules, database objects. Also: what happens if it
+        was **already there** before the installer ran — a pre-existing artifact is not ours to
+        destroy.
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: axes
+    attributes:
+      label: Does it touch anything that differs between systems?
+      description: >
+        Divergence never lives inside a step: it goes behind `ops.packages()` (which commands
+        install, what the package is called here) or `ops.distro()` (where files live, who governs
+        the firewall).
+      options:
+        - label: Package names or the package manager
+        - label: Paths, services or the firewall (Nginx, systemd, ufw / firewalld, SELinux)
+        - label: Only some Odoo versions
+        - label: Only some distributions
+        - label: Machines running more than one instance
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: What you considered instead
+      description: >
+        Including doing it outside the installer. Some things belong in a configuration management
+        tool, and saying why they do not is part of the case.
+
+  - type: checkboxes
+    id: help
+    attributes:
+      label: Taking part
+      options:
+        - label: I would be willing to implement this
+        - label: I can test it on a machine that matches the case

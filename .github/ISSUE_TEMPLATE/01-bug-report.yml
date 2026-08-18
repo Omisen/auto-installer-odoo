@@ -1,0 +1,134 @@
+name: Bug report
+description: An installation that fails, a rollback that leaves something behind, or the odoo helper misbehaving.
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        **Do not paste passwords.** `/var/log/invok.log` does not contain them by design, but your
+        `.env` file, the generated `odoo.conf` and a command line with `--db-password` or
+        `--admin-passwd` do. Redact before pasting.
+
+        If the problem is a security one — secrets exposed, wrong permissions on what the installer
+        creates, injection through configuration — close this and use
+        [private reporting](https://github.com/Omisen/invok/security/advisories/new) instead.
+
+  - type: dropdown
+    id: kind
+    attributes:
+      label: What went wrong
+      options:
+        - The installation failed
+        - The installation succeeded but the result is wrong
+        - The rollback left something behind
+        - The rollback removed something it should not have
+        - A second installation, or a resume after an interruption, misbehaved
+        - The odoo helper (status / logs / start / stop / dev / list)
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened, and what you expected instead
+      description: >
+        The failing step's name helps a lot — the installer prints it, and it is in the log.
+      placeholder: |
+        Installing on Fedora 41 with --with-nginx, the run stopped at `setup-postgres` with …
+        I expected …
+    validations:
+      required: true
+
+  - type: textarea
+    id: how-invoked
+    attributes:
+      label: How you invoked it
+      description: The exact command, with secrets redacted. If you used a `.env`, paste it too — redacted.
+      render: shell
+      placeholder: |
+        sudo invok --version 18 --instance acme --with-nginx --server-name odoo.example.com
+    validations:
+      required: true
+
+  - type: input
+    id: installer-version
+    attributes:
+      label: Installer version
+      description: >
+        Output of `invok --installer-version` (short `-V`). Note this is **not** `--version`, which is
+        Odoo's version.
+      placeholder: "invok 3.3.0"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: Distribution and release
+      description: The output of `cat /etc/os-release | head -2` is ideal.
+      placeholder: "Ubuntu 24.04 / Debian 12 / Fedora 41"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: odoo-version
+    attributes:
+      label: Odoo version
+      options: ["16", "17", "18", "19", "not applicable"]
+    validations:
+      required: true
+
+  - type: dropdown
+    id: channel
+    attributes:
+      label: How you obtained invok
+      options:
+        - .deb package
+        - .rpm package
+        - .tar.gz archive
+        - cargo install invok
+        - built from source
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: shape
+    attributes:
+      label: The shape of the installation
+      description: >
+        These change which code paths run, and three of them are the ones defects hide in.
+      options:
+        - label: Named instance (`--instance` / `ODOO_INSTANCE`)
+        - label: More than one Odoo instance on this machine
+        - label: With Nginx (`--with-nginx`)
+        - label: A user, database or `/opt/odoo` already existed before installing
+        - label: The run was interrupted (Ctrl-C, kill, reboot) at some point
+
+  - type: textarea
+    id: log
+    attributes:
+      label: Installer log
+      description: >
+        `/var/log/invok.log` — the tail is usually enough, but include the failing step and
+        everything after it. This is the post-mortem: it survives the rollback on purpose.
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: state
+    attributes:
+      label: What the machine says now
+      description: >
+        `sudo invok list`, and the residue if this is about a rollback — the paths, packages, users,
+        databases or units that were left behind, or removed and should not have been. Manifests live
+        in `/var/lib/invok/` (installations older than 3.0.0: `/var/lib/odoo-installer/state.json`).
+      render: shell
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else
+      description: >
+        Whether it reproduces, what you have already tried, and any temporary workaround you found.
