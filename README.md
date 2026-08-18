@@ -621,8 +621,10 @@ the wiki.
 MODE=full bash scripts/ci/integration-test.sh   # runnable by hand — DESTRUCTIVE: throwaway VMs only
 ```
 
-Contributions welcome. Run the four commands above before opening a PR, and keep to three rules this
-project takes seriously:
+Contributions welcome — [CONTRIBUTING.md](CONTRIBUTING.md) has the full guide: the checklist for a new
+step, how the divergence between distributions is kept out of the steps, and the commit and PR
+conventions. In short: run the four commands above before opening a PR, branch off `dev`, and keep to
+three rules this project takes seriously:
 
 1. **Every mutation is reversible.** A new step carries `snapshot`/`run`/`undo` and a `PreState`; if it
    creates something the rollback cannot remove, it is not finished. The `Step` trait is not to be
@@ -635,7 +637,8 @@ If the change affects behaviour on one distribution, say so in the PR: the integ
 shows up.
 
 Participation in issues, pull requests and reviews is governed by the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+[Code of Conduct](CODE_OF_CONDUCT.md); vulnerabilities go to [SECURITY.md](SECURITY.md), never to a
+public issue.
 
 ---
 
